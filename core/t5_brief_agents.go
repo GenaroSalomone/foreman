@@ -76,6 +76,51 @@ func (d *dsp) checkCapabilities(list string) {
 	}
 }
 
+// skillSource is where the executor will find skill <name>: its work dir, the main checkout (a tracked skill arrives
+// with the worktree; an untracked one only where the lane replicates it, prefix withheld), or the account's
+// user-level skills dir.
+func (d *dsp) skillSource(name string) (string, bool) {
+	file := "/.claude/skills/" + name + "/SKILL.md"
+	if p := d.c.work + "/" + d.proj + "/" + d.task + file; isFile(p) {
+		return p, true
+	}
+	if main := d.c.checkout(d.proj); d.wantWT && d.brIsProductRepo() && isFile(main+file) {
+		withheld, replicates := laneSkillWithheld[d.proj]
+		if d2SkillTracked(main, ".claude/skills/"+name) || (replicates && d2SkillWithheld(name, withheld) == "") {
+			return main + file, true
+		}
+	}
+	cfg, _ := d.accountConfigDirOf(d.account)
+	if cfg == "" {
+		cfg = d.env("HOME") + "/.claude"
+	}
+	p := cfg + "/skills/" + name + "/SKILL.md"
+	return p, isFile(p)
+}
+
+// checkSkills is the brief's `skills: [name, …]`: each must resolve for the executor, or the dispatch is refused
+// before anything is built.
+func (d *dsp) checkSkills(val string) {
+	names, bad := parseSecretsValue(val)
+	for _, n := range append(bad, names...) {
+		if !brNameOK(n) || strings.HasPrefix(n, "-") {
+			d.die("the brief's skills: names \"" + n + "\", which is not a skill name (letters, digits, dot, underscore, dash). NOTHING was built.")
+		}
+	}
+	var missing []string
+	for _, n := range names {
+		if _, ok := d.skillSource(n); !ok {
+			missing = append(missing, n)
+		}
+	}
+	if len(missing) > 0 {
+		d.die("the brief's skills: names " + strings.Join(missing, ", ") + ", which the executor cannot load: not in the work dir's .claude/skills, not replicated into the worktree from the main checkout (git-ignored skills only reach a lane that replicates them, prod-* never), not in the account's user-level skills dir. NOTHING was built.")
+	}
+	if len(names) > 0 {
+		d.brAppendDeclared("skills")
+	}
+}
+
 // ── markdown agent definitions ──────────────────────────────────────────────
 
 var brReMode = regexp.MustCompile(`(?i)^[` + brS + `]*mode[` + brS + `]*:[` + brS + `]*['"]?([^'"` + brS + `#]+)`)

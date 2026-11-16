@@ -117,21 +117,50 @@ func (o *occupantsReader) occupantsIn(reply jmap, dir string) string {
 func (o *occupantsReader) of(dir string) occupancy {
 	reply, why := o.agentList()
 	list := ""
+	var inDir []string   // the core's terminals standing in dir, by address: the line they print as is rendered once, at the end
+	var cwdless []string // core terminals that name no cwd: whether they work in dir is unknown
 	switch {
 	case reply != nil:
 		list = o.occupantsIn(reply, dir)
-	case hcRecorded(dir) && strings.Contains(why, `"server_not_running"`):
-		// herdr says there is no server, so it holds no pane; the run lives in the app's core, which hc reads below.
-		// A dir with no hc record keeps the refusal: nothing else could have told us nobody works in it.
+	case herdrNoServer(why):
+		// herdr says there is no server, so it holds no pane: whoever works in dir lives in the app's core. `hc ls` names every
+		// live terminal and its cwd, so a dir with no hc run recorded (a worktree an earlier herdr run left) is judged by it
+		// too. A core that cannot answer keeps the refusal for EVERY dir, recorded or not: a label-filtered `hc ls` that answers
+		// empty says nobody of this dir's run lives, not that no other terminal works in it.
+		cwdAddrs, unplaced, answered := hcCwdOccupants(dir, o.win)
+		if !answered {
+			return occupancy{why: why}
+		}
+		inDir = cwdAddrs
+		cwdless = unplaced
 	default:
 		return occupancy{why: why}
 	}
-	hcList, hcObserved, hcWhy := hcOccupants(dir) // only a dir with an hc run recorded makes an hc call
+	owned, hcObserved, hcWhy := hcOwnedIn(dir) // only a dir with an hc run recorded makes an hc call
 	if !hcObserved {
 		return occupancy{why: hcWhy}
 	}
-	if hcList != "" {
-		list = strings.TrimPrefix(list+"\n"+hcList, "\n")
+	named := map[string]bool{}
+	lines := []string{}
+	if list != "" {
+		lines = append(lines, list)
+	}
+	for _, addr := range append(inDir, owned...) {
+		if !named[addr] {
+			named[addr] = true
+			lines = append(lines, hcLiveLine(addr))
+		}
+	}
+	list = strings.Join(lines, "\n")
+	// a terminal with no cwd is unknown, never absent: only an hc run of dir that owns it by its labels (its address) has already named it
+	var unknown []string
+	for _, addr := range cwdless {
+		if !named[addr] {
+			unknown = append(unknown, addr)
+		}
+	}
+	if len(unknown) > 0 {
+		return occupancy{why: "the app's core lists " + strings.Join(unknown, ", ") + " with no cwd, so whether it works in " + dir + " is unknown"}
 	}
 	return occupancy{list: list, observed: true}
 }

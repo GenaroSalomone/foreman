@@ -10,6 +10,7 @@ the lane's shape, and that plugin's hooks.json runs this file beside deny_brain_
 
 WHAT IT PROTECTS: every `product_repos` root of guards.json, by the same detection `decide` gives a brainer (Bash:
 redirects, rm, in-place edits, git mutations, interpreters), plus the Write/Edit tools by path.
+The one file it opens is Claude Code's own `<repo>/.claude/settings.local.json` (`deny_repo_writes.is_local_settings`), for Bash and the file tools alike.
 
 WHAT IT LEAVES ALONE: a root that holds the executor's own work directory (`HW_WORKDIR`, set by hw on every executor):
 an executor of a product lane writes in its repo's worktree, a repo-less one in its work directory. A product-repo
@@ -98,7 +99,7 @@ def main(stream=None):
             path = tool_input.get(WRITE_TOOLS[tool], "") or ""
             if path and not drw._is_abs(path):
                 path = os.path.join(cwd, path)
-            if path and drw._inside_any(cfg, path):
+            if path and drw._inside_any(cfg, path) and not drw.is_local_settings(path):  # MUTATION-ANCHOR: 1370-M05
                 deny("Blocked: %s writes %s, inside a product repo this executor is not working in. Write in your "
                      "own worktree or work directory." % (tool, path))
     except SystemExit:

@@ -213,9 +213,9 @@ def decide_patch(cfg, patch, cwd):
     A write into a protected tree is refused whoever's tool performs it, so this
     asks the shared module's own boundary question of each header's path.
     """
-    from deny_repo_writes import _inside_any
+    from deny_repo_writes import _inside_any, is_local_settings
     for raw, path in patch_targets(patch, cwd):
-        if _inside_any(cfg, path):
+        if _inside_any(cfg, path) and not is_local_settings(path):  # MUTATION-ANCHOR: 1370-M06
             return ("patch",
                     "Blocked: this patch writes %s (written as `%s`), inside %s. "
                     "The brainer is read-only there; the same write through Bash "

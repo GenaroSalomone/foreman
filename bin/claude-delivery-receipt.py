@@ -67,7 +67,14 @@ import sys
 import time
 
 
-TRANSCRIPTS = "~/.claude/projects/*/%s.jsonl"
+# The default account's projects folder and every other account's (~/.claude-personal, ...): a brainer of a personal lane keeps
+# its transcript there, and a receipt looked for only under ~/.claude read as "no-transcript" for it.
+TRANSCRIPTS = ("~/.claude/projects/*/%s.jsonl", "~/.claude-*/projects/*/%s.jsonl")
+
+
+def transcripts(target):
+    """Every transcript file of the session id, whichever account holds it."""
+    return sorted(p for pattern in TRANSCRIPTS for p in glob.glob(os.path.expanduser(pattern % target)))
 
 
 def carried(record):
@@ -80,10 +87,10 @@ def carried(record):
             yield attachment.get("prompt")
 
 
-def watermark(pattern):
+def watermark(target):
     """`{path: size}` for every transcript that exists right now."""
     marks = {}
-    for path in glob.glob(pattern):
+    for path in transcripts(target):
         try:
             marks[path] = os.path.getsize(path)
         except OSError:
@@ -159,10 +166,9 @@ def main():
     if not target:
         print("no receiver session id was given", file=sys.stderr)
         return 1
-    pattern = os.path.expanduser(TRANSCRIPTS % target)
 
     if "--mark" in sys.argv[1:]:
-        for path, size in sorted(watermark(pattern).items()):
+        for path, size in sorted(watermark(target).items()):
             print("%s\t%d" % (path, size))
         return 0
 
@@ -184,7 +190,7 @@ def main():
     deadline = time.time() + budget_ms / 1000.0
     saw_a_file = False
     while True:
-        for path in glob.glob(pattern):
+        for path in transcripts(target):
             saw_a_file = True
             how = scan(path, message, since.get(path, 0))
             if how:

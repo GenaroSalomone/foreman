@@ -49,3 +49,19 @@ func realSpawn(path string, argv []string, env []string) {
 		cmd.Process.Release()
 	}
 }
+
+// tryLock takes an exclusive lock on path without waiting: held=false when another process holds it. release frees it.
+func tryLock(path string) (release func(), held bool, err error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		f.Close()
+		if err == syscall.EWOULDBLOCK {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return func() { f.Close() }, true, nil // closing the descriptor drops the lock
+}

@@ -21,6 +21,7 @@ const brainHelp = `brain — open (or focus) a lane's long-lived brainer.
 usage: brain <lane> [--opencode|--claude] [--reset [--self] [--force]]
        brain <lane> --resume <session-id>
        brain relaunch [--all | <lane|pane>...] [--dry-run]
+       brain restore [<lane>...] [--dry-run]
        brain                list the brainers that exist
        brain --version      print the version
 
@@ -36,6 +37,14 @@ usage: brain <lane> [--opencode|--claude] [--reset [--self] [--force]]
                             not relaunched (the mod is brainer-only by design).
                             A pane whose agent was stopped and did not come back is
                             FAILED, and the command exits non-zero (--resume: 75).
+
+    brain restore           after a reboot: resume each lane's LAST conversation into
+                            its brain-<lane> app terminal (the newest transcript under
+                            the lane's directory, in the lane's own account). A lane
+                            whose terminal already runs claude is skipped and named,
+                            a lane with no transcript too; one command for all lanes.
+                            It runs on herdr-core, from an app terminal or, with the
+                            herdr server off, from any shell the core answers to.
 
 A lane is a name in projects.json, or one of its aliases. Its executors are
 launched with ` + "`hw help`" + `.
@@ -121,6 +130,9 @@ func (b *brainRun) main(args []string) (rc int) {
 			b.waitThenFlush(args[1], args[2])
 		}
 		return 0
+	}
+	if first == "restore" {
+		return b.restore(args)
 	}
 	if first == "relaunch" {
 		// relaunch is per backend: from an app terminal it must not list and relaunch TUI brainers, the
@@ -227,7 +239,10 @@ func (b *brainRun) relaunch(args []string) int {
 		return rc
 	}
 	// A FAILED LIST IS NOT AN EMPTY LIST: nothing is relaunched on a herdr that did not answer.
-	r := b.herdr(brainCmd{}, "pane", "list")
+	r := b.herdr(brainCmd{KeepErr: true}, "pane", "list") // stderr kept: it is where "server_not_running" is said
+	if b.herdrGone(r) { // no herdr server, the app's core answers: its brainers are the ones to relaunch
+		return b.relaunchHC(args)
+	}
 	listed := r.Out
 	v, ok := bjParse(listed)
 	if _, isArr := bjGet(v, "result", "panes").([]any); r.RC != 0 || !ok || !isArr {

@@ -20,6 +20,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 
 
 # An hw executor's run state, at the root of its worktree: `.hw/` (written by
@@ -81,7 +82,7 @@ def inventory(root):
                 # Reading may update atime; it is not a source-byte change.
                 stable = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
                 if any(getattr(after, key) != getattr(info, key) for key in stable):
-                    raise RuntimeError('source changed while reading: ' + rel)
+                    raise CaptureDrift('source changed while reading: ' + rel)
                 value = ['file', mode, digest]
             else:
                 raise RuntimeError('unsupported source entry (not copied): ' + rel)
@@ -97,6 +98,85 @@ def tracking(root):
         return {'usable': False, 'tracked': []}
     return {'usable': proc.returncode == 0,
             'tracked': sorted(os.fsdecode(p) for p in proc.stdout.split(b'\0') if p) if proc.returncode == 0 else []}
+
+
+# The checkout is shared with the lane brainers, who write their own `<lane>/decisions.md`, briefs
+# and archives all day, so a quiescent checkout never exists (measured 2026-11-13: a batch gate
+# aborted because a lane brainer edited its decisions.md during the capture). Two answers,
+# neither of which weakens what the verdict certifies (the private candidate, hashed as copied):
+#   * a change confined to LANE DOCUMENTATION THE SUITE DOES NOT READ is tolerated — the rule is
+#     setup/hooks/suite-trigger-pattern.sh `docs_only_path`, the one pre-push already accepts a
+#     tree by (a lane's briefs/, decisions/, and decisions.md, never setup's decisions.md). A
+#     decisions.md counts only while its header (subject 113 reads it) is the one the candidate
+#     holds, and only when it was neither created nor deleted;
+#   * anything else is retried, CAPTURE_ATTEMPTS times with a short backoff, then refused naming
+#     the paths that kept moving.
+CAPTURE_ATTEMPTS = 3  # MUTATION-ANCHOR: 1384-M01
+CAPTURE_BACKOFF = 0.5  # seconds, times the attempt number
+
+
+class CaptureDrift(RuntimeError):
+    """The checkout moved under the capture: worth another attempt."""
+
+
+def lane_docs(root, paths):
+    """Which of `paths` the pre-push cover calls lane documentation (one bash call, one rule)."""
+    hook = Path(root) / 'setup/hooks/suite-trigger-pattern.sh'
+    if not paths or not hook.is_file():
+        return set()  # fail closed: nothing is documentation
+    script = '. "$1"; docs_only_init "$2"; while IFS= read -r p; do docs_only_path "$p" && printf "%s\\n" "$p"; done; true'
+    try:
+        proc = subprocess.run(['bash', '-c', script, '_', str(hook), str(root)],
+                              input='\n'.join(paths) + '\n', stdout=subprocess.PIPE,
+                              stderr=subprocess.DEVNULL, universal_newlines=True)
+    except (OSError, UnicodeError):
+        return set()
+    return set(proc.stdout.split('\n')) & set(paths) if proc.returncode == 0 else set()
+
+
+def decisions_header(path):
+    """Everything before the first `---` line after the first (decisions_header in the hook)."""
+    lines = Path(path).read_bytes().split(b'\n')
+    for i, line in enumerate(lines):
+        if i and line == b'---':
+            return lines[:i]
+    return lines
+
+
+def capture(root, candidate):
+    """One attempt. Returns (frozen, tracked, drift, tolerated); `drift` maps each path the suite could read
+    that moved to its first difference, `tolerated` lists the lane documentation that moved and may not matter.
+    `tracked` is the manifest taken BEFORE the copy: a tolerated doc that became (un)tracked meanwhile is the
+    one place it and the candidate's file set can disagree, and only for a path the suite does not read."""
+    before = inventory(root)
+    tracked = tracking(root)
+    shutil.copytree(root, candidate, symlinks=True, ignore=copy_ignore(root))
+    frozen = inventory(candidate)
+    after = inventory(root)
+    now = tracking(root)
+    moved = {k for k in set(before) | set(frozen) | set(after) if not before.get(k) == frozen.get(k) == after.get(k)}
+    structural = {k for k in moved if None in (before.get(k), frozen.get(k), after.get(k))}  # created or deleted
+    if tracked['usable'] != now['usable']:
+        moved.add('(git tracking)')
+    else:
+        flipped = set(tracked['tracked']) ^ set(now['tracked'])
+        moved |= flipped; structural |= flipped
+    docs = lane_docs(root, sorted(moved))  # MUTATION-ANCHOR: 1384-M02
+    tolerated = set()
+    for k in docs:
+        if k.endswith('/decisions.md'):
+            try:
+                if k in structural or decisions_header(candidate / k) != decisions_header(Path(root) / k):  # MUTATION-ANCHOR: 1384-M03
+                    continue
+            except OSError:
+                continue
+        tolerated.add(k)
+    real = sorted(moved - tolerated)  # MUTATION-ANCHOR: 1384-M04
+    diff = {}
+    for k in real:
+        other = frozen if before.get(k) != frozen.get(k) else after
+        diff[k] = '%s %r != %r' % (k, before.get(k), other.get(k))
+    return frozen, tracked, diff, sorted(tolerated)
 
 
 def settle_fast_verdict(handoff, valid):
@@ -136,17 +216,29 @@ def main():
         if base == root or root in base.parents:
             raise RuntimeError('temporary snapshot directory is inside the source checkout; set TMPDIR outside it')
         candidate = base / 'brain'
-        before = inventory(root)
-        tracked = tracking(root)
-        shutil.copytree(root, candidate, symlinks=True, ignore=copy_ignore(root))
-        frozen = inventory(candidate)
-        after = inventory(root)
-        if before != frozen or before != after or tracked != tracking(root):
-            other = frozen if before != frozen else after
-            diff = sorted(k for k in set(before) | set(other) if before.get(k) != other.get(k))[:3]
-            raise RuntimeError('source or tracking changed during capture; retry from a quiescent checkout'
-                               + (' (first differences: %s)' % ', '.join(
-                                   '%s %r != %r' % (k, before.get(k), other.get(k)) for k in diff) if diff else ''))
+        persistent = None
+        for attempt in range(1, CAPTURE_ATTEMPTS + 1):
+            shutil.rmtree(candidate, ignore_errors=True)
+            failure = None
+            try:
+                frozen, tracked, diff, tolerated = capture(root, candidate)
+            except (CaptureDrift, FileNotFoundError, shutil.Error) as error:  # a file that vanished mid-copy is drift too
+                failure, diff = error, {}
+            if failure is None and not diff:
+                break
+            if failure is None:
+                persistent = set(diff) if persistent is None else persistent & set(diff)
+            if attempt == CAPTURE_ATTEMPTS:
+                if failure is not None:
+                    raise failure
+                raise RuntimeError('source or tracking changed during capture; retry from a quiescent checkout'
+                                   + ' (%d attempts; kept changing: %s; first differences: %s)' % (
+                                       attempt, ', '.join(sorted(persistent)) if persistent else ', '.join(sorted(diff)[:3]),
+                                       ', '.join(diff[k] for k in sorted(diff)[:3])))
+            time.sleep(CAPTURE_BACKOFF * attempt)
+        if tolerated:
+            print('runner: the checkout changed during capture only in lane documentation the suite does not read (%s); '
+                  'the candidate holds the bytes copied' % ', '.join(tolerated[:5]), file=sys.stderr, flush=True)
         manifest = base / 'tracking.json'
         manifest.write_text(json.dumps(tracked))
         identity = hashlib.sha256(json.dumps(frozen, sort_keys=True).encode()).hexdigest()

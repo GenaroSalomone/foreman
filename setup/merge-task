@@ -1,0 +1,261 @@
+#!/usr/bin/env bash
+# merge-task — merge a task branch into main, and leave the checkout on the merge, deletions included.
+#
+#   setup/merge-task <branch> [-m <msg>]            run in the checkout that has main checked out
+#   setup/merge-task --base <b> --advance <old> <new>  the same guarded update with no merge to compute: move the checked-out <b>
+#                                                   from <old> to <new>, a fast-forward the caller (hw train push) already built
+#
+# CONTRACT. It merges <branch> into main (merge-tree + commit-tree), then has git move the checked-out main to that commit with
+# `git merge --ff-only --no-overwrite-ignore`, which writes what the merge added or changed AND removes what it deleted, from the
+# index and the disk. Git refuses, before writing, a dirty tracked path, an untracked or IGNORED file or directory in the way, and
+# a main that is no longer where the merge was computed. A conflict, a branch already in main, and a checkout that is not on
+# main are refused before anything is written. `--base <b>` names another branch than main (it must be what HEAD holds);
+# `--advance <old> <new>` skips the merge: <new> must descend from <old> and <old> must still be what <b> holds (a base
+# that moved is refused before anything is written), and everything after that, the guarding, the measuring and the exits, is
+# THE SAME CODE (a caller such as hw train push keeps no measure or rollback of its own).
+#
+# IT IS NOT ATOMIC, AND NO VERSION CAN BE. Git writes the index and the worktree FIRST and updates the ref AFTER: a ref lock, a
+# signal or a write failure in between leaves the checkout on the merge while main has not moved. So the exit status is never
+# derived from which step failed: after the merge attempt the script MEASURES the end state (where refs/heads/main is; what HEAD
+# is; whether the paths the merge changes are, in the index and the worktree, at the old tree, at the merge tree or mixed, with the added paths git left UNTRACKED on disk counted as written; the change list is plumbing with renames off, so a renamed-away path is measured) and
+# says exactly that. It attempts no recovery (one that cannot be proven to finish would only add a third state): when main and
+# the checkout disagree it prints the one `git read-tree` that reconciles them, and what to do about the branch.
+#
+# THE MERGE'S BEHAVIOUR IS PINNED, not inherited (audited against `git help -c`, git 2.50): `--no-autostash` (merge.autoStash would
+# stash dirty paths and report success), `--no-verify-signatures` (merge.verifySignatures would refuse our unsigned merge),
+# `-c branch.<base>.mergeOptions=` (a --squash there writes the checkout and leaves main unmoved), `-c core.hooksPath=/dev/null`
+# (like commit-tree, no hook runs) and `-c maintenance.auto=false -c gc.auto=0` (a merge spawns `git maintenance run --auto --detach`,
+# MEASURED with GIT_TRACE: a detached repack/gc in the shared checkout that is no part of the move). merge.ff is overridden by --ff-only; the strategy and message keys do not act on a
+# fast-forward. Left to the checkout's own policy: core.autocrlf/eol, sparse checkout, submodule.recurse. --ff-only is not an exact
+# compare-and-swap: a main moved to an ANCESTOR of the merge is advanced over. A path whose name holds a newline or a \001 byte (the tool's stand-in for NUL while a list sits in a variable) is refused up front, and so is an unstaged DELETION of a path the merge modifies (git would put the file back without a word).
+#
+# Exit: 0 merged (the merge SHA on stdout; written/removed, and any deletion git could not apply, on stderr);
+#       1 refused, and measured: nothing was written and main is not the merge;
+#       2 usage;
+#       3 NOT CONSISTENT: the measured state and the command that reconciles it are printed (docs/KNOWN-LIMITATIONS.md, L35).
+# With --advance the success line on stdout is <new> and the stderr report says «advanced», not «merged».
+set -uo pipefail
+# everything that can point git at another repo, index or object store is dropped: the merge computation, the commit and the move
+# of the checked-out main must all act on the repository the cwd is in (an inherited GIT_DIR would send some of them elsewhere)
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_NAMESPACE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS  # MUTATION-ANCHOR: 1383-M11
+
+usage() {
+  printf 'usage: setup/merge-task <branch> [-m <msg>]\n' >&2
+  printf '       setup/merge-task --base <branch> --advance <old> <new>\n' >&2
+  printf '  merges <branch> into main in the checkout that has main checked out, applying the branch'"'"'s deletions and renames;\n' >&2
+  printf '  --advance moves the checked-out --base from <old> to <new> (a fast-forward you built) with the same guarding and measuring.\n' >&2
+}
+mt_refuse() { printf 'merge-task: refused — %s\n' "$1" >&2; exit 1; }
+mt_usage_error() { printf 'merge-task: %s\n' "$1" >&2; usage; exit 2; }
+
+# the NUL-separated lists git prints, as sorted lines (a path with a newline was refused up front)
+mt_lines() { tr '\0' '\n' | sort; }
+
+# mt_differ <tree> — the paths the merge changes that differ from <tree>, in the index and the worktree (the index is refreshed first).
+# It cannot see an UNTRACKED file: git may write a new path and then roll its index back, so mt_untracked looks at the disk.
+mt_differ() {
+  git update-index -q --refresh 2>/dev/null
+  comm -12 <(printf '%s\n' "$touched") <(git diff-index --name-only -z "$1" | mt_lines)
+}
+# mt_untracked — the paths the merge ADDS that exist on disk without being in the index (ignored ones included)
+mt_untracked() {
+  [ -n "$added" ] || return 0
+  # xargs splits a long list across several git calls (ARG_MAX); --literal-pathspecs takes each name as it is
+  printf '%s\n' "$added" | tr '\n' '\0' | xargs -0 git --literal-pathspecs ls-files -z --others -- | mt_lines
+}
+# mt_count <lines> — how many lines (0 for none)
+mt_count() { if [ -n "$1" ]; then printf '%s\n' "$1" | wc -l | tr -d ' '; else printf 0; fi; }
+# mt_present <path> — something is there, a dangling symlink included (-e follows the link and says no)
+mt_present() { [ -e "$1" ] || [ -L "$1" ]; }  # MUTATION-ANCHOR: 1383-M31
+
+# mt_measure — the end state, from git, after the merge attempt: main_at (old|new|other), cur (the base's sha), head_now (HEAD's ref),
+# and ck, the state of the paths the merge changes in the index and the worktree: old (exactly as before the attempt), new (the
+# merge's tree) or mixed. «As before the attempt» is judged against pre_old and pre_untracked, what already differed from the old
+# tree when the attempt began (another lane's dirty work, or an agent that moved the checkout): it must not read as written by us.
+mt_measure() {
+  local differ_old differ_new untracked_now
+  cur="$(git rev-parse --verify -q "refs/heads/$base" || printf '<unresolved>')"
+  case "$cur" in "$old") main_at=old ;; "$new") main_at=new ;; *) main_at=other ;; esac
+  head_now="$(git symbolic-ref -q HEAD || printf detached)"
+  differ_old="$(mt_differ "$old")"
+  differ_new="$(mt_differ "$new")"
+  untracked_now="$(mt_untracked)"
+  if [ "$untracked_now" != "$pre_untracked" ]; then ck=mixed  # MUTATION-ANCHOR: 1383-M27
+  elif [ -z "$touched" ]; then [ "$main_at" = new ] && ck=new || ck=old  # MUTATION-ANCHOR: 1383-M28
+  elif [ -z "$differ_new" ]; then ck=new
+  elif [ "$differ_old" = "$pre_old" ]; then ck=old
+  else ck=mixed; fi
+}
+
+# mt_report_merged — the success output (it reads the lists the parse loop below the trap builds: $written and $removed); the LAST command is the one that writes to stderr, so a stderr that cannot be written
+# is the only thing that can make this exit non-zero (setup/tests/1383, M13)
+mt_report_merged() {
+  local left="" path report w
+  while IFS= read -r path; do
+    [ -n "$path" ] || continue
+    # a deletion git could not apply (a read-only directory…) is not a merge failure, but «removed» would be false: list it
+    if mt_present "$path" && ! git --literal-pathspecs ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then  # MUTATION-ANCHOR: 1383-M18
+      # a case-only rename on a case-insensitive volume: the old spelling IS the file the merge wrote under the new one
+      while IFS= read -r w; do [ "$w" -ef "$path" ] && continue 2; done <<< "$written"
+      left="$left  STILL ON DISK (git could not remove it): $path"$'\n'  # MUTATION-ANCHOR: 1383-M22
+    fi
+  done <<< "$removed"
+  report="$(
+    printf 'merge-task: %s: %s written, %s removed\n' "$done_line" "$(mt_count "$written")" "$(mt_count "$removed")"
+    if [ -n "$written" ]; then printf '%s\n' "$written" | sed 's/^/  wrote   /'; fi
+    if [ -n "$removed" ]; then printf '%s\n' "$removed" | sed 's/^/  removed /'; fi
+  )"
+  printf '%s\n' "$new"
+  printf '%s\n%s' "$report" "$left" >&2
+}
+
+# mt_on_signal — the handler of the signals: mt_settle returns only when the merge is measured complete (then 0) and exits by itself otherwise
+mt_on_signal() { mt_settle "interrupted by a signal"; exit 0; }  # MUTATION-ANCHOR: 1383-M32
+
+# mt_settle <git's message> — the decision, from the measured state and nothing else: it returns after printing a merge that is
+# measured complete, and exits 1 or 3 otherwise
+mt_settle() {
+  local why="$1" first ckdesc
+  trap - INT TERM HUP
+  mt_measure
+  consistent=1
+  [ "$main_at" = new ] || consistent=0  # MUTATION-ANCHOR: 1383-M20
+  [ "$head_now" = "refs/heads/$base" ] || consistent=0
+  [ "$ck" = new ] || consistent=0
+  if [ "$consistent" = 1 ]; then  # MUTATION-ANCHOR: 1383-M01
+    mt_report_merged
+    return
+  fi
+  # nothing was written by this run and main is not the merge: a refusal, and the measurement says so
+  if [ "$ck" = old ] && [ "$main_at" != new ] && [ "$head_now" = "refs/heads/$base" ]; then  # MUTATION-ANCHOR: 1383-M17
+    if [ "$main_at" = other ]; then
+      mt_refuse "$base moved while the merge was computed (it was $old, it is at $cur), so the merge is no fast-forward. Nothing was written; run it again."
+    fi
+    mt_refuse "git cannot move this checkout to the merge ($(printf '%s' "$why" | tr '\n' ' ')). Nothing was written and $base did not move: move or commit what it names."
+  fi
+  case "$ck" in
+    old) ckdesc="still at $base's old tree" ;;
+    new) ckdesc="at the merge's tree" ;;
+    *) ckdesc="partly written (mixed)" ;;
+  esac
+  printf 'merge-task: NOT CONSISTENT — measured now: %s is at %s (%s; it was %s, the merge is %s); HEAD is %s; the checkout, for the paths the merge changes, is %s.\n' \
+    "$base" "$cur" "$main_at" "$old" "$new" "$head_now" "$ckdesc" >&2
+  [ -z "$why" ] || printf '  git said: %s\n' "$(printf '%s' "$why" | tr '\n' ' ')" >&2
+  if [ "$ck" != mixed ] && [ "$head_now" = "refs/heads/$base" ] && [ "$cur" != '<unresolved>' ]; then
+    first="$old"; [ "$ck" = new ] && first="$new"
+    printf '  Realign the checkout with %s (one read-tree, nothing else is attempted): git read-tree -m -u %s %s\n' "$base" "$first" "$cur" >&2
+    printf '  Only if %s is at %s is %s in %s; otherwise %s after that.\n' "$base" "$new" "$what_is" "$base" "$again" >&2
+  else
+    printf '  Read `git status` first, and do not commit in this checkout until the index and %s agree; %s is in %s only if %s is at %s.\n' "$base" "$what_is" "$base" "$base" "$new" >&2
+  fi
+  exit 3
+}
+
+branch=""; msg=""; base=main; adv_old=""; adv_new=""
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -m) [ "$#" -ge 2 ] || mt_usage_error "-m needs a message"; msg="$2"; shift 2 ;;
+    --base) [ "$#" -ge 2 ] || mt_usage_error "--base needs a branch name"; base="$2"; shift 2 ;;  # MUTATION-ANCHOR: 1383-M33
+    --advance) [ "$#" -ge 3 ] || mt_usage_error "--advance needs <old> <new>"; adv_old="$2"; adv_new="$3"; shift 3 ;;
+    -h|--help) usage; exit 0 ;;
+    -*) mt_usage_error "unknown option $1" ;;
+    *) [ -z "$branch" ] || mt_usage_error "one branch only (got $branch and $1)"; branch="$1"; shift ;;
+  esac
+done
+if [ -n "$adv_old" ]; then
+  [ -z "$branch" ] && [ -z "$msg" ] || mt_usage_error "--advance takes no branch and no -m"
+else
+  [ -n "$branch" ] || mt_usage_error "name the branch to merge"
+fi
+git check-ref-format --branch "$base" >/dev/null 2>&1 || mt_usage_error "--base: $base is not a branch name"
+
+git rev-parse --git-dir >/dev/null 2>&1 || mt_refuse "not in a git repository"
+root="$(git rev-parse --show-toplevel)" || mt_refuse "cannot resolve the repository root"
+cd -- "$root" || mt_refuse "cannot enter $root"
+
+# ── main must be what this checkout has checked out: the checkout is what follows the ref ─────────────────────────
+head_ref="$(git symbolic-ref -q HEAD)" || mt_refuse "HEAD is detached; run this where $base is checked out"
+if [ "$head_ref" != "refs/heads/$base" ]; then  # MUTATION-ANCHOR: 1383-M06
+  mt_refuse "this checkout is on $head_ref, not $base: the merge updates the checkout that holds $base, so run it there. Nothing was changed."
+fi
+
+# ── the two commits, resolved once ────────────────────────────────────────────────────────────────────────────────
+old="$(git rev-parse --verify -q "refs/heads/$base^{commit}")" || mt_refuse "$base does not resolve to a commit"
+if [ -n "$adv_old" ]; then
+  # --advance: the caller built <new> on <old>; the base must still be at <old> (the compare-and-swap) and <new> must descend from it
+  expect="$(git rev-parse --verify -q "$adv_old^{commit}")" || mt_refuse "no such commit: $adv_old"
+  tip="$(git rev-parse --verify -q "$adv_new^{commit}")" || mt_refuse "no such commit: $adv_new"
+  [ "$old" = "$expect" ] || mt_refuse "$base moved (it was $expect, it is at $old). Nothing was changed; run it again."  # MUTATION-ANCHOR: 1383-M34
+  git merge-base --is-ancestor "$old" "$tip" || mt_refuse "$tip does not descend from $old: it is no fast-forward of $base. Nothing was changed."  # MUTATION-ANCHOR: 1383-M35
+  branch="$tip"; what_is="the advance"; again="run the advance again"
+else
+  tip="$(git rev-parse --verify -q "$branch^{commit}")" || mt_refuse "no such branch or commit: $branch"
+  what_is="the branch"; again="run setup/merge-task $branch again"
+fi
+if git merge-base --is-ancestor "$tip" "$old"; then  # MUTATION-ANCHOR: 1383-M07
+  mt_refuse "$branch ($tip) is already contained in $base: nothing to merge"
+fi
+
+# ── the merge, computed from those two commits; a conflict is refused (--advance computes none: the tree is <new>'s) ───────
+if [ -n "$adv_old" ]; then
+  tree="$(git rev-parse --verify -q "$tip^{tree}")" || mt_refuse "cannot read the tree of $tip. Nothing was changed."
+else
+  rc=0
+  mt_out="$(git merge-tree --write-tree --name-only "$old" "$tip")" || rc=$?
+  if [ "$rc" -ne 0 ]; then  # MUTATION-ANCHOR: 1383-M03
+    if [ "$rc" = 1 ]; then
+      mt_refuse "merging $branch into $base conflicts ($(printf '%s\n' "$mt_out" | sed -n '2,$p' | grep -v '^$' | head -n 20 | tr '\n' ' ')). Nothing was changed."
+    fi
+    mt_refuse "git merge-tree failed (exit $rc). Nothing was changed."
+  fi
+  tree="${mt_out%%$'\n'*}"
+fi
+
+# ── what the merge changes: ONE list, from plumbing with renames off (a porcelain diff follows renames and never names the renamed-away
+# path), NUL-separated so no name is quoted; \1 stands for the NUL while the list sits in a variable ─────────────────────────────
+bad="$(git diff-tree -z -r --no-renames --name-only "$old" "$tree" | tr -d '\0' | tr -cd '\001\n' | wc -c | tr -d ' ')"
+if [ "$bad" != 0 ]; then  # MUTATION-ANCHOR: 1383-M29
+  mt_refuse "the merge changes a path whose name holds a newline or a \\001 byte (e.g. $(git -c core.quotePath=false diff-tree -r --no-renames --name-only "$old" "$tree" | grep '^"' | head -n 3 | tr '\n' ' ')), which this tool cannot carry; merge that branch by hand. Nothing was changed."
+fi
+raw="$(git diff-tree -z -r --no-renames --name-status "$old" "$tree" | tr '\0' '\1')" || mt_refuse "cannot diff $base against the merge"
+changes="$(printf '%s' "$raw" | tr '\1' '\n')"  # MUTATION-ANCHOR: 1383-M23
+# the (status, path) pairs of $changes, parsed ONCE into every list the rest uses
+touched=""; added=""; removed=""; written=""
+while IFS= read -r st && IFS= read -r w; do
+  touched="$touched$w"$'\n'
+  case "$st" in
+    A) added="$added$w"$'\n'; written="$written$w"$'\n' ;;
+    D) removed="$removed$w"$'\n' ;;
+    *) written="$written$w"$'\n' ;;  # M, T
+  esac
+done <<< "$changes"
+added="$(printf '%s' "$added")"; removed="$(printf '%s' "$removed")"; written="$(printf '%s' "$written")"
+touched="$(printf '%s' "$touched" | sort)"  # MUTATION-ANCHOR: 1383-M26
+# a tracked file deleted in the worktree (unstaged) that the merge MODIFIES: git does not count a missing file as dirty and would put it back
+gone="$(comm -12 <(printf '%s\n' "$written" | sort) <(git ls-files -d -z | mt_lines))"  # an added path is not in the index, so only a modified one can be listed
+if [ -n "$gone" ]; then  # MUTATION-ANCHOR: 1383-M30
+  mt_refuse "$(printf '%s' "$gone" | head -n 1) is deleted in this checkout (unstaged) and the merge modifies it: git would put it back. Restore it, or stage the deletion, first. Nothing was changed."
+fi
+
+# ── the merge commit, then git moves the checked-out main to it: git is the guard ─────────────────────────────────
+if [ -n "$adv_old" ]; then
+  new="$tip"; done_line="advanced $base from $old to $new"
+else
+  [ -n "$msg" ] || msg="merge: $branch"
+  new="$(git commit-tree "$tree" -p "$old" -p "$tip" -m "$msg")" || mt_refuse "git commit-tree failed. Nothing was changed."
+  done_line="merged $branch into $base as $new"
+fi
+pre_old="$(mt_differ "$old")"  # MUTATION-ANCHOR: 1383-M25
+pre_untracked="$(mt_untracked)"
+trap mt_on_signal INT TERM HUP  # MUTATION-ANCHOR: 1383-M12
+ff_flags=(
+  --ff-only                 # MUTATION-ANCHOR: 1383-M02
+  --no-overwrite-ignore     # MUTATION-ANCHOR: 1383-M04
+  --no-autostash            # MUTATION-ANCHOR: 1383-M14
+  --no-verify-signatures    # MUTATION-ANCHOR: 1383-M15
+)
+ff_cfg=(-c advice.diverging=false -c "branch.$base.mergeOptions=" -c core.hooksPath=/dev/null)  # MUTATION-ANCHOR: 1383-M16
+ff_cfg+=(-c maintenance.auto=false -c gc.auto=0)  # MUTATION-ANCHOR: 1383-M36
+ff_err="$(git "${ff_cfg[@]}" merge -q "${ff_flags[@]}" "$new" 2>&1)" || true
+mt_settle "$ff_err"
+exit 0  # MUTATION-ANCHOR: 1383-M13

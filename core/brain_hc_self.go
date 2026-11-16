@@ -80,12 +80,12 @@ func (b *brainRun) hcAwaitIdle(addr string) int {
 	waited, last := 0, "working"
 	for {
 		m, read := b.hcGet(addr)
-		if read && hcStr(m, "state") != "live" { // a terminal that is already gone is not one still working: hcEnd re-reads it and decides
+		if read && hcRecordGone(m, addr) { // a terminal that is already gone is not one still working: hcEnd re-reads it and decides
 			break
 		}
-		// ONLY A STATUS THAT WAS READ ENDS THE WAIT.
+		// ONLY A STATUS THAT WAS READ FROM A LIVE RECORD ENDS THE WAIT: a record in any other state (`starting`, `lost`, `{}`) is unknown.
 		status, _ := m["status"].(jmap)
-		if st := hcStr(status, "state"); !read || st == "" {
+		if st := hcStr(status, "state"); !read || hcStr(m, "state") != "live" || st == "" {
 			last = "unreadable"
 		} else if last = st; st != "working" { // MUTATION-ANCHOR: hc-self-wait
 			break

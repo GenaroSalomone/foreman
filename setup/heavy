@@ -151,9 +151,19 @@ ticket_slots() {  # <ticket path> → the slots the ticket's run may use; a tick
   case "$t" in ''|*[!0-9]*) printf '%s' "$SLOTS" ;; *) printf '%s' "$t" ;; esac
 }
 # A zombie answers `kill -0` and will never run again (2026-10-30: a queued run, a zombie under a stopped zsh, held the queue 35 min): it is dead.
+# A holder that started before this boot is dead whatever answers to its pid now: after a reboot the pid
+# was handed to another program (2026-11-13: a cut killed by the reboot held slot 1 as remindd's pid).
+# `alive <pid> [<start-epoch>]`; the boot time is BSD's kern.boottime, else Linux's btime, else unknown.
+boot_epoch() {
+  [ -n "${BOOT_EPOCH:-}" ] || BOOT_EPOCH="$(sysctl -n kern.boottime 2>/dev/null | sed -n 's/.*sec = \([0-9][0-9]*\).*/\1/p')"
+  [ -n "$BOOT_EPOCH" ] || BOOT_EPOCH="$(awk '/^btime/ {print $2}' /proc/stat 2>/dev/null)"
+  [ -n "$BOOT_EPOCH" ] || BOOT_EPOCH=0
+  printf '%s' "$BOOT_EPOCH"
+}
 alive() {
   local st
   case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+  case "${2:-}" in ''|*[!0-9]*) ;; *) [ "$2" -ge "$(boot_epoch)" ] || return 1 ;; esac  # MUTATION-ANCHOR: 1040-H29
   kill -0 "$1" 2>/dev/null || return 1
   st="$(ps -o stat= -p "$1" 2>/dev/null)"; st="${st# }"
   case "$st" in Z*) return 1 ;; esac  # MUTATION-ANCHOR: 1040-H16
@@ -209,7 +219,7 @@ holder_text_at() {  # <lock dir> -> "tag pid N 4m02s" | "free" | "dead (tag pid 
   [ -d "$L" ] || { printf 'free'; return; }
   read_owner "$L"
   if [ -z "$OPID" ]; then printf 'taken, owner not written yet'; return; fi
-  if alive "$OPID"; then
+  if alive "$OPID" "$OSTART"; then
     case "$OSTART" in ''|*[!0-9]*) t="since $OSTART" ;; *) t="$(elapsed $(($(now) - OSTART)))" ;; esac
     printf '%s pid %s %s' "$OTAG" "$OPID" "$t"
     if [ -s "$L/paused" ]; then read -r t < "$L/paused"; printf '  PAUSED (user active) since %s' "$(hhmm "$t")"; fi  # MUTATION-ANCHOR: 1131-H05
@@ -300,7 +310,7 @@ setup_held() {  # how many slots a live SETUP holder has (a dead owner does not 
     [ -d "$L" ] || continue
     [ "$(class_of_lock "$L")" = setup ] || continue
     read_owner "$L"
-    [ -z "$OPID" ] || alive "$OPID" || continue
+    [ -z "$OPID" ] || alive "$OPID" "$OSTART" || continue
     n=$((n + 1))
   done
   printf '%s' "$n"
@@ -312,7 +322,7 @@ product_present() {  # a live PRODUCT holder, or a live PRODUCT ticket: the rese
     [ -d "$L" ] || continue
     [ "$(class_of_lock "$L")" = setup ] && continue
     read_owner "$L"
-    [ -z "$OPID" ] || alive "$OPID" || continue
+    [ -z "$OPID" ] || alive "$OPID" "$OSTART" || continue
     return 0
   done
   while IFS= read -r n; do
@@ -470,7 +480,7 @@ if [ "$SHORT" = 0 ] && [ -n "${HW_TASK:-}" ] && [ "${HW_HEAVY_RUNNING:-}" != 1 ]
   _mine="$(run_of_env)"; _other=""
   for _k in $(slot_dirs); do  # held
     _l="$(lockdir "$_k")"; read_owner "$_l"; _r=""; [ -r "$_l/run" ] && read -r _r < "$_l/run" 2>/dev/null
-    [ "$_r" = "$_mine" ] && alive "$OPID" && { _other="slot $_k: $OTAG (pid $OPID)"; break; }  # MUTATION-ANCHOR: 1311-M02
+    [ "$_r" = "$_mine" ] && alive "$OPID" "$OSTART" && { _other="slot $_k: $OTAG (pid $OPID)"; break; }  # MUTATION-ANCHOR: 1311-M02
   done
   if [ -z "$_other" ]; then  # queued
     for _f in "$Q"/*; do
@@ -668,7 +678,7 @@ reclaim_at() {  # <lock dir> <what to call it>
   [ -d "$L" ] || return 0
   read_owner "$L"
   if [ -n "$OPID" ]; then
-    alive "$OPID" && { reclaim_reported "$L" "$2"; return 0; }  # MUTATION-ANCHOR: 1040-H02
+    alive "$OPID" "$OSTART" && { reclaim_reported "$L" "$2"; return 0; }  # MUTATION-ANCHOR: 1040-H02
     echo "setup/heavy: $2 is held by $OTAG (pid $OPID), which is dead — reclaiming it" >&2
     rm -rf "$L"
   elif [ $(($(now) - $(mtime "$L"))) -gt 60 ]; then

@@ -61,6 +61,7 @@ mechanism here:
 | The planner starts editing, and changes land that nobody reviewed. | A guard refuses the brainer's writes to your repository. |
 | Agents step on each other in a shared checkout. | One worktree and one branch per task. |
 | Results get lost in a pane nobody is watching. | A report lands in the brainer's session by itself. |
+| One session plans, builds and judges its own work. | One agent writes the brief; a fresh one builds from it. |
 
 ## Concepts
 
@@ -74,12 +75,12 @@ mechanism here:
 
 ## Features
 
-- **A planner that cannot write.** The installer never writes inside your
-  repositories and never reads a credential.
+- **A planner that cannot write.** The installer never writes inside your repositories and never reads a credential.
 - **One worktree and one branch per task**, outside your checkout, with its own
   database where the lane provisions one.
 - **Reports that arrive.** `done-invoker` puts the executor's report in the
   brainer's session, with no polling; `ask-invoker` asks it a question and waits.
+- **One agent plans, another builds.** The brief sets the executor's agent, model, effort and limits; `hw` launches it fresh with exactly that.
 - **Briefs that are checked.** A brief's front matter is validated against the
   dispatch before anything is built, and `hw done` runs the brief's verification
   command itself and records its exit code.
@@ -87,10 +88,8 @@ mechanism here:
   OpenCode and Codex also run a lane's executors, deprecated and with limits ([L3](docs/KNOWN-LIMITATIONS.md),
   [L3b](docs/KNOWN-LIMITATIONS.md)). Each executor gets a `cheap-explorer` subagent on its vendor's cheapest tier.
 - **A review you did not have to ask for.** A build gets a fresh reviewer after its report, and `hw done` offers the merge only for an approved head; `review: [judgment-day, thermo]` adds pieces to it.
-- **Frameworks when you want them.** By default the brief is the whole
-  contract; `--sdd speckit` opts into [Spec Kit](https://github.com/github/spec-kit)'s phases.
-- **Secrets as Bitwarden items.** A brief names `secrets: [item, …]`; the value
-  reaches the executor through `hw secret run`, never as text in a brief or a prompt.
+- **Frameworks when you want them.** By default the brief is the whole contract; `--sdd speckit` opts into [Spec Kit](https://github.com/github/spec-kit)'s phases.
+- **Secrets as Bitwarden items.** A brief names `secrets: [item, …]`; the value reaches the executor through `hw secret run`, never as text in a brief or prompt.
 - **A cockpit.** A card per executor, in the herdr app's side panel or as a band
   above the brainer's prompt in the terminal UI, naming the one that needs you.
 - **Cleanup that is safe.** `hw reap` removes the worktree, branch and database of a task that is merged and clean, and nothing else.
@@ -333,7 +332,7 @@ Each has code here that installs, pins, launches or reads it. A version is a flo
 | [pi](https://github.com/earendil-works/pi) | Runs executors with `--agent pi`, through foreman's own extension ([L3b](docs/KNOWN-LIMITATIONS.md)). | optional | |
 | [Go](https://go.dev/dl) | `install.sh` builds `hw-core` with it. | required | 1.22 or newer |
 | [jq](https://jqlang.github.io/jq/) | Reads `projects.json` and herdr's answers, with `git`, `python3`, `rg`, `fd` and `sd`. | required | 1.7 or newer |
-| [engram](https://github.com/Gentleman-Programming/engram) | The brainer's memory across sessions and the store an executor's findings go to ([L8](docs/KNOWN-LIMITATIONS.md)). | recommended | 3.0.0 or newer |
+| [engram](https://github.com/Gentleman-Programming/engram) | Brainer memory across sessions and executors' findings; without it nothing is saved to memory ([L8](docs/KNOWN-LIMITATIONS.md)). | recommended | 3.0.0 or newer |
 | [Bitwarden CLI](https://bitwarden.com/help/cli/) | `hw secret run` hands a brief's `secrets:` to one command's environment ([L23](docs/KNOWN-LIMITATIONS.md)). | optional | |
 | [fzf](https://github.com/junegunn/fzf) | Draws the brief picker a bare `hw` opens. | optional | |
 | [agent-browser](https://github.com/vercel-labs/agent-browser) | Each run gets its own browser namespace and profile, and `browser-close` proves the close. | optional | |

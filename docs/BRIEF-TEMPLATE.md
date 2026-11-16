@@ -50,6 +50,11 @@
 #              what that session can reach. A warning before the launch
 #              beats finding out at minute 40.
 #
+#   skills:    [<name>, …]
+#              Skills the task needs, by name. hw refuses the dispatch, before anything is built, when
+#              one does not resolve for the executor: worktree `.claude/skills/<name>/SKILL.md` (a lane that
+#              replicates the main checkout's git-ignored skills links them in, prod-* withheld) or the
+#              account's user-level skills dir.
 #   sandbox:   true — run the executor inside the macOS sandbox, as --sandbox
 #              (Claude Code on macOS only; docs/THREAT-MODEL.md)
 #   requires-agents: [primary:|subagent:]<name>, …

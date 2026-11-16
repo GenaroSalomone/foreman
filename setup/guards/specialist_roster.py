@@ -229,6 +229,13 @@ def _session_source():
 def main(lane):
     import json
 
+    # The brainer's cockpit writer (setup/guards/cockpit_writer.py): on every start and resume, so a brainer that
+    # came back by a bare `claude --resume` is not drawn as «NO STATE». First: nothing below may stop it.
+    try:
+        from cockpit_writer import ensure as ensure_cockpit_writer
+        ensure_cockpit_writer(lane)
+    except Exception:  # noqa: BLE001 — the cockpit must never cost the session
+        pass
     parts = [render_context(lane, specialists(lane))]
     # The lane's leftovers (setup/guards/lane_housekeeping.py): the tasks that
     # never reported, and a background `hw reap <lane> --apply`. Its own module

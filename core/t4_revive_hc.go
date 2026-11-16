@@ -10,7 +10,9 @@ package main
 // and its shim goes first on the new terminal's PATH, as dispatch does on hc.
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -55,12 +57,39 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 		}
 	}
 	// the task's dev-server terminals carry its labels too, and are not a session
-	agents, readable := hcNotDev(addrs, func(addr string) (string, bool) { return hcOut(20*time.Second, "get", addr, "--json") })
+	read := map[string]string{} // one `hc get` per terminal: hcNotDev's read is the one judged below
+	get := func(addr string) (string, bool) {
+		if raw, ok := read[addr]; ok {
+			return raw, true
+		}
+		raw, ok := hcOut(20*time.Second, "get", addr, "--json")
+		if ok {
+			read[addr] = raw
+		}
+		return raw, ok
+	}
+	agents, readable := hcNotDev(addrs, get)
 	if !readable {
 		a.reviveDie("could not read whether " + proj + ":" + task + " is already live — `hc get` did not answer. Refusing rather than resuming a session twice.")
 	}
+	// A LABEL IS NOT A SESSION: after a reboot the core gives a kept terminal a shell and keeps its labels (MEASURED 2026-11-16:
+	// a terminal holding only zsh refused the revive as "still live"). Only a claude or opencode process running in it is.
+	var stale []string // live terminals holding only a shell under this task's labels: ended before the new one starts
 	for _, addr := range agents {
-		a.reviveDie("session " + sid + " of run " + filepath.Base(rundir) + " is still live in " + addr + " — a live session is never resumed twice")
+		raw, _ := get(addr)
+		v, _ := bjParse(brTrimNL(raw))
+		m, _ := v.(jmap)
+		switch verdict, what := hcSessionProcess(m, addr); verdict {
+		case "live":
+			a.reviveDie("session " + sid + " of run " + filepath.Base(rundir) + " is still live in " + addr + " (" + what + ") — a live session is never resumed twice")
+		case "stale":
+			a.warn(addr + " carries this task's labels but no session: " + what + ". Its labels are stale")
+			if hcStr(m, "state") == "live" {
+				stale = append(stale, addr)
+			}
+		default:
+			a.reviveDie("could not tell whether session " + sid + " of " + proj + ":" + task + " is live in " + addr + ": " + what + ". Refusing rather than resuming a session twice; read it with `hc get " + addr + "`.")
+		}
 	}
 	shimDir := ""
 	if exitStatus(a.reviveSandboxArmed(proj, task)) != 1 { // FAIL CLOSED: anything but a clean "never armed" is armed again
@@ -88,6 +117,15 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 		}
 	}
 	args = append(args, strings.Fields(st.agentArgs)...)
+	// a kept terminal keeps its name, and `hc run --name` wants one unique among LIVE terminals: the stale shell still holds
+	// <task>, so it is ended first (it runs no session: hcSessionProcess said so), and proved finished before the start
+	for _, addr := range stale {
+		hcOut(20*time.Second, "kill", addr)
+		if !hcEndedWithin(addr, 5) {
+			a.reviveDie(addr + " holds only a shell under this task's name and could not be ended (`hc kill " + addr + "` left it live or unread), so `hc run --name " + task + "` would be refused. Nothing was started; end it and revive again.")
+		}
+		a.info("ended " + addr + ": a stale shell holding this task's name")
+	}
 	out, ok := hcOut(60*time.Second, args...)
 	rv, _ := bjParse(brTrimNL(out))
 	addr := ""
@@ -108,6 +146,8 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 		os.Remove(rundir + "/hc-core")
 	}
 	a.receiptInto(rundir, "revived_pane", addr, "hc run --json address")
+	// the app opens a tab for the terminal and calls it by its number («2»): a dispatch names it after its task, and so does a revive
+	hcNameTab(herdrAppOut, lSleep, addr, task)
 	if shimDir != "" && !hcBrokerAlive(filepath.Dir(shimDir), lSleep) { // the heartbeat is the proof it runs in the sandbox, as on a pane
 		hcOut(20*time.Second, "kill", addr)
 		a.receiptInto(rundir, "revived_agent", "failed", "no sandbox broker heartbeat in "+filepath.Dir(shimDir))
@@ -159,4 +199,73 @@ func (a *app) reviveConfigDir(envShown []string) string {
 		}
 	}
 	return ""
+}
+
+// sessionPrograms are the agents a session runs as; shellPrograms what the core puts in a terminal it kept after a loss.
+var (
+	sessionPrograms = map[string]bool{"claude": true, "opencode": true}
+	shellPrograms   = map[string]bool{"zsh": true, "bash": true, "sh": true, "fish": true, "nu": true, "dash": true, "ksh": true, "tcsh": true}
+)
+
+// hcSessionProcess says whether a session runs in the terminal `hc get` described (m): "live" when its foreground process is
+// claude or opencode, "stale" when the terminal is finished or holds only a shell, and "unknown" for anything else (no record,
+// no foreground process, another program), with what was read. Unknown is never stale: the caller refuses on it.
+func hcSessionProcess(m jmap, addr string) (verdict, what string) {
+	if m == nil {
+		return "unknown", "`hc get` gave no record"
+	}
+	if st := hcStr(m, "state"); st != "live" {
+		if hcRecordGone(m, addr) {
+			return "stale", "the terminal is finished"
+		}
+		return "unknown", "its state is " + orStr(st, "missing")
+	}
+	fg, _ := m["foreground"].(jmap)
+	argv, _ := fg["argv"].([]any)
+	if len(argv) == 0 {
+		return "unknown", "`hc get` names no foreground process"
+	}
+	arg0, _ := argv[0].(string)
+	prog := filepath.Base(strings.TrimPrefix(arg0, "-"))
+	pid := ""
+	if p := bjRaw(fg["pid"]); p != "" && p != "null" {
+		pid = " pid " + p
+	}
+	switch {
+	case sessionPrograms[prog]:
+		return "live", prog + pid + " runs there"
+	case shellPrograms[prog]:
+		return "stale", "only " + prog + pid + " runs there, no claude or opencode"
+	}
+	return "unknown", "its foreground process is " + orStr(prog, "unnamed") + pid + ", neither claude, opencode nor a shell"
+}
+
+// herdrAppOut is `herdr-app <args>` as hcNameTab takes it: (stdout, exit status); a call that cannot run is status 1.
+func herdrAppOut(args ...string) (string, int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "herdr-app", args...)
+	cmd.WaitDelay = 100 * time.Millisecond
+	cmd.Env = childEnv()
+	out, err := cmd.Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			return string(out), ee.ExitCode()
+		}
+		return string(out), 1
+	}
+	return string(out), 0
+}
+
+// hcEndedWithin says whether `hc get addr` shows a finished terminal within tries reads, half a second apart.
+func hcEndedWithin(addr string, tries int) bool {
+	for i := 0; i < tries; i++ {
+		if i > 0 {
+			lSleep(500 * time.Millisecond)
+		}
+		if _, live, read := hcAgentRead(addr); read && !live { // only a finished record is ended: unread is not gone
+			return true
+		}
+	}
+	return false
 }

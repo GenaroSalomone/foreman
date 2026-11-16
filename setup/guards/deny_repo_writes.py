@@ -48,7 +48,10 @@ candidate and the root, so neither a symlinked root nor a symlinked candidate ca
 slip between them.
 
 The brainer is read-only over the protected trees. Executors write, in their own
-worktrees, and they do not load this guard.
+worktrees, and they do not load this guard. The one exemption that is NOT lane
+configuration is code: Claude Code's own `<repo>/.claude/settings.local.json`
+(`is_local_settings`), the same for every lane. It is hard-coded on purpose — its
+conditions (no symlink, no hard link, untracked by git) are specific to that one file.
 
 The JavaScript half is `deny-repo-writes.js` beside this file, and it is the same
 decision on the same table. If you change one, change both — `setup/guards/`
@@ -58,6 +61,7 @@ import json
 import os
 import re
 import shlex
+import subprocess
 import sys
 
 # ── TWO SUPPORTED PLATFORMS, AND A REFUSAL EVERYWHERE ELSE ──────────────────
@@ -834,6 +838,89 @@ def _inside_protected(cfg, path):
     if not path or not _is_abs(path):
         return False
     return _inside_any(cfg, path)
+
+
+# ── NARROW EXEMPTION: Claude Code's own per-user permission file ────────────
+#
+# `<product repo>/.claude/settings.local.json` is where Claude Code records an
+# "always allow" answer. It is per-user, git-ignored and never delivered, and a
+# stale rule in it warned at every session start in a worktree while the guard
+# refused the brainer the one edit that would remove it (2026-11-13). It is the
+# ONLY file inside a product repo this opens: not `.claude/settings.json`, not
+# any other file under `.claude/`, not a `settings.local.json` git tracks.
+#
+# EVERY CANDIDATE MUST BE THAT FILE. `_candidates` gives the normalised and the
+# realpath'd spelling; both must equal `<repo>/.claude/settings.local.json` for
+# one product repo (raw or realpath'd root), so a symlinked `.claude`, a
+# symlinked settings file or a `..` that lands elsewhere resolves to some other
+# path and stays denied. A hard link to another file (st_nlink > 1) stays
+# denied too. And git must say the file is NOT tracked: exit 1 of `ls-files
+# --error-unmatch` and nothing else (0 tracked, 128 not a repository or any
+# failure: all refuse), so a tracked one, or a root that is not a checkout, is
+# never exempt. Windows-folded paths take the same route through `_norm`.
+_LOCAL_SETTINGS = ".claude/settings.local.json"
+_GIT_ENV_DROP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX",
+                 "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                 "GIT_CEILING_DIRECTORIES")  # and every GIT_CONFIG*: setup/tests/_common.sh scrubs the same
+
+
+def _untracked_by_git(repo):
+    env = {k: v for k, v in os.environ.items()
+           if k not in _GIT_ENV_DROP and not k.startswith("GIT_CONFIG")}
+    try:
+        done = subprocess.run(
+            ["git", "-C", repo, "ls-files", "--error-unmatch", "--", _LOCAL_SETTINGS],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, env=env, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 1  # MUTATION-ANCHOR: 1370-M04
+
+
+def is_local_settings(path):
+    """True when `path` is exactly `<product repo>/.claude/settings.local.json`,
+    not tracked by git, reached by no symlink (see above)."""
+    if not path or not _is_abs(path) or not path.endswith("settings.local.json"):
+        return False
+    cands = _candidates(path)
+    for repo in PRODUCT_REPOS:
+        try:
+            real = _real(repo)
+        except OSError:
+            continue
+        want = {r + "/" + _LOCAL_SETTINGS for r in {_norm(repo), real}}
+        if not all(c in want for c in cands):  # MUTATION-ANCHOR: 1370-M01
+            continue
+        target = real + "/" + _LOCAL_SETTINGS
+        try:
+            st = os.lstat(target)
+        except FileNotFoundError:
+            st = None
+        except OSError:
+            return False
+        if st is not None and (os.path.islink(target) or st.st_nlink > 1):  # MUTATION-ANCHOR: 1370-M03
+            return False
+        return _untracked_by_git(real)
+    return False
+
+
+_ABS_WORD = re.compile(r"(?<![\w./~$@%+,:-])/[^\s;|&()<>\"'`\\]+")
+_EXEMPT_MARK = "/.guard-exempt-local-settings"
+
+
+def _blank_local_settings(text, memo):
+    """`text` with each absolute path that IS the exempt file replaced by a
+    placeholder outside every root, so the deny chain never sees it. Only a
+    whole word qualifies: `…/settings.local.json.bak`, `…/*.json`,
+    `…/settings.local.json/../x` and `--opt=…x` are other words and stay seen.
+    `memo` (one per `decide` call, shared by its two readings) answers each
+    distinct word once: the answer costs a git subprocess."""
+    def one(m):
+        word = m.group(0)
+        if word not in memo:
+            memo[word] = is_local_settings(word)
+        return _EXEMPT_MARK if memo[word] else word
+    return _ABS_WORD.sub(one, text)
 
 
 def _under_a_worktree_root(cfg, path):
@@ -2286,13 +2373,14 @@ def decide(cfg, command, cwd):
     rewritten away (`_unwrap_env`). The second can add a denial; it cannot
     remove one.
     """
-    verdict = _decide(cfg, command, cwd, False)
+    memo = {}
+    verdict = _decide(cfg, command, cwd, False, memo)
     if verdict is not None:
         return verdict
-    return _decide(cfg, command, cwd, True)
+    return _decide(cfg, command, cwd, True, memo)
 
 
-def _decide(cfg, command, cwd, unwrap):
+def _decide(cfg, command, cwd, unwrap, memo):
     """`decide` over one reading; `unwrap` selects the env-unwrapped one, and
     answers None at once when unwrapping changes nothing."""
     if not isinstance(command, str) or not command:
@@ -2306,6 +2394,7 @@ def _decide(cfg, command, cwd, unwrap):
     home = _shell_home()
     probe = command.replace("$HOME", home).replace("${HOME}", home)
     probe = re.sub(r"(?<![\w~])~/", lambda _m: home + "/", probe)  # a home is not a template: C:\Users is "\U"
+    probe = _blank_local_settings(probe, memo)  # MUTATION-ANCHOR: 1370-M02
 
     # `no_heredoc` drops heredoc body lines (data, not command text) but keeps
     # quotes intact, so a real redirect target that happens to be quoted is

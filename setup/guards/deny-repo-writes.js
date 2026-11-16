@@ -24,6 +24,7 @@
 // KEEP THIS FILE AND THE PYTHON IN STEP. `setup/guards/` holds the conformance
 // suite that proves you did, and it now compares lanes as well as runtimes.
 
+import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, readlinkSync, realpathSync, statSync } from "node:fs";
 import { userInfo } from "node:os";
 import { basename, dirname, join } from "node:path";
@@ -666,6 +667,62 @@ export function resolvesProtected(cfg, probe) {
 export function insideProtected(cfg, dir) {
   if (!dir || !isAbs(dir)) return false;
   return insideAny(cfg, dir);
+}
+
+// NARROW EXEMPTION: Claude Code's own per-user permission file. The same rule
+// as `is_local_settings` in the Python half, read there: ONLY
+// `<product repo>/.claude/settings.local.json`, every candidate spelling equal
+// to it, no symlink, no hard link, and git must say it is NOT tracked
+// (`ls-files --error-unmatch` exit 1; 0 tracked and anything else refuse).
+const LOCAL_SETTINGS = ".claude/settings.local.json";
+const GIT_ENV_DROP = ["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_PREFIX",
+  "GIT_NAMESPACE", "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_CEILING_DIRECTORIES"]; // and every GIT_CONFIG*: setup/tests/_common.sh scrubs the same
+
+function untrackedByGit(repo) {
+  const env = { ...process.env };
+  for (const k of Object.keys(env)) if (GIT_ENV_DROP.includes(k) || k.startsWith("GIT_CONFIG")) delete env[k];
+  const done = spawnSync("git", ["-C", repo, "ls-files", "--error-unmatch", "--", LOCAL_SETTINGS],
+    { stdio: "ignore", env, timeout: 2000 });
+  return done.status === 1; // # MUTATION-ANCHOR: 1370-M11
+}
+
+export function isLocalSettings(p) {
+  if (!p || !isAbs(p) || !p.endsWith("settings.local.json")) return false;
+  const cands = candidates(p);
+  for (const repo of PRODUCT_REPOS) {
+    let real;
+    try {
+      real = realPath(repo);
+    } catch {
+      continue;
+    }
+    const want = new Set([normOf(repo), real].map((r) => `${r}/${LOCAL_SETTINGS}`));
+    if (!cands.every((c) => want.has(c))) continue; // # MUTATION-ANCHOR: 1370-M09
+    const target = `${real}/${LOCAL_SETTINGS}`;
+    let st = null;
+    try {
+      st = lstatSync(target);
+    } catch (e) {
+      if (e?.code !== "ENOENT") return false;
+    }
+    if (st !== null && (st.isSymbolicLink() || st.nlink > 1)) return false; // # MUTATION-ANCHOR: 1370-M10
+    return untrackedByGit(real);
+  }
+  return false;
+}
+
+const ABS_WORD = /(?<![\w./~$@%+,:-])\/[^\s;|&()<>"'`\\]+/g;
+const EXEMPT_MARK = "/.guard-exempt-local-settings";
+
+// `text` with each absolute path that IS the exempt file replaced by a
+// placeholder outside every root. Only a whole word qualifies. `memo` is one
+// per `decide` call, shared by its two readings: each distinct word costs a git subprocess once.
+function blankLocalSettings(text, memo) {
+  return text.replace(ABS_WORD, (w) => {
+    if (!memo.has(w)) memo.set(w, isLocalSettings(w));
+    return memo.get(w) ? EXEMPT_MARK : w;
+  });
 }
 
 // True for a path strictly beneath one of the lane's worktree roots. Strictly:
@@ -1851,12 +1908,13 @@ export function unwrapEnv(text, budget = { left: ENV_BUDGET }) {
 
 // Two readings, and a denial from either stands — see `decide` in the Python.
 export function decide(lane, command, cwd) {
-  const verdict = decideReading(lane, command, cwd, false);
+  const memo = new Map();
+  const verdict = decideReading(lane, command, cwd, false, memo);
   if (verdict !== null) return verdict;
-  return decideReading(lane, command, cwd, true);
+  return decideReading(lane, command, cwd, true, memo);
 }
 
-function decideReading(lane, command, cwd, unwrap) {
+function decideReading(lane, command, cwd, unwrap, memo) {
   if (typeof command !== "string" || !command) return null;
   const cfg = config(lane);
 
@@ -1868,10 +1926,11 @@ function decideReading(lane, command, cwd, unwrap) {
   // program): spelled the way bash expands it, so a path built on it still
   // matches the patterns below before anything is folded.
   const HOME = shellHome(process.env.HOME ?? userInfo().homedir);
-  const probe = command
+  let probe = command
     .split("${HOME}").join(HOME)
     .split("$HOME").join(HOME)
     .replace(/(^|[^\w~])~\//g, `$1${HOME}/`);
+  probe = blankLocalSettings(probe, memo); // # MUTATION-ANCHOR: 1370-M08
 
   // `noHeredoc` drops heredoc body lines (data, not command text) but keeps
   // quotes intact, so a real redirect target that happens to be quoted is still
@@ -2130,7 +2189,7 @@ function judgeFileTool(lane, laneError, tool, output, sessionDir) {
   const cfg = config(lane);
   for (const p of paths) {
     const abs = normPath(isAbs(p) ? p : joinPath(sessionDir, p));
-    if (insideProtected(cfg, abs)) {
+    if (insideProtected(cfg, abs) && !isLocalSettings(abs)) { // # MUTATION-ANCHOR: 1370-M07
       throw new Error(`Blocked: ${tool} would write ${abs}, inside a product repo or a live ` +
         `worktree. The ${lane} lane is read-only there.`);
     }

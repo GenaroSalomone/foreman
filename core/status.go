@@ -116,12 +116,9 @@ func (a *app) statusTable(project string, all bool) (int, []orphanLine) {
 	var panesJSON, agentsJSON = "{}", "{}"
 	var exited []jmap
 	d.herdrOK = rc == 0
-	if !d.herdrOK { // # MUTATION-ANCHOR: 826-G18
-		first := wsOut
-		if i := strings.IndexByte(first, '\n'); i >= 0 {
-			first = first[:i]
-		}
-		a.warn("herdr unreachable: " + first)
+	herdrFirst := ""
+	if !d.herdrOK {
+		herdrFirst = firstLine(wsOut)
 		wsOut = "{}"
 	} else {
 		var wg sync.WaitGroup
@@ -143,7 +140,14 @@ func (a *app) statusTable(project string, all bool) (int, []orphanLine) {
 		go func() { defer wg.Done(); exited = h.drainExited(600*time.Millisecond, 8*time.Second) }()
 		wg.Wait()
 	}
-	if hcAgents, hcPanes, _ := hcRunEntries(); len(hcAgents) > 0 {
+	hcAgents, hcPanes, hcAnswered := hcRunEntries()
+	// A herdr with no server is not an unreachable herdr when the app's core answers: it holds no space and no pane, and the
+	// terminals are in the core. A herdr that failed any other way keeps its warning, and so does a core that did not answer.
+	herdrAbsent := !d.herdrOK && hcAnswered && herdrNoServer(herdrFirst)
+	if !d.herdrOK && !herdrAbsent { // # MUTATION-ANCHOR: 826-G18
+		a.warn("herdr unreachable: " + herdrFirst)
+	}
+	if len(hcAgents) > 0 || herdrAbsent {
 		d.herdrOK = true // the app's terminals are an answer: an app-only machine has no herdr to ask
 		agentsJSON, panesJSON = withHCRuns(agentsJSON, "agents", hcAgents), withHCRuns(panesJSON, "panes", hcPanes)
 	}

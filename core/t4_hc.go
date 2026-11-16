@@ -8,7 +8,6 @@ package main
 // terminal with other labels is somebody else's and is not touched.
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,31 +44,6 @@ func hcOwned(proj, task string) (addrs []string, ok bool) {
 	return addrs, true
 }
 
-// hcAgentInfo is `hc get` in the shape of `herdr agent get`, so the in-use guard stays one program: the
-// terminal's status, and the done/post-report tokens its turn-end hook published as labels. "" when the
-// terminal is not live.
-func hcAgentInfo(addr string) string {
-	raw, rc := hcOut(10*time.Second, "get", addr, "--json")
-	v, parsed := bjParse(brTrimNL(raw))
-	m, isMap := v.(jmap)
-	if !rc || !parsed || !isMap || hcStr(m, "state") != "live" {
-		return ""
-	}
-	labels, _ := m["labels"].(jmap)
-	tokens := map[string]string{}
-	for tok, label := range map[string]string{"done_status": "hw_done_status", "done_state": "hw_done_state", "turns_post_report": "hw_turns_post_report"} {
-		if s := hcStr(labels, label); s != "" {
-			tokens[tok] = s
-		}
-	}
-	out, err := json.Marshal(map[string]any{"result": map[string]any{"agent": map[string]any{
-		"agent_status": bjRaw(bjGet(m, "status", "state")), "focused": false, "tokens": tokens}}})
-	if err != nil {
-		return ""
-	}
-	return string(out)
-}
-
 // closeHC ends the run's hc terminals: kill, then remove. It answers like closeObject: a terminal `hc ls`
 // no longer lists is closed, one it still lists after kill is a failure.
 func (d *doneRun) closeHC(proj, task string) bool {
@@ -97,11 +71,8 @@ func (d *doneRun) closeHC(proj, task string) bool {
 	return true
 }
 
-// hcRecorded is whether an hc run is recorded under dir.
-func hcRecorded(dir string) bool {
-	recs, _ := filepath.Glob(dir + "/.hw/*/hc")
-	return len(recs) > 0
-}
+// hcLiveLine is one live core terminal as occupantsIn prints it: the only place that format is written.
+func hcLiveLine(addr string) string { return addr + " (hc, live)" }
 
 // hcOwnedIn is the live terminals of the hc runs recorded under dir. observed=false when an hc run is
 // recorded and `hc ls` could not say.
@@ -126,10 +97,40 @@ func hcOwnedIn(dir string) (addrs []string, observed bool, why string) {
 // hcOccupants is hcOwnedIn as occupantsIn's lines.
 func hcOccupants(dir string) (list string, observed bool, why string) {
 	addrs, observed, why := hcOwnedIn(dir)
-	for i := range addrs {
-		addrs[i] += " (hc, live)"
+	lines := make([]string, len(addrs))
+	for i, addr := range addrs {
+		lines[i] = hcLiveLine(addr)
 	}
-	return strings.Join(addrs, "\n"), observed, why
+	return strings.Join(lines, "\n"), observed, why
+}
+
+// hcCwdOccupants is the addresses of the live terminals of the app's core whose cwd is dir or under it (the caller renders them
+// with hcLiveLine). answered is false when `hc ls` could not say. unplaced are the listed terminals that name no cwd: where
+// they stand is unknown, so they are neither in dir nor outside it.
+func hcCwdOccupants(dir string, win bool) (addrs, unplaced []string, answered bool) {
+	raw, ok := hcOut(hcReadTimeout, "ls", "--json")
+	if !ok {
+		return nil, nil, false
+	}
+	terms, ok := hcLsTerminals(raw)
+	if !ok {
+		return nil, nil, false
+	}
+	d := onePath(dir, win)
+	for _, e := range terms {
+		m, isMap := e.(jmap)
+		if !isMap || hcStr(m, "address") == "" {
+			continue
+		}
+		if hcStr(m, "cwd") == "" {
+			unplaced = append(unplaced, hcStr(m, "address"))
+			continue
+		}
+		if underDir(d, onePath(hcStr(m, "cwd"), win)) {
+			addrs = append(addrs, hcStr(m, "address"))
+		}
+	}
+	return addrs, unplaced, true
 }
 
 // addHCPanes makes an hc run's live terminals the live panes of its task, as herdr's pane list does for a TUI run.

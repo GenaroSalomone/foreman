@@ -151,13 +151,20 @@ func (b *brainRun) launch(args []string) int {
 		return b.launchHC()
 	}
 
-	ws := b.mustList("a workspace labelled "+b.space, []string{"result", "workspaces"},
+	wsList := b.herdr(brainCmd{KeepErr: true}, "workspace", "list")
+	if b.herdrGone(wsList) { // herdr has no server and the app's core is up: the same launch, on the core
+		return b.launchHC()
+	}
+	ws, listed := b.herdrListReply(wsList, "a workspace labelled "+b.space, []string{"result", "workspaces"},
 		func(m jmap) (string, bool) {
 			if l, ok := m["label"].(string); ok && l == b.space {
 				return bjRaw(m["workspace_id"]), true
 			}
 			return "", false
 		}, "workspace", "list")
+	if !listed {
+		b.exit(1)
+	}
 
 	// `--in-pane <pane>` (brain relaunch): the workspace and tab are the pane's own, read from herdr.
 	inTab := ""

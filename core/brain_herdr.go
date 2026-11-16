@@ -13,11 +13,16 @@ import (
 // herdrJSON is herdr_json: the whole reply of `herdr <args>`, only when herdr answered AND the reply holds an
 // array at arr. ok=false says it said so on stderr (and the caller stops: `return 1` under `set -e`).
 func (b *brainRun) herdrJSON(what string, arr []string, args ...string) (string, bool) {
-	r := b.herdr(brainCmd{KeepErr: true}, args...)
+	return b.herdrReply(b.herdr(brainCmd{KeepErr: true}, args...), what, arr, args...)
+}
+
+// herdrReply is herdrJSON's reading of a reply r that `herdr <args>` already gave: a launch asks herdr itself, so that a
+// "no server" can be read by herdrGone before this refuses.
+func (b *brainRun) herdrReply(r brainRes, what string, arr []string, args ...string) (string, bool) {
 	raw := brTrimNL(r.Out)
 	said := headLinesSpaced(r.Err+raw, 2)
 	joined := strings.Join(args, " ")
-	if r.RC != 0 {
+	if r.RC != 0 { // whether herdr is gone is herdrGone's decision, taken by the caller before this: a failure here refuses
 		b.errf("brain: `herdr %s` failed (exit %d), so it is not known whether %s exists.\n", joined, r.RC, what)
 		b.errf("brain: refusing to continue — treating a failed query as \"nothing found\" is how one\n")
 		b.errf("brain: project ended up with five workspaces. herdr said: %s\n", said)
@@ -34,7 +39,12 @@ func (b *brainRun) herdrJSON(what string, arr []string, args ...string) (string,
 
 // herdrList is herdr_list: the first line `pick` selects out of the array, "" when nothing matches.
 func (b *brainRun) herdrList(what string, arr []string, pick func(elem jmap) (string, bool), args ...string) (string, bool) {
-	raw, ok := b.herdrJSON(what, arr, args...)
+	return b.herdrListReply(b.herdr(brainCmd{KeepErr: true}, args...), what, arr, pick, args...)
+}
+
+// herdrListReply is herdrList over a reply r that `herdr <args>` already gave (see herdrReply).
+func (b *brainRun) herdrListReply(r brainRes, what string, arr []string, pick func(elem jmap) (string, bool), args ...string) (string, bool) {
+	raw, ok := b.herdrReply(r, what, arr, args...)
 	if !ok { // # MUTATION-ANCHOR: go-102-M01
 		return "", false
 	}

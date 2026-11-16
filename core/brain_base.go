@@ -50,6 +50,11 @@ type brainRun struct {
 	spawn     func(path string, argv []string, env []string) // `nohup … &` / `( … ) &`: start and forget
 	now       func() time.Time
 
+	// viaHC: the caller has no herdr-core terminal of its own (no HC_TERMINAL_ID) but the herdr server is not running and the
+	// app's core answers, so this run takes the app route. herdrGone is the only place that decides it, once per process
+	// (herdrChecked); every other herdr failure refuses as it always did.
+	viaHC, herdrChecked bool
+
 	tab    *table
 	a      *app
 	brain  string // BRAIN

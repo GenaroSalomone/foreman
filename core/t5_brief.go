@@ -506,7 +506,7 @@ func (d *dsp) checkTaskKind(kind, how string) {
 
 var brKnownDecl = map[string]bool{"agent": true, "model": true, "effort": true, "sdd": true, "placement": true, "worktree": true, "database": true,
 	"invoker": true, "requires": true, "requires-agents": true, "kind": true, "base": true, "decision": true, "delivery": true,
-	"boundary": true, "deployed_check": true, "sandbox": true, "review": true, "review-skip": true, "review_of": true, "plugins": true, "requested_by": true, "asked": true, "authorizes": true, "secrets": true,
+	"boundary": true, "deployed_check": true, "sandbox": true, "review": true, "review-skip": true, "review_of": true, "plugins": true, "requested_by": true, "asked": true, "authorizes": true, "secrets": true, "skills": true,
 	"top_tier_why": true, "after": true,
 	"release": true, "env-from": true, "env-to": true, "env-diff": true, "screens": true, "qa": true, "rehearsal-of": true}
 
@@ -1114,6 +1114,10 @@ func (d *dsp) checkBriefContract() {
 		}
 		if key == "requires" { // # MUTATION-ANCHOR: 844-A41
 			d.checkCapabilities(val)
+			continue
+		}
+		if key == "skills" {
+			d.checkSkills(val)
 			continue
 		}
 		if key == "plugins" { // # MUTATION-ANCHOR: 844-P08

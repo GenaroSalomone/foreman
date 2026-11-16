@@ -63,7 +63,7 @@
 // the OS's `sys.path[0]`, the exit status the kernel reports. The sample proves
 // that, for one vector per outcome rather than every one. The malformed-payload
 // shapes, Codex's lane-resolution edges and the sandbox arm keep a real spawn each.
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { spawn, spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { dirname, basename, join } from "node:path";
@@ -640,9 +640,35 @@ try {
       mkdirSync(out);
       if (rootsExist) { mkdirSync(repo, { recursive: true }); mkdirSync(worktrees); mkdirSync(brainDir); }
       const laneRow = (writeHere) => ({ repo, worktrees, write_here: writeHere, where: "the sandbox repo" });
+      // THE ONE FILE A PRODUCT REPO OPENS: `<repo>/.claude/settings.local.json`, untracked. The
+      // other repos are the shapes that must stay shut (vectors `local-settings-*`): one
+      // that tracks the file, one whose `.claude` is a symlink, one whose file is a symlink or
+      // a hard link into the tree, and one that is not a git checkout at all.
+      const gitIn = (dir, ...args) => spawnSync("git", ["-C", dir, "-c", "user.name=t", "-c", "user.email=t@t", ...args], { stdio: "ignore" });
+      const extra = {};
+      if (rootsExist) {
+        const make = (name, build) => {
+          const dir = `${wsRoot}/${name}`;
+          mkdirSync(`${dir}/src`, { recursive: true });
+          writeFileSync(`${dir}/src/a`, "a\n");
+          build(dir);
+          return dir;
+        };
+        const git = (dir) => { gitIn(dir, "init", "-q", "."); gitIn(dir, "add", "-A", "-f"); gitIn(dir, "commit", "-q", "-m", "i"); };
+        const claude = (dir) => { mkdirSync(`${dir}/.claude`); writeFileSync(`${dir}/.claude/settings.json`, "{}\n"); writeFileSync(`${dir}/.claude/other.json`, "{}\n"); };
+        mkdirSync(`${repo}/src`, { recursive: true });
+        writeFileSync(`${repo}/src/a`, "a\n");
+        claude(repo); git(repo);
+        writeFileSync(`${repo}/.claude/settings.local.json`, "{}\n");
+        extra.repo_tracked = make("tracked-repo", (d) => { claude(d); writeFileSync(`${d}/.claude/settings.local.json`, "{}\n"); git(d); });
+        extra.repo_link = make("link-repo", (d) => { git(d); symlinkSync("src", `${d}/.claude`); });
+        extra.repo_symfile = make("symfile-repo", (d) => { claude(d); git(d); symlinkSync("../src/a", `${d}/.claude/settings.local.json`); });
+        extra.repo_hard = make("hard-repo", (d) => { claude(d); git(d); linkSync(`${d}/src/a`, `${d}/.claude/settings.local.json`); });
+        extra.repo_nogit = make("nogit-repo", (d) => { claude(d); writeFileSync(`${d}/.claude/settings.local.json`, "{}\n"); });
+      }
       writeFileSync(`${sb}/guards.json`, JSON.stringify({
         brain_root: brainDir,
-        product_repos: [repo],
+        product_repos: [repo, ...Object.values(extra)],
         defaults: realPolicy.defaults,
         lanes: { brain: laneRow(`${brainDir}/<project>/`), [lane]: laneRow(`${brainDir}/${lane}/`) },
       }, null, 2));
@@ -663,7 +689,8 @@ try {
       // A link whose target spells a protected root in the WRONG CASE.
       const caseRepo = `${wsRoot}/${flip(repoName)}`;
       const r = {
-        repo, worktrees, home,
+        repo, worktrees, home, ...extra,
+        ls: `${repo}/.claude/settings.local.json`,
         dl_root: link("dl-root", repo),
         dl_deep: link("dl-deep", `${repo}/a/b/c`),
         dl_chain: link("dl-chain", mid),
@@ -690,6 +717,9 @@ try {
       .replaceAll("{{dl_outside}}", t.r.dl_outside).replaceAll("{{case_link}}", t.r.case_link)
       .replaceAll("{{case_repo}}", t.r.case_repo).replaceAll("{{case_ancestor}}", t.r.case_ancestor)
       .replaceAll("{{case_sibling}}", t.r.case_sibling).replaceAll("{{sibling}}", t.r.sibling)
+      .replaceAll("{{ls}}", t.r.ls || "").replaceAll("{{repo_tracked}}", t.r.repo_tracked || "")
+      .replaceAll("{{repo_link}}", t.r.repo_link || "").replaceAll("{{repo_symfile}}", t.r.repo_symfile || "")
+      .replaceAll("{{repo_hard}}", t.r.repo_hard || "").replaceAll("{{repo_nogit}}", t.r.repo_nogit || "")
       .replaceAll("{{outside}}", outside).replaceAll("{{out}}", `${outside}/copy`);
 
     const realHome = process.env.HOME;

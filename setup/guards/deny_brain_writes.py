@@ -525,6 +525,13 @@ def _env_option(words, i):
     return min(j, len(words))
 
 
+def _nice_takes_next(word):
+    """True for the `nice` option whose value is the NEXT word: `-n`, or `--adjustment`
+    (any unambiguous prefix, getopt_long) without `=`. `-n10`, `--adjustment=10`, `-10` carry it."""
+    return word == "-n" or (len(word) > 2 and word.startswith("--") and "=" not in word
+                            and "--adjustment".startswith(word))
+
+
 def _head(seg):
     """(index of the verb among seg.words, verb) past assignments and wrappers."""
     i, words = 0, seg.words
@@ -537,13 +544,19 @@ def _head(seg):
         if name in WRAPPERS:
             i += 1
             while i < len(words) and (words[i][0].startswith("-") or re.match(r"^[A-Za-z_]\w*=", words[i][1])):
-                i = _env_option(words, i) if name == "env" else i + 1
+                if name == "env":
+                    i = _env_option(words, i)
+                elif name == "nice" and _nice_takes_next(words[i][0]) and i + 1 < len(words) and re.fullmatch(r"[+-]?\d+", words[i + 1][1]):
+                    i += 2  # `-n 10` / `--adjustment 10`: the number is the option's, not the verb
+                else:
+                    i += 1
             continue
         if name == "timeout":
             i += 1
             while i < len(words) and words[i][0].startswith("-"):
                 i += 1
-            i += 1  # the duration
+            if i < len(words) and re.fullmatch(r"\d+(\.\d+)?[smhd]?", words[i][1]):
+                i += 1  # the duration, only a literal one: a shell-expanded word may hide the verb
             continue
         # setup/heavy [--tag T] [--short] [--max S] -- <cmd>: the slot is not the
         # verb, the command after `--` is, and it is judged like any other.

@@ -379,7 +379,7 @@ Uninstall: remove the symlinks. Nothing else was written outside this repo.
 | file | what it is |
 | --- | --- |
 | `mods/foreman-cockpit/main.js` | the mod: the cockpit per look, the file watching, the right column's switch and its live count (`foreman.cockpit`) |
-| `mods/foreman-agents/` (`main.js`, `role.js` + `.test.mjs`, `brain.svg`, `hard-hat.svg`) | the Agents list: the app's `agents` mod cloned, its rows' icons say brainer or executor (run by test 1272) |
+| `mods/foreman-agents/` (`main.js`, `role.js`, `order.js`, `reorder.js` + `.test.mjs`, `brain.svg`, `hard-hat.svg`) | the Agents list: the app's `agents` mod cloned, its rows' icons say brainer or executor, and in "Grouped by space" a row drags to reorder its group (run by test 1272) |
 | `mods/foreman-cockpit/hover.test.mjs` | the cockpit sets no tooltip (run by test 1272) |
 | `mods/foreman-cockpit/state.js` | the reader of `cockpit/schema.json`: parse, classify, format |
 | `mods/foreman-cockpit/switcher.js` + `.test.mjs` | the right column's switch: which stack child shows, the C/D/G look switcher's layouts, and the layout it must match (also run by test 1272) |
@@ -437,6 +437,15 @@ put the pointer over the target (the target row's own mouse-up is the target; th
 mouse-up ends a drag released between rows, and leaving the list cancels it. **Unverified live**: whether the app delivers those events mid-press is only seen with a real
 drag, which the person tries after the merge. Link it: `ln -sfn "$PWD/herdr-app/mods/foreman-spaces" ~/.config/herdr-app/mods/foreman-spaces`; the layouts place it in the `spaces` block
 (test 1283 counts it as `spaces`).
+
+**The Agents list drags too, and what it drags is the space.** `mods/foreman-agents/reorder.js` is a **byte copy** of `foreman-spaces/reorder.js` (a mod cannot import outside its
+folder; `order.test.mjs` holds the copy), so both lists share one gesture reducer. `order.js` (pure, `order.test.mjs`) decides what a drop means. A group IS a space, and the
+groups are drawn in the Spaces list's order (`placeGroups`). **The handle is the space's header**: press it and drag it over another group (its header or any of its rows) and the
+whole space moves there with the Spaces list's own `space.move { id, index }`, so both lists agree and it persists as a space's order does; the line is drawn between groups (above the
+target's header going up, below its last row, or its header if folded, going down) and the dragged group dims entirely. A click on a header without movement still folds it. A space on
+another machine, Pinned (no drag header) and the priority sections are no target. **A row never leaves its group**: dropped on another group it does nothing and draws no line; dropped on a
+row of its **own** group it reorders there: one flat list of addresses in `localStorage` "order", written at each drop, new agents after the known ones, gone ones never matched;
+the brainer stays first. **The priority sort has no drag** (its order is urgency), nor does the rail. Every look places `foreman-agents`, so every look has it.
 
 ## Role icons on the tab bar, and the statusline's look (2026-11-12, `setup/claude-session-foreman-look`)
 

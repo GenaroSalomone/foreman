@@ -32,6 +32,9 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md has the whole block)
                        agents the task cannot do without. hw refuses the
                        dispatch when the executor cannot reach one from its
                        work directory, instead of warning.
+    skills: [<name>, …]  skills the task needs: each must resolve for the executor
+                       (worktree .claude/skills/<name>/SKILL.md, after replication, or the
+                       account's user-level skills dir) or hw refuses the dispatch.
     review: judgment-day|plugins|none
                        the review, in every lane and --sdd mode. A build owes
                        the independent review for every value, absent too

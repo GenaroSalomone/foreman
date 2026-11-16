@@ -512,7 +512,7 @@ func (r *trainRun) applyDiff(h, c, f string, check bool) bool {
 // advance moves the base from H to C in the checkout, keeping every uncommitted edit in it (chain-push.sh). A dirty
 // file the advance also changes gets the advance's diff applied ON TOP of the edit; one that does not apply refuses
 // before anything moves.
-func (r *trainRun) advance(h, c string) {
+func (r *trainRun) advance(h, c, tool string) {
 	head := bashSub(r.g("symbolic-ref", "-q", "HEAD").Out)
 	if head != "refs/heads/"+r.base {
 		r.gx("update-ref", "-m", "hw train push", "refs/heads/"+r.base, c, h)
@@ -553,28 +553,52 @@ func (r *trainRun) advance(h, c string) {
 		trainCopyP(r.co+"/"+f, bak+"/"+f+".merged")
 		r.gx("checkout", h, "--", f)
 	}
-	restore := func() {
+	// THE GUARDED UPDATE IS setup/merge-task's, not a second copy of it: `--base <b> --advance <h> <c>` has git move the
+	// checked-out base with `merge --ff-only --no-overwrite-ignore` (the pins and the guards are there; it is not an exact
+	// compare-and-swap on <h>: a base moved to an ancestor of C is advanced over, losing nothing, see L35), then MEASURES the end state — the ref, HEAD, the index and the disk over the touched paths, added ones included —
+	// and exits 0 (the base is at C and the checkout is C's), 1 (nothing was written) or 3 (NOT CONSISTENT, with the one
+	// `git read-tree` that reconciles it). It attempts no recovery and neither does this: a rollback that cannot be proven to
+	// finish only adds a third state (the merge-task review's rounds 2 to 6). The tool is the VERIFIED tree's copy, the one
+	// the suite just ran (the checkout is still at H and may not hold it yet).
+	mg := extRun(extCall{Name: tool, Dir: r.co, KeepErr: true,
+		Args: []string{"--base", r.base, "--advance", h, c},
+		Env:  append(os.Environ(), "GIT_REFLOG_ACTION=hw train push")})
+	if mg.RC != 0 {
+		r.writeErr(mg)
+	}
+	// Past exit 0 and 1 the edits are NOT written back: over a checkout git half-wrote (or one nobody measured) they would make the
+	// command above fail («not uptodate»). They stay in bak: <f>.orig is the edit on H, <f>.merged is it with the train's hunks.
+	carried := func() string {
+		if len(F) == 0 {
+			return ""
+		}
+		return fmt.Sprintf(" Your uncommitted edits to %s are NOT in the checkout: copies are in %s (<file>.orig is your edit on %s, <file>.merged is it with the train's changes on %s); copy one back after the checkout is reconciled.", strings.Join(F, " "), bak, r.short(h), r.short(c))
+	}
+	switch mg.RC {
+	case 0:
+		// its «N written, M removed» report is noise here (the advance says its own line); a deletion git could not apply is not
+		for _, ln := range strings.Split(mg.Err, "\n") {
+			if strings.Contains(ln, "STILL ON DISK") {
+				r.errf("%s\n", ln)
+			}
+		}
+		for _, f := range F {
+			trainCopyP(bak+"/"+f+".merged", r.co+"/"+f)
+		}
+		os.RemoveAll(bak)
+		if len(F) > 0 {
+			r.say("uncommitted edits carried across: %s", strings.Join(F, " ")+" ") // printf '%s ' $F
+		}
+	case 3: // NOT CONSISTENT, measured: the message above names the state and the one command that reconciles it
+		r.refuse("ADVANCE FAILED: setup/merge-task exited 3 — %s and the checkout were not left consistent; the measured state and the command that reconciles it are above.%s", r.base, carried())
+	case 1: // measured: nothing was written and the base did not move, so the checkout is H's and the edits go back
 		for _, f := range F {
 			trainCopyP(bak+"/"+f+".orig", r.co+"/"+f)
 		}
-	}
-	if rt := r.g("read-tree", "-m", "-u", h, c); rt.RC != 0 {
-		r.writeErr(rt)
-		restore()
-		r.refuse("ADVANCE FAILED: git read-tree refused (staged changes or untracked files in the way) — %s stays at %s, local edits restored (copies in %s)", r.base, r.short(h), bak)
-	}
-	if ur := r.g("update-ref", "-m", "hw train push", "refs/heads/"+r.base, c, h); ur.RC != 0 {
-		r.writeErr(ur)
-		r.g("read-tree", "-m", "-u", c, h)
-		restore()
-		r.refuse("ADVANCE FAILED: %s moved during the advance — the tree was put back, local edits restored (copies in %s)", r.base, bak)
-	}
-	for _, f := range F {
-		trainCopyP(bak+"/"+f+".merged", r.co+"/"+f)
-	}
-	os.RemoveAll(bak)
-	if len(F) > 0 {
-		r.say("uncommitted edits carried across: %s", strings.Join(F, " ")+" ") // printf '%s ' $F
+		r.refuse("ADVANCE FAILED: setup/merge-task refused and measured that nothing was written (the reason is above); local edits restored (copies in %s)", bak)
+	default: // 2 (usage), 126/127 (the tool vanished or lost its exec bit), a signal: setup/merge-task did not run to its end
+		// and nothing was measured, so no state is claimed; 3 is its documented NOT CONSISTENT.
+		r.refuse("ADVANCE FAILED: setup/merge-task did not finish (exit %d); nothing was measured — read `git status` in %s before anything else, and do not commit there until %s and the checkout agree.%s", mg.RC, r.co, r.base, carried())
 	}
 }
 
@@ -626,6 +650,10 @@ func (r *trainRun) cmdPush() {
 	if st, err := os.Stat(w + "/setup/verify-for-push"); err != nil || !st.Mode().IsRegular() {
 		r.refuse("%s has no setup/verify-for-push, so there is no full suite to run — nothing moved", r.t)
 	}
+	tool := w + "/setup/merge-task"
+	if !isExecutable(tool) {
+		r.refuse("%s has no executable setup/merge-task, which the advance of the checkout runs — nothing moved", r.t)
+	}
 	r.say("full suite on %s at %s in %s", r.t, r.short(c), w)
 	if r.runSuite(w) != 0 {
 		r.refuse("VERIFY FAILED on %s — %s did not move", r.short(c), r.base)
@@ -634,7 +662,7 @@ func (r *trainRun) cmdPush() {
 	if !r.has(h, c) {
 		r.refuse("MAIN MOVED: %s is at %s, not in the verified %s — run hw train push %s again", r.base, r.short(h), r.short(c), r.proj)
 	}
-	r.advance(h, c)
+	r.advance(h, c, tool)
 	hooks := r.co + "/setup/install/install-hooks.sh"
 	if st, err := os.Stat(hooks); err == nil && st.Mode().IsRegular() {
 		if extRun(extCall{Name: "bash", Args: []string{"setup/install/install-hooks.sh"}, Dir: r.co}).RC != 0 {

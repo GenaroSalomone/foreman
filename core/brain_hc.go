@@ -30,7 +30,33 @@ import (
 )
 
 // hcBackend is the one question this file asks.
-func (b *brainRun) hcBackend() bool { return mux.Backend(b.getenv) == mux.HC }
+func (b *brainRun) hcBackend() bool { return b.viaHC || mux.Backend(b.getenv) == mux.HC }
+
+// isHCAddr is mux.IsHCAddress for this run: an hc address is `t7` or `machine/t7`, never a herdr pane id (those carry a colon).
+func (b *brainRun) isHCAddr(addr string) bool {
+	return addr != "" && !strings.Contains(addr, ":") && b.hcBackend()
+}
+
+// herdrGone says whether herdr has no server AND the app's core can run the brainer instead: the herdr TUI server is off since
+// the root move, and its refusal must not stop a caller that is not itself an app terminal (a plain shell, after a reboot)
+// from using the core that is up. Any other failure of herdr, and a core that does not answer, are not "gone": the caller
+// refuses as it always did. It never starts the herdr server.
+//
+// THE ONE PLACE this is decided (launch, relaunch and restore each pass the herdr reply they got). Every reply is judged on its
+// own: one that did not fail, or failed for another reason, is never "gone", whatever was decided before, so no caller needs its
+// own failure guard. Only the question to the core is memoized: the first reply that says "no server" asks it, once per process,
+// and the app route (viaHC) is taken on that answer and kept.
+func (b *brainRun) herdrGone(r brainRes) bool {
+	if r.RC == 0 || !herdrNoServer(r.Out+r.Err) {
+		return false
+	}
+	if !b.herdrChecked {
+		b.herdrChecked = true
+		_, answered := hcLsTerminals(b.hc(brainCmd{KeepErr: true}, "ls", "--json").Out)
+		b.viaHC = answered
+	}
+	return b.viaHC
+}
 
 // hc runs `hc <args>` through the same seam as herdr.
 func (b *brainRun) hc(c brainCmd, args ...string) brainRes {
@@ -115,10 +141,26 @@ func (b *brainRun) hcName() string { return "brain-" + b.proj }
 // hcGet is `hc get <addr> --json`: the terminal's own fields (labels, cwd), and
 // false when it cannot be read.
 func (b *brainRun) hcGet(addr string) (jmap, bool) {
-	raw := brTrimNL(b.hc(brainCmd{}, "get", addr, "--json").Out)
-	v, ok := bjParse(raw)
+	res := b.hc(brainCmd{}, "get", addr, "--json")
+	v, ok := bjParse(brTrimNL(res.Out))
 	m, isMap := v.(jmap)
-	return m, ok && isMap
+	return m, ok && isMap && res.RC == 0 // a record printed with a failing exit is not an answer (hcAgentRead's rule)
+}
+
+// hcListed is the addresses `hc ls` lists; nil when it could not say ("not answered", never "none": an answer with no terminals is an empty map).
+func (b *brainRun) hcListed() (listed map[string]bool) {
+	res := b.hc(brainCmd{}, "ls", "--json")
+	terms, ok := hcLsTerminals(res.Out)
+	if !ok || res.RC != 0 {
+		return nil
+	}
+	listed = map[string]bool{}
+	for _, e := range terms {
+		if m, isMap := e.(jmap); isMap {
+			listed[hcStr(m, "address")] = true
+		}
+	}
+	return listed
 }
 
 // sameDir is two paths naming one directory, and "" names none of them:
@@ -183,6 +225,7 @@ func (b *brainRun) launchHC() int {
 	// on them (the TUI focus path does not). A replacement resolves them BEFORE the old terminal is ended, so a
 	// refusal there leaves the lane's brainer alive.
 	replaced := false // # MUTATION-ANCHOR: go-1340-M02
+	ended := ""       // the terminal hcEnd ended, for repointRuns
 	var plan brainerLaunch
 	if addr == "" || b.reset || b.resume != "" {
 		var planOK bool
@@ -202,7 +245,7 @@ func (b *brainRun) launchHC() int {
 		if !b.hcEnd(addr) {
 			return 1
 		}
-		addr, replaced = "", true
+		ended, addr, replaced = addr, "", true
 	}
 	if addr != "" && !replaced {
 		b.engramRegister() // focusing the open brainer: no refusal is left, and the session is renewed as it always was
@@ -218,7 +261,7 @@ func (b *brainRun) launchHC() int {
 	// agent.focus races a terminal `hc run` has just started (measured 3/3 on 0.8.0-rc.1): it is retried, and a
 	// focus that never lands does not skip the outbox flush — the report is owed to the brainer whether or not it is shown.
 	focused := b.hcFocus(addr)
-	b.repointRuns(addr)
+	b.repointRuns(addr, ended)
 	b.cockpitWriter(b.kind, addr) // one per brainer (its lock): a re-run, a focus or a reset never stacks writers; it leaves when `hc get` says the terminal is gone
 	if replaced {
 		how := "NEW conversation"
@@ -345,31 +388,57 @@ func (b *brainRun) hcStartBrainer(plan brainerLaunch) (string, int) {
 
 // repointRuns gives the lane's runs the brainer's NEW address: an executor's run env names the terminal that dispatched it,
 // and the cockpit keys its rows on that name, so a reopened brainer (t2 -> t7) showed no executors while the old one's
-// rows sat in a dead file. Only an hc address that `hc get` says is not live is replaced; a live one is somebody's.
-func (b *brainRun) repointRuns(addr string) {
+// rows sat in a dead file. Only an hc address that is gone by evidence is replaced: hcRecordGone, an answered `hc ls` that does not list it (for a run whose hc-core names this core), or ended (a short-circuit for the reset that just removed it, and the verdict when `hc ls` cannot answer), the terminal this run's
+// hcEnd just saw finished and removed (what `hc get` answers after `hc rm` is UNESTABLISHED on the real core, so it cannot say). A live
+// one is somebody's, and one `hc get` does not answer with a known record is UNKNOWN, so it is left alone.
+func (b *brainRun) repointRuns(addr, ended string) {
 	envs, _ := filepath.Glob(filepath.Join(b.work, b.proj, "*", ".hw", "*", "env"))
-	gone := map[string]bool{}
-	mine := hcCoreID(b.getenv)
+	type verdict struct{ gone, live bool } // what the terminal's OWN record said, once per address
+	seen := map[string]verdict{}
+	var listed map[string]bool // `hc ls`, read once and only when a terminal's own record settles nothing
+	var lsRead bool
+	mine := hcCoreID(b.getenv) // N3: the same "whose core is this run" reading as hcCoreID in t3_outbox.go; keep them in step
 	for _, f := range envs {
 		// a run of ANOTHER core (a QA instance, a restart that recycles the numbers) names an address that means nothing here:
 		// `hc get` would answer for whoever holds that number in THIS core, so its liveness is not this run's.
-		if c, err := os.ReadFile(filepath.Dir(f) + "/hc-core"); err == nil && mine != "" && strings.TrimSpace(string(c)) != "" && strings.TrimSpace(string(c)) != mine {
+		core := ""
+		if c, err := os.ReadFile(filepath.Dir(f) + "/hc-core"); err == nil {
+			core = strings.TrimSpace(string(c))
+		}
+		if core != "" && mine != "" && core != mine {
 			continue
 		}
+		ownsRun := core != "" && core == mine // positive evidence: the run names THIS core
 		raw, err := os.ReadFile(f)
 		if err != nil {
 			continue
 		}
 		m := reInvokerRow.FindSubmatch(raw)
-		if m == nil || string(m[1]) == addr || !mux.IsHCAddress(b.getenv, string(m[1])) {
+		if m == nil || string(m[1]) == addr || !b.isHCAddr(string(m[1])) {
 			continue
 		}
 		old := string(m[1])
-		if _, seen := gone[old]; !seen {
-			info, ok := b.hcGet(old)
-			gone[old] = !ok || hcStr(info, "state") != "live"
+		v, ok := seen[old]
+		if !ok {
+			if old == ended {
+				v.gone = true
+			} else {
+				info, ok := b.hcGet(old)
+				v = verdict{gone: ok && hcRecordGone(info, old), live: ok && hcStr(info, "state") == "live"}
+			}
+			seen[old] = v
 		}
-		if gone[old] {
+		gone := v.gone
+		// an answered `hc ls` that does not list it is gone: hcPaneFree's rule, and what repoints after a failed start or a removal.
+		// Only THIS core's ls speaks for a run that names this core: a run with no `hc-core` row (legacy, or written with no core id)
+		// may be another core's terminal, and a listing here says nothing about it.
+		if !gone && !v.live && ownsRun {
+			if !lsRead {
+				listed, lsRead = b.hcListed(), true
+			}
+			gone = listed != nil && !listed[old]
+		}
+		if gone {
 			tmp := f + ".repoint" // rename, so a reader never sees half a row
 			if os.WriteFile(tmp, reInvokerRow.ReplaceAllLiteral(raw, []byte("HW_INVOKER_PANE='"+addr+"'")), 0o600) == nil && os.Rename(tmp, f) != nil {
 				os.Remove(tmp)

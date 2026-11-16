@@ -10,6 +10,7 @@ import { activeChild, LOOK_LAYOUTS, shownLook, SWITCH_ROW2, switchOf } from "./s
 import { ageText, lineOf, parseUsage, sortAccounts } from "./usage.js";
 import { alarm, button, kindOf, colorOf, lookOf, mark, RADIUS, SPACE, TEXT } from "./tokens.js";
 import { binDirOf, dispatch, forgettable, offers, parseVerbs, snapshot } from "./actions.js";
+import { restoreOnStart } from "./restore.js";
 
 // The foreman cockpit as the herdr app draws it. The data is the file
 // bin/cockpit-state writes for each brainer pane (contract: cockpit/schema.json;
@@ -71,6 +72,8 @@ export default class Cockpit extends View {
     const p = props();
     if (switchOf(p)) return;
     this.refresh(cx);
+    // the app's start is the hook after a reboot and after a quit: brain restores the last brainers once per core holder (restore.js)
+    cx.spawn(() => restoreOnStart(p?.verbs, home(), exec, console.log)); // its outcome goes to the app log
     // One read per beat, not one per write: eight writers beat every 5 s, and every
     // notify redraws the whole window. It is also what makes a dead writer's file
     // go stale (and its rows dim) without a write that never comes.

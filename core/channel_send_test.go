@@ -73,7 +73,7 @@ exit 0
 	t.Setenv("WITNESS_SAMPLES", "2")
 	t.Setenv("WITNESS_INTERVAL_S", "0")
 	for _, k := range []string{"HW_INVOKER_WAIT_MS", "HW_AWAITING_CHILD_PROBE_MS", "HW_REPORT_LOCK_WAIT_S", "STUB_RPC_RC", "STUB_PROMPT_RC",
-		"HW_LOCK_DIR", "HW_PROJECTS_JSON", "HW_BRAIN_ROOT", "HW_CORE", "HW_IMPL", "HW_IMPL_CHANNEL_SEND", "STUB_HOLD_ERR", "STUB_PROMPT_SLEEP", "STUB_RPC_CALL_RC", "STUB_SENDTEXT_RC", "STUB_SENDKEYS_RC", "HW_OPERATOR", "CLAUDE_PANE", "HERDR_PANE_ID", "HERDR_SOCKET_PATH"} {
+		"HW_LOCK_DIR", "HW_PROJECTS_JSON", "HW_BRAIN_ROOT", "HW_CORE", "HW_IMPL", "HW_IMPL_CHANNEL_SEND", "STUB_HOLD_ERR", "STUB_PROMPT_SLEEP", "STUB_RPC_CALL_RC", "STUB_SENDTEXT_RC", "STUB_SENDKEYS_RC", "HW_OPERATOR", "CLAUDE_PANE", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HC_TERMINAL_ID", "HERDR_APP_HOME"} {
 		t.Setenv(k, "")
 	}
 	return w
@@ -1380,5 +1380,71 @@ exit 0
 	r.rcIs(t, 5)
 	if strings.Contains(w.calls(), "hc label") {
 		t.Errorf("an unconfirmed delivery marked the ask answered; calls:\n%s", w.calls())
+	}
+}
+
+// OLD: a report to an hc brainer that is MID-TURN was proven only by the terminal's counters (status, turn, hw_turns), which cannot
+// move until that turn ends — so channel-send said exit 5 after 15 s for a message that claude had already queued (done-invoker
+// then left the executor without a legal end of turn: t71 and t6x, 2026-11-13). NEW: the receiver's own transcript is asked first
+// (claude writes a queue-operation record at once), with the watermark that keeps an earlier send of the same bytes from counting.
+func TestHCDeliveryIsProvenFromTheReceiversTranscriptWhileItsTurnRuns(t *testing.T) {
+	const sid = "11111111-2222-4333-8444-555555555555"
+	const msg = "REPORT mid long turn"
+	for _, tc := range []struct {
+		name, acct string // the account folder under HOME that holds the session and its transcript
+		enqueue    bool   // whether claude writes the queue record on the send
+		session    bool   // whether a sessions/<pid>.json names this terminal's claude
+		old        bool   // an EARLIER send of the same bytes is already in the transcript
+		rc         int
+		note       string
+	}{
+		{"default account", ".claude", true, true, false, 0, "delivery PROVEN in receiver session " + sid},
+		{"a personal account", ".claude-personal", true, true, false, 0, "delivery PROVEN in receiver session " + sid},
+		{"an earlier send of the same bytes is not a receipt", ".claude", false, true, true, 5, "UNCONFIRMED"},
+		{"claude never queued it", ".claude", false, true, false, 5, "UNCONFIRMED"},
+		{"not a claude session: the counters decide, as they did", ".claude", true, false, false, 5, "UNCONFIRMED"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newCSWorld(t)
+			w.set("HOME", w.dir)
+			cwd := w.dir + "/cwd"
+			os.MkdirAll(cwd, 0o755)
+			tr := w.dir + "/" + tc.acct + "/projects/p/" + sid + ".jsonl"
+			os.MkdirAll(filepath.Dir(tr), 0o755)
+			rec := `{"type":"queue-operation","operation":"enqueue","content":"<hc from=\"t1 x\">` + msg + `</hc>"}` + "\n"
+			os.WriteFile(tr, []byte(`{"type":"user"}`+"\n"), 0o644)
+			if tc.old {
+				os.WriteFile(tr, []byte(rec), 0o644)
+			}
+			if tc.session {
+				os.MkdirAll(w.dir+"/"+tc.acct+"/sessions", 0o755)
+				os.WriteFile(w.dir+"/"+tc.acct+"/sessions/222.json", []byte(`{"pid":222,"sessionId":"`+sid+`","cwd":"`+cwd+`"}`), 0o644)
+			}
+			receipt, err := os.ReadFile("../bin/claude-delivery-receipt.py")
+			if err != nil {
+				t.Fatal(err)
+			}
+			os.WriteFile(w.bin+"/claude-delivery-receipt.py", receipt, 0o755)
+			enq := ":"
+			if tc.enqueue {
+				enq = `printf '%s\n' '` + strings.TrimSuffix(rec, "\n") + `' >> '` + tr + `'`
+			}
+			// the receiver is WORKING and its counters never move: only the transcript can say
+			os.WriteFile(w.bin+"/hc", []byte(`#!/bin/bash
+case "$1" in
+  get) printf '{"address":"%s","state":"live","pid":111,"cwd":"`+cwd+`","foreground":{"pid":222},"turn":5,"status":{"app":"claude-code","state":"working"},"labels":{}}\n' "$2" ;;
+  send) `+enq+` ;;
+esac
+exit 0
+`), 0o755)
+			w.set("HW_HC_PROOF_MS", "400")
+			w.set("HW_HC_LAND_MS", "1500")
+			r := w.cs("--report", "hc", "t7", "-", msg)
+			r.rcIs(t, tc.rc)
+			r.has(t, tc.note)
+			if tc.rc == 0 {
+				r.has(t, "was MID-TURN when this was sent") // the receiver was working: the caller is told where it landed
+			}
+		})
 	}
 }

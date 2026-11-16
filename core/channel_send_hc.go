@@ -5,8 +5,11 @@ package main
 // is foreman's; `--force` may answer a dialog, so it is never used. Delivery is proven from the receiver, never from the send.
 
 import (
+	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -41,6 +44,56 @@ func hcMoved(before, now hcState) bool {
 		return true
 	}
 	return now.turn != before.turn || now.turns != before.turns || now.endedAt != before.endedAt
+}
+
+// hcSession is the claude session id of the program in terminal t, "" when it cannot be established (not claude, or no
+// record): the pid `hc get` names for the terminal's foreground program (a shell the core revived and a person typed
+// `claude --resume` into), else the terminal's own, looked up in every account's sessions folder.
+func (c *chanSend) hcSession(t string) string {
+	raw, ok := hcOut(hcReadTimeout, "get", t, "--json")
+	m, isMap := bjParseMap(raw, ok)
+	if !isMap {
+		return ""
+	}
+	home := c.getenv("HOME")
+	dirs := []string{c.getenv("CLAUDE_CONFIG_DIR"), home + "/.claude"}
+	more, _ := filepath.Glob(brEscapeGlob(home) + "/.claude-*")
+	dirs = append(dirs, more...)
+	fg, _ := m["foreground"].(jmap)
+	for _, pid := range []string{bjRaw(fg["pid"]), bjRaw(m["pid"])} {
+		if sid := claudeSessionOf(pid, hcStr(m, "cwd"), dirs...); sid != "" {
+			return sid
+		}
+	}
+	return ""
+}
+
+// hcTranscriptMark is the watermark of the receiver's transcript before the send (claude-delivery-receipt.py --mark), "none"
+// when there is no transcript yet.
+func (c *chanSend) hcTranscriptMark(sid string) string {
+	cmd := exec.Command("python3", c.binDir+"/claude-delivery-receipt.py", "--mark")
+	cmd.Env = append(os.Environ(), "CHANNEL_TARGET="+sid)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if cmd.Run() != nil || bashSub(out.String()) == "" {
+		return "none"
+	}
+	return bashSub(out.String())
+}
+
+// hcLanded asks the RECEIVER's own transcript whether the payload is in it: claude writes a prompt that arrives mid-turn as a
+// queue-operation record at once, while the terminal's counters (status, turn, hw_turns) cannot move until that turn ends —
+// minutes for a brainer that is working. Same witness as the claude route (bin/claude-delivery-receipt.py), whose watermark
+// keeps an earlier send of the same bytes from counting.
+func (c *chanSend) hcLanded(sid, since string, ms int64) (string, bool) {
+	cmd := exec.Command("python3", c.binDir+"/claude-delivery-receipt.py")
+	cmd.Env = append(os.Environ(), "CHANNEL_TARGET="+sid, "CHANNEL_MESSAGE="+c.message, "CHANNEL_LAND_MS="+strconv.FormatInt(ms, 10), "CHANNEL_SINCE="+since)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	if cmd.Run() != nil {
+		return "", false
+	}
+	return bashSub(out.String()), true
 }
 
 // hcWaitIdle returns 0 at a turn boundary, 2 budget spent, 3 terminal gone, 6 blocked on a person.
@@ -116,6 +169,11 @@ func (c *chanSend) routeHC() {
 		c.releaseLock()
 		c.die(fmt.Sprintf("hc knows no live terminal %s (or `hc get` could not answer). Nothing was sent.", c.tgt))
 	}
+	sid := c.hcSession(c.tgt)
+	since := ""
+	if sid != "" {
+		since = c.hcTranscriptMark(sid)
+	}
 	c.setSent(csInflight)
 	r := extRun(extCall{Name: "hc", Args: []string{"send", "--", c.tgt, c.message}, Env: childEnv(), Merge: true})
 	if r.RC != 0 {
@@ -129,6 +187,20 @@ func (c *chanSend) routeHC() {
 	proofMS := int64(15000)
 	if n, ok := csMS(c.env("HW_HC_PROOF_MS", "15000")); ok {
 		proofMS = n
+	}
+	if sid != "" { // the receiver's transcript first: it answers in a second what the counters answer when the turn ends
+		landMS := int64(3000)
+		if n, ok := csMS(c.env("HW_HC_LAND_MS", "3000")); ok {
+			landMS = n
+		}
+		if how, ok := c.hcLanded(sid, since, landMS); ok {
+			c.setSent(csSent)
+			if before.status == "working" {
+				c.printf("channel-send: %s was MID-TURN when this was sent, so WHERE it landed was not your choice: it is queued behind the work in flight (or a new turn interleaved with it). To re-task properly use `hw next`.\n", c.tgt)
+			}
+			c.printf("channel-send: delivery PROVEN in receiver session %s's own transcript (%s)\n", sid, how)
+			return
+		}
 	}
 	deadline := nextEpoch()*1000 + proofMS
 	for {

@@ -14,7 +14,7 @@ import (
 var nextKnownKeys = map[string]bool{"agent": true, "model": true, "effort": true, "sdd": true, "placement": true, "worktree": true,
 	"database": true, "invoker": true, "requires": true, "requires-agents": true, "kind": true, "base": true,
 	"decision": true, "delivery": true, "boundary": true, "deployed_check": true, "sandbox": true, "review": true, "review-skip": true, "review_of": true, "plugins": true,
-	"requested_by": true, "asked": true, "authorizes": true, "secrets": true}
+	"requested_by": true, "asked": true, "authorizes": true, "secrets": true, "skills": true}
 
 // nextBriefDeclares is _brief_declares: "key\tvalue" per declared key, "__malformed__\t…" and
 // "__unknown__\t<key>" for what it cannot take, nothing for a brief with no frontmatter.

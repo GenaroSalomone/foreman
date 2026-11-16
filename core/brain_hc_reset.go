@@ -28,12 +28,12 @@ func (b *brainRun) hcEnd(addr string) bool {
 		return false
 	}
 	m, read := b.hcGet(addr)
-	if !read { // an unread terminal is not a gone one: a second brainer must not be started beside a live one
-		b.errf("brain: `hc get %s` could not be read, so whether it is still running is UNKNOWN. Nothing was ended or started.\n", addr)
-		return false
+	if read && hcRecordGone(m, addr) {
+		return true // already gone: positive evidence, a finished record
 	}
-	if hcStr(m, "state") != "live" {
-		return true // already gone
+	if !read || hcStr(m, "state") != "live" { // neither live nor gone: a second brainer must not be started beside a terminal that may live
+		b.errf("brain: `hc get %s` is not a record of a live or a finished terminal, so whether it is still running is UNKNOWN. Nothing was ended or started.\n", addr)
+		return false
 	}
 	st, _ := m["status"].(jmap) // the status of the read that just succeeded, not a second read that may fail
 	if hcStr(st, "state") == "working" && !b.force {
@@ -41,14 +41,21 @@ func (b *brainRun) hcEnd(addr string) bool {
 		return false
 	}
 	b.hc(brainCmd{NoOut: true}, "kill", addr)
-	b.hc(brainCmd{NoOut: true}, "rm", addr)
+	unread := false
 	for i := 0; i < 10; i++ {
-		if _, live := hcAgentGetJSON(addr); !live {
+		_, live, read := hcAgentRead(addr)
+		if read && !live { // only a finished record ends it: an unread terminal is not a gone one. `hc rm` removes a finished terminal, so it comes after: a read past the rm has no record to show
+			b.hc(brainCmd{NoOut: true}, "rm", addr)
 			return true
 		}
+		unread = !read
 		b.sleep(500 * time.Millisecond)
 	}
-	b.errf("brain: %s is still live after `hc kill` and `hc rm`; nothing was started beside it.\n", addr)
+	if unread {
+		b.errf("brain: after `hc kill`, `hc get %s` never showed a finished terminal, so whether it still runs is UNKNOWN; nothing was started beside it.\n", addr)
+	} else {
+		b.errf("brain: %s is still live after `hc kill`; nothing was started beside it.\n", addr)
+	}
 	return false
 }
 

@@ -154,7 +154,11 @@ engram asks `Add to allowlist? (y/N)`: answer `y`. It lists only engram's own
 memory tools in Claude Code's permissions, so saving to memory never stops to ask.
 
 `brain` also needs `engram serve` running (`127.0.0.1:7437`) to register its memory session; without it
-it warns `engram session NOT registered`.
+it warns `engram session NOT registered`. Nothing in this release starts it after a reboot: on macOS a user
+LaunchAgent with `RunAtLoad` does it, and it should start `engram serve` only when
+`curl -fsS http://127.0.0.1:7437/health` does not answer (a second serve on the same store is what that check
+avoids), without `KeepAlive`, its output in `~/.cache/hw/engram-serve.log`. You write and load that one yourself
+(`launchctl bootstrap gui/$(id -u) <plist>`).
 
 It does not run that itself. That command writes your Claude Code config by
 engram's own rules, which falls outside what this installer says it writes,
@@ -339,7 +343,18 @@ preview) relaunches each idle Claude Code brainer in its own pane, resuming its
 own session and its own account (`CLAUDE_CONFIG_DIR`); a working pane is skipped
 and named, and a pane whose agent was stopped but did not come back is reported
 `FAILED` with a non-zero exit. `brain <lane> --resume <id>` is the single-lane
-form (exit 75 when it did not start). A pane is matched to its lane by directory
+form (exit 75 when it did not start). After a reboot of a machine that runs the herdr app,
+`brain restore` resumes every lane's last conversation into its `brain-<lane>` terminal in one
+command (`--dry-run` to preview). Nobody has to type it: the cockpit mod runs `brain restore --on-start`
+every time the app starts (macOS relaunches the app at login after a reboot; after a quit the core and its
+programs keep running). `--on-start` detaches at once and restores once per core holder (`hc server status`:
+`holder.instance`), under a lock, only lanes whose `brain-<lane>` terminal the core kept, and writes what it
+did to `~/.cache/hw/brain-restore.log`; a second start with the same holder does nothing. A lane's last
+conversation is the newest transcript under its own project directory or under the old directories its
+`brain_aliases` name (a renamed lane keeps its transcripts under `-brain-<old name>`). The setup lane is
+restored last, and the terminal restore itself runs in, when it holds only a shell, is replaced last by a
+detached `brain <lane> --resume` (a child of the terminal it replaces would die with it). With the herdr server off, `brain <lane> --resume <id>`,
+`brain relaunch` and `hw status` use the app's core instead of refusing. A pane is matched to its lane by directory
 identity, under the lane's canonical name in `projects.json`: a pane standing in an
 alias path (a symlink to the lane directory) or in a symlink to the lane is that lane.
 Executors are not relaunched.

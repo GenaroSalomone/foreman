@@ -25,9 +25,8 @@ func hcRunEntries() (agents, panes []any, answered bool) {
 	if !ok {
 		return nil, nil, false
 	}
-	v, parsed := bjParse(brTrimNL(raw))
-	list, isList := bjGet(v, "terminals").([]any)
-	if !parsed || !isList {
+	list, listed := hcLsTerminals(raw)
+	if !listed {
 		return nil, nil, false
 	}
 	for _, e := range list {

@@ -66,6 +66,7 @@ docs_only_path() { # <path> → 0 when the path is lane documentation the suite 
   grep -qE "$SUITE_TRIGGER_PATTERN" <<<"$1" && return 1
   grep -qE "$DOCS_ONLY_PATTERN" <<<"$1"
 }
+# setup/test-hw-snapshot.py `decisions_header` is the same rule over two files on disk: a change to what counts as the header goes in both.
 decisions_header() { # <tree> <path> → the header, or fails if the blob is unreadable
   local blob
   blob="$(git cat-file blob "$1:$2" 2>/dev/null)" || return 1

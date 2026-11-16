@@ -38,6 +38,18 @@ func hcOut(timeout time.Duration, args ...string) (string, bool) {
 	return out.String(), err == nil
 }
 
+// herdrNoServer says whether text (a herdr reply or its stderr) is herdr's "no server is running" answer: the one failure
+// that lets the app's core stand in for it (brain, status and occupancy each ask it).
+func herdrNoServer(text string) bool { return strings.Contains(text, `"server_not_running"`) }
+
+// hcLsTerminals is the terminals array of an `hc ls --json` reply; ok is false when it is not a reply that holds one
+// ("not answered", never "none").
+func hcLsTerminals(raw string) (terms []any, ok bool) {
+	v, parsed := bjParse(brTrimNL(raw))
+	terms, isList := bjGet(v, "terminals").([]any)
+	return terms, parsed && isList
+}
+
 // hcPaneListJSON is this call's terminal list in herdr's shape,
 // {"result":{"panes":[{"pane_id","label","cwd","agent"}]}}, or "" when `hc ls`
 // could not answer — the same "" the herdr path reads as unreachable.
@@ -108,14 +120,39 @@ func hcPaneListJSON(named ...string) string {
 // agent_status is the program's own OSC 7501 word, "unknown" while it has said none.
 // ok is false for a terminal that is gone, finished, or unreadable.
 func hcAgentGetJSON(id string) (string, bool) {
+	info, live, _ := hcAgentRead(id)
+	return info, live
+}
+
+// hcRecordGone is the predicate for "this terminal is gone" over an `hc get <asked>` reply: a record that names the terminal asked
+// for (its address, or its name: `get` accepts both) and says `finished`. Gone needs positive evidence; `{}`, an error object,
+// `starting`, `lost`, another terminal's record and every other reply is UNKNOWN, and a caller that would start a second terminal
+// beside it refuses or waits.
+//
+// The contract is the predicate's alone: a reader that needs a record that IS live reads "not live" as "not listed", never as gone, and
+// bin/cockpit-state hc_gone (Python, the cockpit writer) has its own, wider definition that ends a writer and starts nothing. The
+// inventory of readers is in the findings (topic_key setup/hc-gone-one-predicate/findings), not here: a hand-kept list drifts.
+func hcRecordGone(m jmap, asked string) bool {
+	addr := hcStr(m, "address")
+	return addr != "" && asked != "" && (addr == asked || hcStr(m, "name") == asked) && hcStr(m, "state") == "finished"
+}
+
+// hcAgentRead is hcAgentGetJSON that also says whether `hc get` ANSWERED: read=false is a call that failed or a reply that is no
+// record of a terminal in a state this code knows (`{}`, an error object, `starting`, `lost`: unknown), read=true with live=false
+// is a terminal the core says is gone: a record with its address and `finished` (hcRecordGone). A caller that acts on "not live"
+// (a restore that replaces the terminal) needs that difference; "unknown" is never "not claude".
+func hcAgentRead(id string) (info string, live, read bool) {
 	raw, ok := hcOut(20*time.Second, "get", id, "--json")
 	if !ok {
-		return "", false
+		return "", false, false
 	}
 	v, parsed := bjParse(brTrimNL(raw))
 	m, isMap := v.(jmap)
-	if !parsed || !isMap || hcStr(m, "state") != "live" {
-		return "", false
+	if !parsed || !isMap {
+		return "", false, false
+	}
+	if hcStr(m, "state") != "live" {
+		return "", false, hcRecordGone(m, id)
 	}
 	tokens := jmap{}
 	labels, _ := m["labels"].(jmap)
@@ -139,9 +176,9 @@ func hcAgentGetJSON(id string) (string, bool) {
 	out, err := json.Marshal(map[string]any{"result": map[string]any{"agent": jmap{
 		"agent_status": status, "cwd": hcStr(m, "cwd"), "agent": app, "turn": m["turn"], "tokens": tokens}}})
 	if err != nil {
-		return "", false
+		return "", false, false
 	}
-	return string(out), true
+	return string(out), true, true
 }
 
 // hcWaitBoundary waits for a terminal to reach one of the statuses `at`: 0 reached, 2 budget spent, 3 terminal gone,

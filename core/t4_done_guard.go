@@ -34,7 +34,7 @@ func (d *doneRun) reportEvidence(pane, rundir string) string {
 	if isFile(doneMarker(rundir)) {
 		return "marker"
 	}
-	info := d.paneInfo(pane, rundir)
+	info, _ := d.paneRead(pane, rundir)
 	tok := doneJqRawEmpty(info, "result", "agent", "tokens", "done_status")
 	if tok == "done" || tok == "blocked" {
 		state := doneJqRawOr(info, "unknown", "result", "agent", "tokens", "done_state")
@@ -152,13 +152,53 @@ func (d *doneRun) branchActedOn(proj, task string) bool {
 	return false
 }
 
-// paneInfo is `herdr agent get <pane>`, or the same facts from `hc get` when the run lives on herdr-core.
-func (d *doneRun) paneInfo(pane, rundir string) string {
+// paneState is what one read of a pane says: live (info holds its facts), gone (an hc terminal whose record is `finished`:
+// hcRecordGone, positive evidence) or unknown (an `hc get` that is no record of either: `{}`, an error object, `starting`,
+// `lost`, a failed call), which is never "gone".
+type paneState int
+
+const (
+	paneLive paneState = iota
+	paneGone
+	paneUnknown
+)
+
+// paneRead is `herdr agent get <pane>`, or the same facts from `hc get` (hcAgentRead) when the run lives on herdr-core. A herdr
+// read has no unknown: an empty reply is a live read with nothing usable in it, which the callers already answer with their warning.
+func (d *doneRun) paneRead(pane, rundir string) (info string, st paneState) {
 	if _, _, _, ok := hcRunRecord(rundir); ok {
-		return hcAgentInfo(pane)
+		info, live, read := hcAgentRead(pane)
+		switch {
+		case live:
+			return info, paneLive
+		case read:
+			return "", paneGone
+		}
+		return "", paneUnknown
 	}
 	out, _ := doneTool("", nil, "herdr", "agent", "get", pane)
-	return bashSub(out)
+	return bashSub(out), paneLive
+}
+
+// paneFinished is the answer for an hc pane whose record says `finished`: a terminal that is gone has nothing in it to be in use.
+func (d *doneRun) paneFinished(pane string) {
+	d.app.info("pane " + pane + " is a finished terminal on herdr-core: nothing in it to be in use")
+}
+
+// hcPaneFree is inUseGuard's answer for an hc pane whose `hc get` is unknown. It is free only when `hc ls` answered and does not
+// list the pane among the run's live terminals; a pane that may be live, or an `hc ls` that cannot say, refuses (--force closes anyway).
+func (d *doneRun) hcPaneFree(proj, task, pane string) {
+	a := d.app
+	addrs, answered := hcOwned(proj, task)
+	if answered && !has(addrs, pane) {
+		a.info("pane " + pane + " has no live record and `hc ls` does not list it among the live terminals of " + proj + ":" + task + ": nothing in it to be in use")
+		return
+	}
+	why := "could not answer"
+	if answered {
+		why = "still lists it"
+	}
+	a.die("nothing was closed: `hc get " + pane + "` is no record of a live or a finished terminal, and `hc ls` " + why + ", so whether it is free is UNKNOWN. Look at it — and then close it deliberately with: hw done " + proj + " " + task + " --force")
 }
 
 // inUseGuard is _done_in_use_guard: a pane has an owner, and hw done establishes it before closing.
@@ -184,7 +224,15 @@ func (d *doneRun) inUseGuard(proj, task, rundir string) {
 	if hp := a.getenv("HERDR_PANE_ID"); hp != "" && pane == hp { // # MUTATION-ANCHOR: 861-G18
 		selfClose = true
 	}
-	info := d.paneInfo(pane, rundir)
+	info, st := d.paneRead(pane, rundir)
+	switch st {
+	case paneGone:
+		d.paneFinished(pane)
+		return
+	case paneUnknown:
+		d.hcPaneFree(proj, task, pane)
+		return
+	}
 	if info == "" || !doneJqE(info, "result", "agent") {
 		a.warn("could NOT establish whether pane " + pane + " is free: herdr returned nothing usable for it. It may be long gone, or herdr may simply not have answered — this close cannot tell those apart, and is proceeding WITHOUT the check.")
 		return
@@ -229,7 +277,15 @@ func (d *doneRun) inUseGuard(proj, task, rundir string) {
 				panic(exitNow{1}) // `sleep .` fails, and set -e ends hw done there
 			}
 			time.Sleep(time.Duration(poll * float64(time.Second)))
-			ninfo := d.paneInfo(pane, rundir)
+			var ninfo string // st is the outer one: the last read of the wait outlives the loop
+			ninfo, st = d.paneRead(pane, rundir)
+			if st == paneGone {
+				d.paneFinished(pane)
+				return
+			}
+			if st == paneUnknown { // unknown is not gone: keep waiting, bounded by the cap
+				continue
+			}
 			if !doneJqE(ninfo, "result", "agent") {
 				a.warn("herdr stopped answering for " + pane + " while hw waited for its last turn — it may be gone; closing WITHOUT the rest of the check.")
 				return
@@ -246,6 +302,10 @@ func (d *doneRun) inUseGuard(proj, task, rundir string) {
 				a.info(pane + " finished the turn that sent the report — closing " + proj + ":" + task)
 				return
 			}
+		}
+		if st == paneUnknown { // the cap ended on an unknown read: the same answer as an unknown first read
+			d.hcPaneFree(proj, task, pane)
+			return
 		}
 	}
 	if finishing {
