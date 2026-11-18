@@ -9,11 +9,13 @@ FLAGS
                        manifest suggests sonnet by default and opus only where
                        one is declared, and prints the model beside the
                        suggestion so a deviation is visible before you press
-                       enter. It never changes the model and never refuses:
-                       the axis is UNCERTAINTY, not importance, and `kind:
-                       audit` alone does not buy opus. The same declaration
-                       lives in a brief as `decision: <what is undecided>`;
-                       this flag wins over it.
+                       enter. It never changes the model. Opus or fable on
+                       explore, audit or design with no decision named is
+                       refused (review is exempt; a model hw cannot rank is
+                       not top tier): the axis is UNCERTAINTY, not importance,
+                       and `kind: audit` alone does not buy opus. The same
+                       declaration lives in a brief as `decision: <what is
+                       undecided>`; this flag wins over it.
     --requested-by <s> the request this dispatch answers, in the asker's words.
                        Same as `requested_by:` in a brief, and wins over it.
                        Required or warned per lane (projects.json).

@@ -104,6 +104,7 @@ func (l *lch) promptFacts() *promptFacts {
 	f.qaTarget = l.proj != "" && l.c.t.get(l.proj, "qa_target") != ""
 	f.portWeb = l.env("HW_PORT_WEB")
 	f.build = l.checksGateApplies()
+	f.consultant = l.briefIsConsultant()
 	piSkill, _ := l.piSkillDirFor("judgment-day")
 	f.jdJudges, f.jdSkill, f.jdSkillPath = jdFacts(f.vendor, l.accountConfigDir, l.env("HOME"), l.workdir(), piSkill, l.piSubagentsReady())
 	f.fastGate = isFile(l.workdir() + "/setup/test-hw")

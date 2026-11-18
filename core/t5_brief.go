@@ -459,6 +459,24 @@ func brTaskKindFromName(t string) string {
 	return ""
 }
 
+// briefAsked is the brief's `asked:` straight off the frontmatter: checkRequested fills d.brAsked after the defaults
+// that need it (the worktree, the consultant's model).
+func (d *dsp) briefAsked() string { return briefFmValue("asked", d.brief) }
+
+// briefIsConsultant is the one reader of «the consultant is kind design + asked investigate»: the model default and the
+// prompt's delivery format both ask it, so they cannot disagree.
+func (d *dsp) briefIsConsultant() bool { return d.vdBriefKind() == "design" && d.briefAsked() == "investigate" }
+
+// briefRequires says whether the brief's `requires:` names the capability (the spelling checkCapabilities reads).
+func (d *dsp) briefRequires(want string) bool {
+	for _, c := range strings.Split(briefFmValue("requires", d.brief), ",") {
+		if strings.ReplaceAll(c, " ", "") == want {
+			return true
+		}
+	}
+	return false
+}
+
 // checkTaskKind is _check_task_kind (area B provides modelIsBuildOnly).
 func (d *dsp) checkTaskKind(kind, how string) {
 	switch kind {
@@ -488,6 +506,12 @@ func (d *dsp) checkTaskKind(kind, how string) {
 		d.warn("if it is not, say so in the brief (kind: build) and this stops asking.")
 	} else if how == "declared" {
 		d.brAppendDeclared("kind") // # MUTATION-ANCHOR: 844-A22
+		switch {
+		case kind == "design" && d.briefAsked() == "build":
+			d.checkTopTierCeiling()
+		case kind != "review":
+			d.checkTopTierDecision()
+		}
 	}
 }
 

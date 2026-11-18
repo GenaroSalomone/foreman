@@ -92,8 +92,8 @@ func modelTier(model string) string {
 		return "1"
 	case strings.Contains(seg, "sonnet"): // # MUTATION-ANCHOR: 844-B08
 		return "2"
-	case strings.Contains(seg, "opus"): // # MUTATION-ANCHOR: 844-B09
-		return "3"
+	case strings.Contains(seg, "opus"), strings.Contains(seg, "fable"): // # MUTATION-ANCHOR: 844-B09
+		return "3" // fable is the top tier beside opus: a consultant's note must read its decision, not stay mute
 	}
 	return ""
 }
@@ -241,7 +241,8 @@ func (d *dsp) vdBriefKind() string {
 	return ""
 }
 
-// applyModelDefault is _apply_model_default: sonnet for a claude executor with no model, opus for kind design.
+// applyModelDefault is _apply_model_default: sonnet for a claude executor with no model, opus for kind design, fable for
+// the consultant (kind design + asked investigate).
 func (d *dsp) applyModelDefault() {
 	if d.model == "" && d.agent == "pi" && d.reusePane == "" { // t6_pi.go: pi's roster decides, by kind
 		d.piApplyModelDefault()
@@ -259,6 +260,11 @@ func (d *dsp) applyModelDefault() {
 	kind := d.vdBriefKind()
 	switch kind {
 	case "design":
+		if d.briefIsConsultant() { // the consultant: the 2026-11-18 ruling replaces «kind design runs opus» for this pair only
+			d.model, d.modelSrc = "fable", "default; consultant (kind design, asked investigate)"
+			d.consultantEffort()
+			return
+		}
 		d.model, d.modelSrc = "opus", "default; kind design" // # MUTATION-ANCHOR: 844-B22
 	default:
 		d.model, d.modelSrc = "sonnet", "default; kind "+orDefaultStr(kind, "none") // # MUTATION-ANCHOR: 844-B23
@@ -307,4 +313,16 @@ func (d *dsp) checkModelFloor() {
 	}
 	d.modelFloorLine = floor + " — UNESTABLISHED: " + d.model + " is not on the Claude ladder and " + d.proj + "'s floor does not list it"
 	d.warn("model floor: " + d.proj + " requires at least " + floor + ", and whether " + d.model + " meets it is UNESTABLISHED — it is not a Claude tier and projects.json does not accept it") // # MUTATION-ANCHOR: 844-B31
+}
+
+// consultantEffort is the consultant's reasoning level: low unless --effort or the brief's `effort:` raises it. A level the
+// vendor cannot take is left for the brief door to refuse (checkBriefContract), in the same words.
+func (d *dsp) consultantEffort() {
+	if d.effort != "" {
+		return
+	}
+	d.effort, d.effortSrc = "low", "consultant"
+	if lvl := briefFmValue("effort", d.brief); lvl != "" && effortRefusal(d.agent, lvl) == "" {
+		d.effort, d.effortSrc = lvl, "consultant, raised by the brief's effort:"
+	}
 }

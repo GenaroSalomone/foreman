@@ -145,6 +145,12 @@ func (d *dsp) run(argv []string) {
 		d.keepPaneWhy = "this build owes the independent review: the brainer re-tasks it with hw next if the reviewer asks for one fix round"
 		d.keepPaneSeconds = d.leaseSeconds(d.keepPaneFor)
 	}
+	// An investigation writes nothing: no worktree unless --worktree new says otherwise (the brief's worktree: is only
+	// compared, so it cannot choose), and none when the brief requires a repo or a database, which need the checkout.
+	// Set here, before checkBriefContract compares the brief's declaration to it.
+	if !d.wtExplicit && d.wantWT && d.briefAsked() == "investigate" && !d.briefRequires("repo") && !d.briefRequires("database") {
+		d.wantWT, d.wtSrc = false, "default for asked: investigate"
+	}
 	if d.here && d.tabExplicit { // # MUTATION-ANCHOR: 844-M04
 		d.die("--here and --tab are two different placements: --here splits your pane and drops the worktree, --tab gives the task its own tab and keeps it. Pick one.")
 	}

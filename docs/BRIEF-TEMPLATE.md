@@ -10,7 +10,9 @@
 #              refused in --effort's own words when the vendor cannot take it. A CHECK, like model:, never a source:
 #              the flag (or pi's roster default) still chooses, and a brief that says high on a dispatch that
 #              resolves low is refused before anything is built. A brief that declares neither model: nor effort:
-#              gets one warning naming both (never a refusal).
+#              gets one warning naming both (never a refusal). The one exception: a consultant (`kind: design` +
+#              `asked: investigate`) defaults to effort low, and its brief's effort: RAISES that default
+#              (--effort still wins).
 #   sdd:       none (the default; omit it; accepted and ignored)
 #   base:      the branch the worktree is built on — declare it on any task
 #              whose result is measured
@@ -38,12 +40,16 @@
 #   worktree:  new | none
 #   database:  own | main
 #   invoker:   the brainer pane that must receive the report
-#   kind:      build | explore | audit | review
+#   kind:      build | explore | audit | review | design
 #              What the task IS. A model the lane marks build-only
 #              is REFUSED for explore/audit/review: exploration decides
 #              what to build, and the model meant for building is the
 #              wrong one to decide it. Declaring `build` also silences
 #              the name heuristic for a task like `fix-the-audit-script`.
+#              `design` + `asked: investigate` + `decision:` is the consultant
+#              (fable, effort low by default); outside a build, opus or fable
+#              needs a `decision:` line; `design` + `asked: build` meets the
+#              build ceiling (`top_tier_why:`).
 #   requires:  browser | subagents | repo | database  (comma-separated)
 #              What the task NEEDS. hw warns — never refuses — when the
 #              target may not have it, because it knows the vendor and not

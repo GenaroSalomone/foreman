@@ -219,30 +219,54 @@ func (x explorerSrc) tier(vendor string) (t explorerTier, ok bool) {
 	return t, true
 }
 
-// modelIsTopTier is model_is_top_tier: opus and fable on the last path segment. Models hw cannot rank are not top tier.
-func modelIsTopTier(model string) bool {
-	last := model[strings.LastIndex(model, "/")+1:]
-	return strings.Contains(last, "opus") || strings.Contains(last, "fable")
-}
+// modelIsTopTier is model_is_top_tier: the top rung of modelTier (opus, fable). Models hw cannot rank are not top tier.
+func modelIsTopTier(model string) bool { return modelTier(model) == "3" }
 
-// checkTopTierCeiling is _check_top_tier_ceiling.
+// checkTopTierCeiling is _check_top_tier_ceiling. It holds kind build, and kind design that asked to build (a design
+// the executor then implements is a build that chose its own kind: 18 of 39 design briefs ran opus with no reason,
+// setup/decisions.md 2026-11-18).
 func (d *dsp) checkTopTierCeiling() {
 	if d.model == "" || d.reusePane != "" || !modelIsTopTier(d.model) {
 		return
+	}
+	what := "kind=" + d.taskKind
+	if d.taskKind == "design" {
+		what += " with asked: build"
 	}
 	why, src := d.topTierWhy, "--top-tier-why"
 	if why == "" {
 		why, src = briefFmValue("top_tier_why", d.brief), "the brief's top_tier_why"
 	}
 	if why == "" {
-		d.die("this task is declared kind=build and " + d.model + " is the top tier. A build implements what was already decided, and the top tier reading files itself is the cost this ceiling exists to stop (road-pace-build ran on opus, kind build, 2026-10-14). NOTHING was built. Launch with --model sonnet (or no --model: a claude executor runs sonnet), or, if this build really needs " + d.model + ", say why with --top-tier-why \"<reason>\" or a top_tier_why: line in the brief's frontmatter — it is written to the manifest and the receipt.")
+		relaunch := "Launch with --model sonnet (or no --model: a claude executor runs sonnet)"
+		if d.taskKind == "design" {
+			relaunch = "Launch with --model sonnet, or split it: a consultant is kind: design + asked: investigate, and the build is its own brief"
+		}
+		d.die("this task is declared " + what + " and " + d.model + " is the top tier. A build implements what was already decided, and the top tier reading files itself is the cost this ceiling exists to stop (road-pace-build ran on opus, kind build, 2026-10-14). NOTHING was built. " + relaunch + ", or, if this build really needs " + d.model + ", say why with --top-tier-why \"<reason>\" or a top_tier_why: line in the brief's frontmatter — it is written to the manifest and the receipt.")
 	}
 	if strings.Contains(why, "\n") {
 		d.die("--top-tier-why must be one line so the manifest and the receipt stay parseable")
 	}
 	d.topTierWhy = why
-	d.topTierLine = d.model + " is top tier on kind build — allowed by " + src + ": " + why
-	d.warn("model ceiling: " + d.model + " is the top tier on a kind=build task; launching on the stated reason: " + why)
+	d.topTierLine = d.model + " is top tier on kind " + d.taskKind + " — allowed by " + src + ": " + why
+	d.warn("model ceiling: " + d.model + " is the top tier on a " + what + " task; launching on the stated reason: " + why)
+}
+
+// checkTopTierDecision is the ceiling's mirror for what is not a build: opus or fable on explore, audit or design must
+// name the open decision (`decision:` in the brief, or --model-why), because the top tier is for an uncertainty and this is
+// how one is stated. The consultants with no decision named were the ones that produced nothing (setup/decisions.md
+// 2026-11-18). A model hw cannot rank is not top tier, so a pi roster id is never refused here.
+func (d *dsp) checkTopTierDecision() {
+	if d.model == "" || d.reusePane != "" || !modelIsTopTier(d.model) {
+		return
+	}
+	if d.modelWhy != "" || briefFmValue("decision", d.brief) != "" {
+		return
+	}
+	if strings.HasPrefix(d.modelSrc, "default") { // hw chose it, not the operator: say so (review of consult-role-build, R2)
+		d.die("hw's default for kind " + d.taskKind + " is " + d.model + ", the top tier, and no open decision is named. The top tier is for an uncertainty: the brief needs a `decision:` line naming what is undecided (or --model-why \"<the open decision>\"), or pass --model sonnet. NOTHING was built.")
+	}
+	d.die("this task is declared kind=" + d.taskKind + " and " + d.model + " is the top tier, with no open decision named. The top tier is for an uncertainty: a consultant is kind: design + asked: investigate + decision: <what is undecided>, and a task with nothing undecided runs on sonnet. NOTHING was built. Name it with a decision: line in the brief's frontmatter (or --model-why \"<the open decision>\"), or launch with --model sonnet.")
 }
 
 // explorerFor is the explorer's source for a re-task or a revive, which hold no dispatch state: the brain's root and

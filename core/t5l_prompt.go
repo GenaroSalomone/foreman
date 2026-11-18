@@ -39,6 +39,7 @@ type promptFacts struct {
 	qaTarget                      bool
 	portWeb                       string
 	build                         bool // kind build or unset: closes with the behaviour rule and checks.md
+	consultant                    bool // kind design + asked investigate: closes with the consultant's delivery format
 	boundary                      string
 	designGate                    bool
 	reviewMode                    string
@@ -81,6 +82,7 @@ func hasSession(f *promptFacts) bool   { return f.session != "" }
 func hasPiNote(f *promptFacts) bool    { return f.piNote != "" }
 func hasTier(f *promptFacts) bool      { return tierText(f) != "" }
 func isBuild(f *promptFacts) bool      { return f.build }
+func isConsultant(f *promptFacts) bool { return f.consultant }
 func closesWithJD(f *promptFacts) bool { return f.jd }
 
 func hasAuthorization(f *promptFacts) bool  { return len(f.authorizes) > 0 } // # MUTATION-ANCHOR: 862-G18
@@ -143,6 +145,7 @@ var promptBlocks = []promptBlock{
 	{"grants", grpGranted, hasGrants, grantsText},
 	{"behaviour-fix", grpClose, isBuild, behaviourFixText},
 	{"checks", grpClose, isBuild, func(*promptFacts) string { return checksNote }},
+	{"consultant", grpClose, isConsultant, func(*promptFacts) string { return consultantNote }},
 	{"design-gate", grpClose, hasDesignGate, designJudgmentText},
 	{"close-judgment-day", grpClose, closesWithJD, closeJudgmentDayText},
 	{"close-plugins", grpClose, closesWithPlugins, func(f *promptFacts) string { return reviewPluginsNote(f.plugins) }},
@@ -437,6 +440,18 @@ verdict is exactly pass, fail or unresolved; evidence is a command and its
 result, or a file:line. Fill it in as you go: done-invoker refuses a missing
 file, no rows, an empty verdict, or any fail row — a requirement you did not
 meet closes --blocked, never done.`
+
+// consultantNote is the consultant's delivery format (kind design + asked investigate): injected, not a gate.
+const consultantNote = `You are the consultant: the brainer decides, you advise. Deliver in this order:
+
+ 1. The verdict first, in the opening lines.
+ 2. The facts it rests on, each with file:line or a command and its output.
+ 3. The brainer's proposal answered point by point, where the brief states one.
+ 4. ONE recommendation, not a menu.
+ 5. The steps, as one brief each (what a brainer can dispatch as is).
+ 6. Everything you could not evidence, marked UNESTABLISHED.
+
+The artifact goes to $HW_ARTIFACTS and the findings to engram with a topic_key.`
 
 // behaviourFixText is the red-test rule; the fast-gate clause only where the repo carries setup/test-hw, and it says the full gate is
 // the brainer's (2026-11-09: executors kept running it and the brainer killed five). What done-invoker checks does not move.

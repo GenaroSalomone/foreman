@@ -4,6 +4,24 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) with pre-release labels.
 
+## [1.0.0-rc.4] — 2026-11-18
+
+### Added
+- The consultant is a standard hw holds: `kind: design` + `asked: investigate` +
+  `decision:`. It defaults to fable at effort low (`effort:` in the brief raises
+  it) and its prompt carries the delivery format (verdict first, facts with
+  file:line, one recommendation, steps as one brief each, UNESTABLISHED marked).
+
+### Changed
+- `asked: investigate` defaults to `worktree: none` unless `requires:` names `repo` or `database`; `--worktree new` still wins
+  and the manifest says which one decided.
+- Opus or fable on `kind: explore`, `audit` or `design` is refused unless the
+  brief has a `decision:` line or the dispatch has `--model-why` (`review` is
+  exempt). A model hw cannot rank is not top tier.
+- `kind: design` with `asked: build` goes through the build ceiling: opus needs
+  `top_tier_why`. `design` + build keeps opus as its default.
+- `fable` is ranked beside `opus`, so the manifest's suggestion note reads it.
+
 ## [1.0.0-rc.3] — 2026-11-18
 
 ### Added
