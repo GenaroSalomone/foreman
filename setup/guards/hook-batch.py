@@ -7,12 +7,11 @@ once per vector, ~2000 interpreters per run, and the mutation arm
 the same hook, minus the interpreter start-up.
 
 THERE IS NO SECOND IMPLEMENTATION HERE. Each request names a hook FILE — a lane
-shim or `deny-repo-writes-codex.py` — and this runs that file with `runpy`, as
+shim — and this runs that file with `runpy`, as
 `__main__`, with its stdin, stdout, stderr, environment, working directory and
 `sys.path` set to what a fresh `python3 <hook>` would have had. So the shim's
-lane name, its guarded import, `main`'s payload checks, `decide`, and each
-vendor's refusal protocol (Claude: JSON on stdout, exit 0; Codex: reason on
-stderr, exit 2) all run exactly as they do in a pane. What this does NOT cover is
+lane name, its guarded import, `main`'s payload checks, `decide`, and the
+refusal protocol (JSON on stdout, exit 0) all run exactly as they do in a pane. What this does NOT cover is
 the process: interpreter start-up, `sys.path[0]` resolution by the OS, the exit
 status the kernel reports. The suite keeps a fixed sample of vectors on a real
 `spawnSync("python3", [hook])` for that, and asserts the sample's answers equal

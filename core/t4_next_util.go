@@ -168,28 +168,6 @@ func nextCurrentTask(rundir string) string {
 	return n
 }
 
-// nextDispatchFramework is _run_dispatch_framework: the second word of the first `  framework ` line.
-func nextDispatchFramework(rundir string) string {
-	b, err := os.ReadFile(rundir + "/dispatch")
-	if err != nil {
-		return ""
-	}
-	for _, l := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(l, "  framework") && len(l) > len("  framework") && nextAwkSpace(l[len("  framework")]) {
-			f := strings.Fields(l)
-			if len(f) >= 2 {
-				return f[1]
-			}
-			return ""
-		}
-	}
-	return ""
-}
-
-func nextAwkSpace(c byte) bool {
-	return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r'
-}
-
 // nextDispatchModel is _next_dispatch_model: the value after `model=` on the first such line, a trailing
 // `  (mark)` anchored at its end taken off.
 func nextDispatchModel(rundir string) string {

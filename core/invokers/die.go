@@ -1,5 +1,6 @@
-// Package invokers is the Go port of bin/ask-invoker, bin/done-invoker and
-// bin/invoker-common.sh: an executor's two channels to its brainer.
+// Package invokers is ask-invoker and done-invoker: an executor's two channels to its brainer. The bash that
+// preceded them (bin/ask-invoker, bin/done-invoker, bin/invoker-common.sh) is deleted; the `invoker-common:`
+// prefix of some stderr lines is kept because tests and goldens assert it.
 package invokers
 
 import (

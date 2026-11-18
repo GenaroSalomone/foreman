@@ -98,7 +98,7 @@ MAX_ROWS = 64
 DEBOUNCE_S = 0.25
 ORDER = ["challenge", "ask", "blocked", "report", "working", "idle", "gone"]
 SUM_CHUNKS = ["sum"] + ["sum%d" % i for i in range(2, 8)]
-TOKEN_WIDTH = 80  # invoker-common.sh INVOKER_TOKEN_CHARS: herdr cuts a token value here
+TOKEN_WIDTH = 80  # core/invokers/tokens.go tokenChars: herdr cuts a token value here
 # What `ctx` knows about a model's window: a `[1m]` model id is the 1M window by name; nothing else is assumed.
 # Any other window is UNESTABLISHED, so it is not guessed: see ctx_from_transcript.
 WINDOW_1M = 1_000_000
@@ -309,7 +309,7 @@ def hc_panes():
 # ── run directories ──────────────────────────────────────────────────────────
 
 def find_rundir(cwd, run):
-    """The pane's own run first (bin/state-witness.sh witness_run_dir), up to 12 parents."""
+    """The pane's own run first, up to 12 parents."""
     d = cwd or ""
     for _ in range(12):
         if not d or d == "/":
@@ -1070,7 +1070,7 @@ def build_row(pane, invoker, mods, sl=None, suites=None):
     project = tokens.get("hw_project") or env.get("HW_PROJECT") or "unknown"
     tdir = task_dir(rundir)
     harness = env.get("HW_EXECUTOR_VENDOR")
-    vendor = harness if harness in ("claude", "opencode", "codex") else "unknown"
+    vendor = harness if harness == "claude" else "unknown"
     pane_id = pane.get("pane_id")
     blocked_waiting = os.path.isfile(os.path.join(tdir, "blocked-waiting"))
     report = report_of(rundir, tdir, tokens, blocked_waiting)

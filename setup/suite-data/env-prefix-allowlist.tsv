@@ -7,7 +7,7 @@ CHANNEL	CHANNEL_*_TIMEOUT_MS are channel-send knobs and CHANNEL_TARGET is set by
 DEPS	DEPS_NO_CACHE is a debugging switch of `hw deps` that a person sets by hand
 FOREMAN	FOREMAN_NO_UPDATE_CHECK (bin/release-check opt-out) and FOREMAN_COCKPIT are set by a person's shell, not by hw
 GH	GH_SESSION_TOKEN is bin/gh-attach's optional credential, from a person's shell; absent it the script says so and stops
-LC	LC_ALL / LC_CTYPE: core/hw_sandbox.go pins the locale it reads; the suite itself sets LC_ALL where a subject depends on it
+LC	LC_ALL / LC_CTYPE: the suite itself sets LC_ALL where a subject depends on it
 NO	NO_COLOR only switches colour off, and the suite's assertions read uncoloured text
 PI	PI_CODING_AGENT_DIR is pi's agent directory; transcript_archive reads it and the subjects that archive a transcript set it themselves
 SG	SG_WORK is a local of bin/suite-gate, assigned from WORK inside the script

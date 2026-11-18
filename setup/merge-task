@@ -10,31 +10,33 @@
 # index and the disk. Git refuses, before writing, a dirty tracked path, an untracked or IGNORED file or directory in the way, and
 # a main that is no longer where the merge was computed. A conflict, a branch already in main, and a checkout that is not on
 # main are refused before anything is written. `--base <b>` names another branch than main (it must be what HEAD holds);
-# `--advance <old> <new>` skips the merge: <new> must descend from <old> and <old> must still be what <b> holds (a base
-# that moved is refused before anything is written), and everything after that, the guarding, the measuring and the exits, is
-# THE SAME CODE (a caller such as hw train push keeps no measure or rollback of its own).
+# `--advance <old> <new>` skips the merge: <new> must descend from <old> and <old> must still be what <b> holds, and everything
+# after that (the guarding, the measuring, the exits) is THE SAME CODE (hw train push keeps no measure or rollback of its own).
 #
-# IT IS NOT ATOMIC, AND NO VERSION CAN BE. Git writes the index and the worktree FIRST and updates the ref AFTER: a ref lock, a
-# signal or a write failure in between leaves the checkout on the merge while main has not moved. So the exit status is never
-# derived from which step failed: after the merge attempt the script MEASURES the end state (where refs/heads/main is; what HEAD
-# is; whether the paths the merge changes are, in the index and the worktree, at the old tree, at the merge tree or mixed, with the added paths git left UNTRACKED on disk counted as written; the change list is plumbing with renames off, so a renamed-away path is measured) and
-# says exactly that. It attempts no recovery (one that cannot be proven to finish would only add a third state): when main and
-# the checkout disagree it prints the one `git read-tree` that reconciles them, and what to do about the branch.
+# IT IS NOT ATOMIC, AND NO VERSION CAN BE: git writes the index and the worktree FIRST and the ref AFTER, so a ref lock, a signal
+# or a write failure in between leaves the checkout on the merge while main has not moved. The exit status is therefore never
+# derived from which step failed: after the attempt the script MEASURES the end state (where main is, what HEAD is, and whether the
+# paths the merge changes are, in the index and the worktree, at the old tree, the merge tree or mixed; added paths git left
+# UNTRACKED on disk count as written; the change list is plumbing with renames off, so a renamed-away path is measured) and says
+# exactly that. It attempts no recovery: when main and the checkout disagree it prints the one `git read-tree` that reconciles them.
 #
-# THE MERGE'S BEHAVIOUR IS PINNED, not inherited (audited against `git help -c`, git 2.50): `--no-autostash` (merge.autoStash would
-# stash dirty paths and report success), `--no-verify-signatures` (merge.verifySignatures would refuse our unsigned merge),
-# `-c branch.<base>.mergeOptions=` (a --squash there writes the checkout and leaves main unmoved), `-c core.hooksPath=/dev/null`
-# (like commit-tree, no hook runs) and `-c maintenance.auto=false -c gc.auto=0` (a merge spawns `git maintenance run --auto --detach`,
-# MEASURED with GIT_TRACE: a detached repack/gc in the shared checkout that is no part of the move). merge.ff is overridden by --ff-only; the strategy and message keys do not act on a
-# fast-forward. Left to the checkout's own policy: core.autocrlf/eol, sparse checkout, submodule.recurse. --ff-only is not an exact
-# compare-and-swap: a main moved to an ANCESTOR of the merge is advanced over. A path whose name holds a newline or a \001 byte (the tool's stand-in for NUL while a list sits in a variable) is refused up front, and so is an unstaged DELETION of a path the merge modifies (git would put the file back without a word).
+# THE MERGE'S BEHAVIOUR IS PINNED, not inherited: `--no-autostash` (merge.autoStash would stash dirty paths and report success),
+# `--no-verify-signatures`, `-c branch.<base>.mergeOptions=` (a --squash there writes the checkout and leaves main unmoved),
+# `-c core.hooksPath=/dev/null` (no hook runs, like commit-tree) and `-c maintenance.auto=false -c gc.auto=0` (a merge would spawn a
+# detached `git maintenance run --auto`). merge.ff is overridden by --ff-only; core.autocrlf/eol, sparse checkout and
+# submodule.recurse are left to the checkout's own policy. --ff-only is not an exact compare-and-swap: a main moved to an ANCESTOR
+# of the merge is advanced over, losing nothing (docs/internal-limitations.md, L35). A path whose name holds a newline or a \001 byte
+# (the tool's stand-in for NUL while a list sits in a variable) is refused up front, and so is an unstaged DELETION of a path the
+# merge modifies (git would put the file back without a word).
 #
 # Exit: 0 merged (the merge SHA on stdout; written/removed, and any deletion git could not apply, on stderr);
 #       1 refused, and measured: nothing was written and main is not the merge;
 #       2 usage;
-#       3 NOT CONSISTENT: the measured state and the command that reconciles it are printed (docs/KNOWN-LIMITATIONS.md, L35).
+#       3 NOT CONSISTENT: the measured state and the command that reconciles it are printed (docs/internal-limitations.md, L35).
 # With --advance the success line on stdout is <new> and the stderr report says «advanced», not «merged».
 set -uo pipefail
+# BSD tr and sort die or reorder on a byte sequence that is not valid in the caller's locale (a tracked non-UTF-8 name): bytes, not characters
+export LC_ALL=C
 # everything that can point git at another repo, index or object store is dropped: the merge computation, the commit and the move
 # of the checked-out main must all act on the repository the cwd is in (an inherited GIT_DIR would send some of them elsewhere)
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_NAMESPACE GIT_COMMON_DIR GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS  # MUTATION-ANCHOR: 1383-M11
@@ -48,8 +50,12 @@ usage() {
 mt_refuse() { printf 'merge-task: refused — %s\n' "$1" >&2; exit 1; }
 mt_usage_error() { printf 'merge-task: %s\n' "$1" >&2; usage; exit 2; }
 
-# the NUL-separated lists git prints, as sorted lines (a path with a newline was refused up front)
-mt_lines() { tr '\0' '\n' | sort; }
+# the NUL-separated lists git prints, as sorted lines. A path with a newline is DROPPED, not split: the merge never changes one (it is
+# refused up front), so it cannot match a touched path, but its pieces could (a dirty «z\nk» listing «k»)
+mt_lines() {
+  local p
+  while IFS= read -r -d '' p; do case "$p" in *$'\n'*) ;; *) printf '%s\n' "$p" ;; esac; done | sort
+}
 
 # mt_differ <tree> — the paths the merge changes that differ from <tree>, in the index and the worktree (the index is refreshed first).
 # It cannot see an UNTRACKED file: git may write a new path and then roll its index back, so mt_untracked looks at the disk.
@@ -61,10 +67,16 @@ mt_differ() {
 mt_untracked() {
   [ -n "$added" ] || return 0
   # xargs splits a long list across several git calls (ARG_MAX); --literal-pathspecs takes each name as it is
-  printf '%s\n' "$added" | tr '\n' '\0' | xargs -0 git --literal-pathspecs ls-files -z --others -- | mt_lines
+  # a path the index holds under another case (a case-only rename on a case-insensitive volume) is the SAME file as a removed one, not untracked
+  printf '%s\n' "$added" | tr '\n' '\0' | xargs -0 git --literal-pathspecs ls-files -z --others -- | mt_lines | while IFS= read -r u; do
+    while IFS= read -r r; do [ -n "$r" ] && [ "$u" -ef "$r" ] && continue 2; done <<< "$removed"
+    printf '%s\n' "$u"
+  done
 }
 # mt_count <lines> — how many lines (0 for none)
 mt_count() { if [ -n "$1" ]; then printf '%s\n' "$1" | wc -l | tr -d ' '; else printf 0; fi; }
+# mt_inode <path> — the inode of the path itself, a symlink not followed (so a dangling one has one; `-ef` and `find -samefile` stat it and fail)
+mt_inode() { ls -di -- "$1" 2>/dev/null | awk '{print $1}'; }
 # mt_present <path> — something is there, a dangling symlink included (-e follows the link and says no)
 mt_present() { [ -e "$1" ] || [ -L "$1" ]; }  # MUTATION-ANCHOR: 1383-M31
 
@@ -90,20 +102,29 @@ mt_measure() {
 # mt_report_merged — the success output (it reads the lists the parse loop below the trap builds: $written and $removed); the LAST command is the one that writes to stderr, so a stderr that cannot be written
 # is the only thing that can make this exit non-zero (setup/tests/1383, M13)
 mt_report_merged() {
-  local left="" path report w
+  local left="" gone_done="" path report w still ino
   while IFS= read -r path; do
     [ -n "$path" ] || continue
     # a deletion git could not apply (a read-only directory…) is not a merge failure, but «removed» would be false: list it
+    still=""
     if mt_present "$path" && ! git --literal-pathspecs ls-files --error-unmatch -- "$path" >/dev/null 2>&1; then  # MUTATION-ANCHOR: 1383-M18
       # a case-only rename on a case-insensitive volume: the old spelling IS the file the merge wrote under the new one
-      while IFS= read -r w; do [ "$w" -ef "$path" ] && continue 2; done <<< "$written"
+      still=1; ino=""; [ ! -L "$path" ] || ino="$(mt_inode "$path")"  # -ef is a builtin; only a symlink (maybe dangling) needs the inode
+      while IFS= read -r w; do
+        if [ "$w" -ef "$path" ] || { [ -n "$ino" ] && [ -L "$w" ] && [ "$(mt_inode "$w")" = "$ino" ]; }; then still=""; break; fi
+      done <<< "$written"
+    fi
+    if [ -n "$still" ]; then
       left="$left  STILL ON DISK (git could not remove it): $path"$'\n'  # MUTATION-ANCHOR: 1383-M22
+    else
+      gone_done="$gone_done$path"$'\n'
     fi
   done <<< "$removed"
+  gone_done="$(printf '%s' "$gone_done")"  # what is really gone: the report counts and lists only that
   report="$(
-    printf 'merge-task: %s: %s written, %s removed\n' "$done_line" "$(mt_count "$written")" "$(mt_count "$removed")"
+    printf 'merge-task: %s: %s written, %s removed\n' "$done_line" "$(mt_count "$written")" "$(mt_count "$gone_done")"
     if [ -n "$written" ]; then printf '%s\n' "$written" | sed 's/^/  wrote   /'; fi
-    if [ -n "$removed" ]; then printf '%s\n' "$removed" | sed 's/^/  removed /'; fi
+    if [ -n "$gone_done" ]; then printf '%s\n' "$gone_done" | sed 's/^/  removed /'; fi
   )"
   printf '%s\n' "$new"
   printf '%s\n%s' "$report" "$left" >&2

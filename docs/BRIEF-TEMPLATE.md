@@ -4,14 +4,14 @@
 # builds anything if they disagree. Omit the block entirely and nothing
 # changes — the manifest just records that the brief declared nothing.
 #
-#   agent:     claude | opencode | codex
-#   model:     the vendor's own form (opencode needs provider/model)
-#   effort:    low | medium | high | xhigh | max (codex also ultra; pi also off | minimal) — --effort's own levels,
+#   agent:     claude | pi
+#   model:     the vendor's own form (pi needs provider/model)
+#   effort:    low | medium | high | xhigh | max (pi also off | minimal) — --effort's own levels,
 #              refused in --effort's own words when the vendor cannot take it. A CHECK, like model:, never a source:
 #              the flag (or pi's roster default) still chooses, and a brief that says high on a dispatch that
 #              resolves low is refused before anything is built. A brief that declares neither model: nor effort:
 #              gets one warning naming both (never a refusal).
-#   sdd:       none (the default; omit it) | speckit (opt-in, needs --sdd speckit)
+#   sdd:       none (the default; omit it; accepted and ignored)
 #   base:      the branch the worktree is built on — declare it on any task
 #              whose result is measured
 #   requested_by: "<who, date: the request, quoted>"  and  asked: investigate | build
@@ -55,8 +55,6 @@
 #              one does not resolve for the executor: worktree `.claude/skills/<name>/SKILL.md` (a lane that
 #              replicates the main checkout's git-ignored skills links them in, prod-* withheld) or the
 #              account's user-level skills dir.
-#   sandbox:   true — run the executor inside the macOS sandbox, as --sandbox
-#              (Claude Code on macOS only; docs/THREAT-MODEL.md)
 #   requires-agents: [primary:|subagent:]<name>, …
 #              Agents the task cannot do without: hw refuses the dispatch
 #              when the executor cannot reach one, instead of warning.
@@ -83,8 +81,7 @@
 #              task's own close. The reviewer's done-invoker proves each piece from its transcript.
 #              The BUILDER runs no Judgment Day and no review skill. It closes with its own OLD/NEW
 #              tests (a brief that changes behaviour says so under Verification, below) and, on claude,
-#              `/simplify` (proved by the Skill call; pi: pstack:deslop if loaded, unproved; codex and
-#              opencode: not available). A build that owes the review launches with --keep-pane by
+#              `/simplify` (proved by the Skill call; pi: pstack:deslop if loaded, unproved). A build that owes the review launches with --keep-pane by
 #              default: the pane is there for the one fix round.
 #              The merge: `hw done` offers «Merge it» only for 0 code lines at the head, `review: none` +
 #              `review-skip:`, a reviewer's `verdict: approve` at exactly the branch head, or the
@@ -98,7 +95,7 @@
 #   plugins:   [thermo, ponytail, pstack, tests, webguide]  (any subset)
 #              Review plugins (pinned, complete: their hooks run in THIS executor only) loaded
 #              into it: claude gets one --plugin-dir each (hook writes go to $HW_ARTIFACTS/plugin-state),
-#              pi one -e <plugin dir> each, opencode and codex get NOT APPLIED. They are an
+#              pi one -e <plugin dir> each. They are an
 #              OPTIONAL install step, off by default (setup/vendor/plugins/install, or
 #              install.sh --with-review-plugins): a name that is not installed is refused
 #              before anything is built, naming that command. Nothing is installed globally
@@ -109,8 +106,7 @@
 #              approved design judgment (docs/INSTALL.md, Judgment Day)
 #
 # A declaration is a CHECK, not a source: it never supplies a flag hw would
-# otherwise ask for, except `sandbox: true`, which is the flag. The brief keys
-# are also in `hw help flags`.
+# otherwise ask for. The brief keys are also in `hw help flags`.
 ---
 
 # Brief: <task-name>
@@ -268,8 +264,6 @@ introduces, never someone else's.>
 <One detached checkout per PR (`git worktree add --detach <dir> <ref>`); never review inside the executor's own worktree.>
 
 ## Mechanism
-<...and, only if this task should run Spec Kit's flow, say why: `--sdd speckit`.
-Omit it and the task runs outside any framework (none, the default).>
 <How this work is actually done. Name it exactly, do not describe it.>
 - Tool / MCP / skill: `<exact name as invoked>`
 - Precheck, run FIRST before any real work: `<the cheapest call that proves it is live>`

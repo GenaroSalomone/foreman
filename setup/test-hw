@@ -717,7 +717,7 @@ if [ "$HW_TEST_GATE" = fast ]; then _fast_verdict_prepare; fi
 # result was reported as a single integer produced by THIS file, which globs
 # `[0-9][0-9]*-*.sh` and never asks git anything. Measured 2026-09-02 by the
 # second-vendor reviewer: `47-unattended-gate-stall.sh` and
-# `48-plain-opencode-is-not-plain.sh` are UNTRACKED and absent from e8f7d23, and
+# one more subject are UNTRACKED and absent from e8f7d23, and
 # the 1187 everyone had been quoting silently included their 20 ok.
 #
 # A HEADLINE NUMBER'S JOB IS TO BE QUOTED, and that is the whole argument. Every
@@ -1745,10 +1745,9 @@ if [ "$HW_TEST_GATE" = full ] || [ "$GATE_GUARDS" = 1 ]; then
   # cannot silently omit them.
   # THE GUARDS ARE CLASSIFIED THE SAME WAY, not assumed tracked. They are tracked
   # today; assuming it is how the subject glob came to assume it too.
-  for _g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs \
-            test-opencode-hw-blocked-reason.mjs test-herdr-opencode-background-state.mjs; do
+  for _g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs; do
     # THE HINT IS MEASURED, like the arm's: the decision driver is ~5500
-    # python3 spawns, 71s alone on 2026-09-30; the other three are seconds.
+    # python3 spawns, 71s alone on 2026-09-30; the other is seconds.
     _h=5; [ "$_g" != test-deny-repo-writes.mjs ] || _h=75
     JOB_PATH+=("$HERE/guards/$_g"); JOB_KIND+=("guard-node"); JOB_LANE+=("guards"); JOB_HINT+=("$_h")
   done

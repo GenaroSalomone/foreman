@@ -9,13 +9,11 @@ package main
 // path it always took, byte for byte: `hcRoute` is false with no HC_TERMINAL_ID.
 //
 // Every vendor launches as one `hc run` terminal with the brief as its launch task (hcRunArgs: the vendor's own binary and
-// brief flag). --sandbox arms the run before the launch and puts its shim first on the terminal's PATH (hcSandboxArm), proved
-// by the broker's heartbeat as on a herdr pane. --here splits a herdr pane: hcRefusal says so, once, for the dry run and for
+// brief flag). --here splits a herdr pane: hcRefusal says so, once, for the dry run and for
 // the launch. A lane's dev servers are `hc run` terminals of their own (hcDevStart), carrying the task's
 // labels so `hw done` and reap end them with the executor.
 
 import (
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -75,13 +73,19 @@ func (l *lch) hcLive() (addr string, ok bool) {
 			addrs = append(addrs, hcStr(m, "address"))
 		}
 	}
+	runOf := map[string]string{}
 	agents, ok := hcNotDev(addrs, func(a string) (string, bool) {
 		out, rc := l.sh(cmdSpec{name: "hc", args: []string{"get", a, "--json"}, quiet: true, synth: `{"labels":{}}`})
+		if v, _ := bjParse(brTrimNL(out)); v != nil {
+			labels, _ := bjGet(v, "labels").(jmap) // absent labels read as no run, never a panic
+			runOf[a] = hcStr(labels, "hw_run")
+		}
 		return out, rc == 0
 	})
 	if !ok || len(agents) == 0 {
 		return "", ok
 	}
+	l.hcLiveRun = runOf[agents[0]]
 	return agents[0], true
 }
 
@@ -95,6 +99,25 @@ func (l *lch) hcRecord(addr string) {
 			l.fs.write(wd+"/.hw/"+run+"/hc-core", []byte(id+"\n"), 0o666)
 		}
 	}
+}
+
+// hcSetAsideReuseRun: a dispatch that reuses a live terminal launches nothing, so the terminal's own run (the hw_run label it was
+// launched with, its env's HW_RUN) is the one its done-invoker writes the done marker and the chaining lease into. This
+// dispatch's run dir is a copy with neither and, being newer, every reader of "the run" would take it (`hw next` said "no
+// chaining authority" after a delivered report). It moves into the terminal's own run, to .hw/<that run>/reuse/<this run>,
+// where no listing of `.hw/` sees it (the listers that take every directory there included), and its per-run TMPDIR (empty:
+// nothing launched) goes. Only when the terminal's run is on disk here: a terminal with no such run keeps this one as its record.
+func (l *lch) hcSetAsideReuseRun() {
+	wd, run := l.workdir(), l.hcLiveRun
+	if wd == "" || l.hwRun == "" || !RunIDPattern.MatchString(run) || run == l.hwRun || !isDir(wd+"/.hw/"+run) {
+		return
+	}
+	if l.fs.mkdirAll(wd+"/.hw/"+run+"/reuse") != nil || l.fs.rename(wd+"/.hw/"+l.hwRun, wd+"/.hw/"+run+"/reuse/"+l.hwRun) != nil {
+		l.warn("run " + l.hwRun + " reused a live terminal but could not be set aside: `hw next` may read it instead of run " + run)
+		return
+	}
+	l.fs.remove(runTmpDir(l.getenv, l.hwRun)) // rmdir: only an empty directory goes
+	l.info("run " + l.hwRun + " is not a run of its own: the live terminal belongs to run " + run + ", which stays the one `hw next` and `hw done` read (this one is kept in .hw/" + run + "/reuse/)")
 }
 
 // hcEnvWords is hwEnvArgs as the `K=V` words `env` takes in an hc argv (`--env K=V` is herdr's grammar).
@@ -130,7 +153,7 @@ func (l *lch) hcRunArgs(cwd string) []string {
 		args = append(args, "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1", "CLAUDE_CODE_BASH_EDIT_DIFF=0")
 	}
 	args = append(args, l.hcEnvWords(cwd)...)
-	args = append(args, hcSandboxPathWord(l.hcShimDir, hcPathWord(l.binDir(), l.env("PATH"))))
+	args = append(args, hcPathWord(l.binDir(), l.env("PATH")))
 	args = append(args, l.agent)
 	if l.agent == "claude" && l.explorerArm { // an hc terminal has no shell to type a function into: the JSON is a word of the argv
 		if json := l.explorer().claudeJSON(); json != "" {
@@ -138,18 +161,15 @@ func (l *lch) hcRunArgs(cwd string) []string {
 		}
 	}
 	args = append(args, strings.Fields(l.agentArgs)...)
-	return append(args, hcBriefWords(l.agent, l.briefText)...)
+	return append(args, hcBriefWords(l.briefText)...)
 }
 
 // hcBriefWords is how a vendor takes its first message on the command line: the brief is the launch task, no keystrokes to
-// race. claude, pi and codex read it as the positional after `--` (claude's --mcp-config is variadic and would otherwise read
-// the brief as one more config file); opencode's TUI takes it as --prompt, its positional being a project path.
-func hcBriefWords(agent, brief string) []string {
-	switch {
-	case brief == "":
+// race. claude and pi read it as the positional after `--` (claude's --mcp-config is variadic and would otherwise read
+// the brief as one more config file).
+func hcBriefWords(brief string) []string {
+	if brief == "" {
 		return nil
-	case agent == "opencode":
-		return []string{"--prompt", brief}
 	}
 	return []string{"--", brief}
 }
@@ -160,11 +180,9 @@ func (l *lch) hcAgentStep() {
 	if addr, ok := l.hcLive(); !ok {
 		l.die("`hc ls` could not answer, so whether " + l.proj + ":" + l.task + " is already live is UNKNOWN — launching now could start a second executor. NO executor was launched" + hcDevLeft(l.hcDevAddrs, l.proj, l.task) + "; the worktree is intact. Dispatch again when `hc ls` answers.")
 	} else if addr != "" {
-		if l.sandbox { // MUTATION-ANCHOR: hc-sbx-reuse — the live terminal was launched as it was: reusing it would report a sandbox nobody armed
-			l.die(l.proj + ":" + l.task + " is already live on herdr-core as " + addr + ", and --sandbox is a property of a LAUNCH: that terminal cannot be armed now, and reusing it would run the task unconfined under a dispatch that asked for the sandbox. NOTHING was launched. Close it first (`hw done " + l.proj + " " + l.task + "`), then dispatch again with --sandbox.")
-		}
-		l.hcRecord(addr)                                                      // the newest run is the one `hw done` reads
+		l.hcRecord(addr)                                                      // this run is the newest, until hcSetAsideReuseRun moves a reuse dispatch's away
 		l.receipt("pane", addr, "hc ls --label hw_project= --label hw_task=") // the in-use guard reads the pane from it
+		l.hcSetAsideReuseRun()                                                // after the receipts: a later write would make the dir again
 		l.ok(l.proj + ":" + l.task + " is already live on herdr-core as " + addr + " — reused, nothing launched")
 		return
 	}
@@ -182,11 +200,9 @@ func (l *lch) hcAgentStep() {
 	if l.explorerArm && l.explorer().claudeJSON() == "" {
 		l.warn("the cheap explorer could not be armed for " + l.label + " (the role is unreadable): this executor starts without it")
 	}
-	sbState := l.hcSandboxArm() // before the launch: the terminal's PATH is a word of its argv, there is no shell to export it in
 	space := l.c.t.get(l.proj, "space")
 	app := l.hcApp()
 	spaceNew := hcSpaceIsNew(app, space)
-	l.hcLaunchMs = time.Now().UnixMilli()
 	raw, rc := l.sh(cmdSpec{name: "hc", args: l.hcRunArgs(l.workdir()), mut: true, merge: true, synth: `{"address":"shadow:t1"}`})
 	v, _ := bjParse(brTrimNL(raw))
 	addr := ""
@@ -211,14 +227,6 @@ func (l *lch) hcAgentStep() {
 	l.info(l.agent + " started in " + addr + " (herdr-core); vendor runtime readiness is unestablished")
 	l.receipt("pane", addr, "hc run --json address")
 	l.hcRecord(addr)
-	if sbState != "" && !l.readonly && !hcBrokerAlive(sbState, lSleep) { // MUTATION-ANCHOR: hc-sbx-proof
-		// a terminal that started is not proof it started in the sandbox: the broker's heartbeat is. Without it the agent may be
-		// running unconfined with the brief in hand, so it is ended here, not left for a person to find.
-		l.sh(cmdSpec{name: "hc", args: []string{"kill", addr}, mut: true, quiet: true})
-		l.receipt("agent_ready", "no — the sandbox broker never came up ("+sbState+"/broker.alive)", "hw-sandbox statedir + stat")
-		l.receiptVerdict()
-		l.die("sandbox: " + l.agent + " started in " + addr + " but the broker never came up (" + sbState + "/broker.alive), so it may have been running UNCONFINED: " + addr + " was killed (`hc kill`). The worktree is intact; read `hc read " + addr + "` and dispatch again.")
-	}
 	l.receipt("agent_ready", "unknown — hc run answered with "+addr+"; runtime readiness unestablished", "hc run --json")
 	l.dispatchPublishHC(addr)
 	if l.brief != "" && !l.hcBriefProved(addr) {
@@ -238,32 +246,6 @@ func (l *lch) hcAgentStep() {
 	l.receiptVerdict()
 }
 
-// hcSandboxArm is sandboxArmPane on herdr-core: `hw-sandbox arm` writes the profile and the shim, and the shim's directory
-// becomes the first entry of the terminal's PATH (hcRunArgs), so the vendor's name resolves to the shim as it does in a
-// herdr pane after `export PATH=<shim>:$PATH`. It returns the run's sandbox state dir ("" for a dispatch with no sandbox),
-// and dies before anything is launched when the run cannot be armed.
-func (l *lch) hcSandboxArm() string {
-	if !l.sandbox {
-		return ""
-	}
-	rundir := l.sandboxRundir
-	if rundir == "" {
-		rundir = l.workdir() + "/.hw/" + l.lHwRun()
-	}
-	if !rundirArmable(rundir) {
-		l.die("sandbox: no run directory to arm (" + rundir + "). NO executor was launched; the worktree is intact.")
-	}
-	out, rc := l.sh(cmdSpec{name: l.binDir() + "/hw-sandbox", args: []string{"arm", rundir, l.agent, l.proj, l.task},
-		env: l.sandboxArmEnv(), mut: true, synth: "shadow:shim/bin"})
-	shimdir := bashSub(out)
-	if rc != 0 || shimdir == "" { // MUTATION-ANCHOR: hc-sbx-arm
-		l.die("sandbox: could not arm " + rundir + " — the agent is NOT started unconfined. NO executor was launched; the worktree is intact.")
-	}
-	l.hcShimDir = shimdir
-	l.receiptInto(rundir, "sandbox", filepath.Dir(shimdir)+"/profile.sb", "hw-sandbox arm ("+l.agent+"); shim "+shimdir+" first on the PATH of the `hc run` terminal")
-	return filepath.Dir(shimdir)
-}
-
 // hcApp runs `herdr-app <args>`: (stdout, exit status).
 func (l *lch) hcApp() func(args ...string) (string, int) {
 	return func(a ...string) (string, int) {
@@ -278,7 +260,7 @@ func (l *lch) hcSession(addr string) {
 	if l.wt == "" || l.hwRun == "" {
 		return
 	}
-	if l.agent != "claude" && l.agent != "opencode" { // only claude writes sessions/<pid>.json and only opencode's server lists its session: another vendor's is not read on this route
+	if l.agent != "claude" { // only claude writes sessions/<pid>.json: another vendor's is not read on this route
 		l.receipt("session_id", "none — "+l.agent+" publishes no session id the herdr-core route reads (only claude's sessions/<pid>.json)", "hc get "+addr+" --json")
 		l.warn("NO SESSION ID: " + l.agent + " on herdr-core publishes none this route reads, so this conversation is not addressable after the fact and `hw revive` cannot resume it.")
 		return
@@ -288,17 +270,10 @@ func (l *lch) hcSession(addr string) {
 	sid := ""
 	var waited int64
 	for {
-		if l.agent == "opencode" {
-			sid = l.hcOpencodeSession()
-		} else {
-			out, _ := l.sh(cmdSpec{name: "hc", args: []string{"get", addr, "--json"}, quiet: true, synth: `{"state":"live"}`})
-			if v, ok := bjParse(brTrimNL(out)); ok {
-				m, _ := v.(jmap)
-				sid = claudeSessionOf(bjRaw(m["pid"]), hcStr(m, "cwd"), l.accountConfigDir, l.env("CLAUDE_CONFIG_DIR"), home+"/.claude")
-				if sid == "" && l.hcShimDir != "" {
-					sid = claudeSessionSandboxed(bjRaw(m["pid"]), hcStr(m, "cwd"), l.accountConfigDir, l.env("CLAUDE_CONFIG_DIR"), home+"/.claude")
-				}
-			}
+		out, _ := l.sh(cmdSpec{name: "hc", args: []string{"get", addr, "--json"}, quiet: true, synth: `{"state":"live"}`})
+		if v, ok := bjParse(brTrimNL(out)); ok {
+			m, _ := v.(jmap)
+			sid = claudeSessionOf(bjRaw(m["pid"]), hcStr(m, "cwd"), l.accountConfigDir, l.env("CLAUDE_CONFIG_DIR"), home+"/.claude")
 		}
 		if sid != "" || waited >= budget {
 			break
@@ -308,10 +283,6 @@ func (l *lch) hcSession(addr string) {
 	}
 	src := "<config>/sessions/<pid>.json of the pid `hc get " + addr + "` names"
 	none := "claude wrote no sessions/<pid>.json for " + addr
-	if l.agent == "opencode" {
-		src = "GET " + l.hcOpencodeEndpoint() + "/session?directory=" + l.workdir() + " (the executor's own server)"
-		none = "opencode's server listed no session for " + addr
-	}
 	if sid == "" {
 		l.receipt("session_id", "none — "+none+" within "+strconv.FormatInt(budget/1000, 10)+"s", src)
 		l.warn("NO SESSION ID: this conversation is not addressable after the fact, and `hw revive` cannot resume it.")
@@ -320,55 +291,6 @@ func (l *lch) hcSession(addr string) {
 	l.receipt("session_id", sid, src+", "+strconv.FormatInt(waited, 10)+"ms after the brief")
 	l.receipt("session_vendor", l.agent, "hc run: the vendor is "+l.agent)
 	l.receiptResume(sid, l.agent)
-}
-
-// hcOpencodeEndpoint is the executor's own opencode server (the --port hw passed), "" when it has none.
-func (l *lch) hcOpencodeEndpoint() string {
-	if l.hwAgentEndpoint != "" {
-		return l.hwAgentEndpoint
-	}
-	return l.env("HW_AGENT_ENDPOINT")
-}
-
-// hcOpencodeSession is the id of the newest session opencode's server lists for the executor's directory that was created
-// after this launch, "" when it lists none (or is not opencode, or does not answer yet): the brief's turn creates it, so its
-// presence is the proof the brief arrived and its id is the one `opencode --session` resumes. A session older than the
-// launch is a previous run of the same directory's (opencode keeps them), never this one's.
-func (l *lch) hcOpencodeSession() string {
-	ep := l.hcOpencodeEndpoint()
-	if l.agent != "opencode" || ep == "" {
-		return ""
-	}
-	out, rc := l.sh(cmdSpec{name: "curl", args: []string{"-fsS", "-m", "3", "-G", ep + "/session", "--data-urlencode", "directory=" + l.workdir()}, quiet: true, synth: `[]`})
-	if rc != 0 {
-		return ""
-	}
-	return opencodeNewestSession(brTrimNL(out), l.hcLaunchMs)
-}
-
-// opencodeNewestSession is the id of the session with the greatest time.created (unix ms) in opencode's `GET /session` body,
-// among those created at or after sinceMs.
-func opencodeNewestSession(body string, sinceMs int64) string {
-	v, ok := bjParse(body)
-	list, isList := v.([]any)
-	if !ok || !isList {
-		return ""
-	}
-	id, newest := "", float64(-1)
-	for _, e := range list {
-		m, isMap := e.(jmap)
-		if !isMap || hcStr(m, "id") == "" {
-			continue
-		}
-		created, _ := strconv.ParseFloat(bjRaw(bjGet(m, "time", "created")), 64) // the parser keeps a number as its text (json.Number)
-		if created < float64(sinceMs) {
-			continue
-		}
-		if id == "" || created > newest {
-			id, newest = hcStr(m, "id"), created
-		}
-	}
-	return id
 }
 
 // dispatchPublishHC is dispatchPublish's twin: the labels `hc run` already set are the executor's identity on
@@ -390,9 +312,6 @@ func (l *lch) hcBriefProved(addr string) bool {
 			if hcStr(m, "state") == "live" && (bjRaw(bjGet(m, "status", "state")) == "working" || (turn != "" && turn != "None" && turn != "0")) {
 				return true
 			}
-		}
-		if l.hcOpencodeSession() != "" { // opencode reports no OSC 7501 status: its own server lists the brief's session once the turn opens
-			return true
 		}
 		if waited >= budget {
 			return false

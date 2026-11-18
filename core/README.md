@@ -51,8 +51,8 @@ through one function (`t5l_exec.go`), as they were children of bash.
 `hw <lane> <task> … --dry-run` prints the manifest a brainer reads before it pays for an executor, then the warnings
 and refusals a launch would raise, and ends. What the dry run writes is the route
 forecast (`${TMPDIR:-/tmp}/hw-route-forecast-<lane>__<task>`, read by the launch that follows). The run id (a
-timestamp and a pid) and the port opencode is told (the kernel's pick) differ between two processes by
-construction: the contract reads them as `@RUN@` and `@PORT@`. A shell error bash prints about its own arithmetic (`[: …: integer
+timestamp and a pid) differs between two processes by
+construction: the contract reads it as `@RUN@`. A shell error bash prints about its own arithmetic (`[: …: integer
 expression expected`) is not in the contract and hw-core does not reproduce it.
 
 **The launch's shadow mode is retired** (0.6.0): the shim no longer runs hw-core first with `HW_CORE_READONLY=1` and
@@ -123,26 +123,25 @@ in one line, and lets the export leave the pilot out with one `exclude core/` (`
 
 ## The verbs that were bash-only (T6)
 
-`train`, `suite`, `unstick`, `ledger` and `briefs` run in Go (`t6_<verb>.go`), as do the repairing form of
+`train`, `suite`, `ledger` and `briefs` run in Go (`t6_<verb>.go`), as do the repairing form of
 `reports` and `worktrees --migrate` (which only lacked a shim route), `cockpit-state` and `secret` (hw-core runs
 `bin/cockpit-state` and `bin/hw-secret` as its child with the same stdio, as bash `exec`'d them) and `-V`/`--version`
 (answered before the lane table loads). `bin/hw` routes them to hw-core with no switch (since 0.6.0), and an executor
-(HW_TASK/HW_RUN set) is refused first by hw-core's gate (`executor_gate.go`) for `train`, `unstick` and `briefs`. The mutation anchors of their bash stay registered on the bash source: the Go ports
+(HW_TASK/HW_RUN set) is refused first by hw-core's gate (`executor_gate.go`) for `train` and `briefs`. The mutation anchors of their bash stay registered on the bash source: the Go ports
 are held by `TestT6*` (in-process, `core/t6_*_test.go`), and a Go-side anchor would be a second marker of an id the registry
 keeps once.
 
 ## channel-send (the delivery transport)
 
 `hw-core channel-send <args>` is `bin/channel-send` in Go (`channel_send*.go`): the same command line, stdout, stderr,
-exit codes (0, 1, 4, 5, 6 — the table `--help` prints) and on-disk effects (the delivery lock, the reply hold, the
+exit codes (0, 1, 4, 5 — the table `--help` prints) and on-disk effects (the delivery lock, the reply hold, the
 task transcript). `bin/channel-send` execs hw-core (Go is the only implementation since 0.6.0: the file is a shim with no bash body, and
 `HW_IMPL=bash` is a one-line warning). The programs it ran it still runs (`herdr`, `herdr-rpc`,
-`holdfacts`, `claude-delivery-receipt.py`, `claude`, `codex`, `ps`, `find`); what it did with `jq`, two `python3`
-heredocs and two `node` scripts is native here. `setup/tests/1015` replays 84 scenarios against the goldens recorded from the bash once (the bash is gone);
+`holdfacts`, `claude-delivery-receipt.py`, `claude`, `ps`, `find`); what it did with `jq` and two `python3`
+heredocs is native here. `setup/tests/1015` replays its scenarios against the goldens recorded from the bash once (the bash is gone);
 `setup/tests/1016` kills a mutant of each mutation anchor (named `<n>-G<nn>`, the bash's former `<n>-M<nn>`) with
 `channel_send_test.go`. Not byte for byte, and said so: the message of an unparseable JSON body (node's own parser
-text, imitated for the two common shapes) and the order of the session ids in the opencode-tui busy refusal
-(the endpoint's in node, sorted here).
+text, imitated for the two common shapes).
 
 ## hw-secret (Bitwarden to a command, never a value)
 

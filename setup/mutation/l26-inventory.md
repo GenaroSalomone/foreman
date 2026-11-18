@@ -2,7 +2,7 @@
 
 Source: the per-task lists of retired anchors (`go060-s4-hw-sin-bash` and `go060-s5-tools-sin-bash`, archived under
 the run archive's `setup/*/.artifacts/anchors.md`), the `Unresolved` tables: **77 rows in S4 + 13 in S5 = 90 claims** (the
-"about 90" of KNOWN-LIMITATIONS L26). One row per retired claim, with its kind, the Go location, and what holds it today.
+"about 90" of docs/internal-limitations.md L26). One row per retired claim, with its kind, the Go location, and what holds it today.
 
 Kinds, as L26 defines them:
 
@@ -55,7 +55,7 @@ were owed only because nobody had looked at the corpus, which already carried th
 | 806 | the EXIT trap also holds `--reset` | `core/brain_reset.go:265` | go-806-M09 |
 | 806 | the EXIT trap turns success into 75 | `core/brain.go:75` | go-806-M10 |
 | 67 | the chaining default flips to retention | `core/t5_manifest.go:367` | go-67-M06 |
-| 185 | the speckit phase note leaks into the `--sdd none` prompt | `core/t5l_deliver.go:51` | go-185-M01 |
+| 185 | the speckit phase note leaks into the `--sdd none` prompt | `core/t5l_deliver.go:51` | retired with the Spec Kit flow (go-185-M01 no longer exists) |
 | 990 | the dispatch warns when a brief names a remote marker and carries no `authorizes:` | `core/t5_brief.go:1098,1269` | 844-A170 (rest of L26) |
 | 990 | the warning refuses instead of warning | `core/t5_brief.go:1269` | 844-A171 (rest of L26) |
 | 990 | the manifest's `authorizes` line loses the marker | `core/t5_brief.go:1280` | 844-A173 (rest of L26) |
@@ -96,7 +96,6 @@ were owed only because nobody had looked at the corpus, which already carried th
 | 798 | `hw ruling` kicks the cockpit (`cockpitKick`) | `core/t3_ruling.go:323` | the only arm needs a real herdr, and it is a live assertion, not a golden |
 | 900 | the preflight checks every manifest row | `core/deps.go:34` (`depsRows`) | D03/D04 notice it through the real preflight; no corpus case holds a preflight golden |
 | 991 | the pi start prepares the project skills (`piProjectSkillsPrepare`) | `core/t5l_agent.go:332` | no test of the wiring; `TestPiProjectSkillsPrepare` holds the prepare only |
-| 1003 | the opencode explorer overlay | `core/t5_explorer.go` (`explorerResolve`, `opencodeOverlay`) | held by a positive dry-run assertion and golden br-ag-oc-ok, not by a corpus case |
 | 1003 | claude's explorer injection decision | `core/t5_explorer.go:155` | positive assertion; no case golden moves on the decision alone |
 | 1003 | pi's explorer reaches the agent dir | `core/t5_explorer.go` (pi arm) | positive assertion only |
 | 1003 | `checkTopTierCeiling` | `core/t5_explorer.go` / `core/t5.go` | positive assertion in test 1003; no ceiling case golden exists |
@@ -113,7 +112,6 @@ were owed only because nobody had looked at the corpus, which already carried th
 | 232 | `CLAUDE_CODE_SUBAGENT_MODEL_FORCE` is never set | test 232's own grep of `core/*.go` (a text assertion, not an arm) |
 | 159 | `decision` is a known frontmatter key | golden `br-fm-decision` (the warning would show) |
 | 177 | the committed agent tree is indexed by `name:` | golden `br-ag-theta-claude` |
-| 177 | `<taskDir>/opencode.json` is read at status 1 vs 0 | golden `br-ag-oc-badmode` |
 | 232 | the receipt row records `subagent_model` | golden-t5l `l-gw-subagent-model` (`tree`) |
 | 38 | a bare command is refused | `TestBrMeasuredEvidence` (byte-compared message; `core/t5_brief_test.go:134`) |
 | 38 | a bare path is refused | same test, same `else` |

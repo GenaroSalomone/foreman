@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""The read-only guard, once, for every lane and every vendor.
+"""The read-only guard, once, for every lane.
 
-WHY THIS FILE EXISTS. Until 2026-09-06 this logic lived in EIGHT files — four
-`.claude/hooks/deny-repo-writes.py` and four `.opencode/plugin/deny-repo-writes.js`
-— and the four Python copies had drifted 11.5 KB apart. The drift was not
+WHY THIS FILE EXISTS. Until 2026-09-06 this logic lived in one
+`.claude/hooks/deny-repo-writes.py` per lane, and the four copies had drifted
+11.5 KB apart. The drift was not
 cosmetic and it was not one-directional:
 
   * one lane's copy had heredoc-body stripping, quoted-string masking and
@@ -21,9 +21,9 @@ cosmetic and it was not one-directional:
     baseline. So "level up to lane-a" was not, by itself, correct:
     the target is the UNION, and this file is it.
 
-  * The eight-copy conformance suite in `setup/guards/` was green across all of
-    that. It proves py-vs-js parity WITHIN a lane on 15 vectors; it never
-    compared one lane against another, so an 11.5 KB spread was invisible to it.
+  * The conformance suite in `setup/guards/` was green across all of that. It
+    proved parity WITHIN a lane on 15 vectors; it never compared one lane
+    against another, so an 11.5 KB spread was invisible to it.
     That is the "confidence without protection" shape, one level up from the
     string-matching hazard this guard is about.
 
@@ -53,9 +53,8 @@ configuration is code: Claude Code's own `<repo>/.claude/settings.local.json`
 (`is_local_settings`), the same for every lane. It is hard-coded on purpose — its
 conditions (no symlink, no hard link, untracked by git) are specific to that one file.
 
-The JavaScript half is `deny-repo-writes.js` beside this file, and it is the same
-decision on the same table. If you change one, change both — `setup/guards/`
-holds the conformance suite that proves you did.
+There is no second half: the pi executor (`setup/pi/hw-executor.ts`) asks THIS file per call, through `deny_repo_writes_ask.py`
+beside it. The conformance suite (`test-deny-repo-writes.mjs`) drives it through every lane's shim.
 """
 import json
 import os
@@ -122,7 +121,7 @@ def _canon(p):
     if m:
         q = "/" + m.group(1) + q[2:]
     if q.startswith("/"):
-        # One leading slash, as the JavaScript half's normPath leaves it.
+        # One leading slash.
         q = posixpath.normpath("/" + q.lstrip("/"))
     return q.lower()
 
@@ -223,9 +222,8 @@ else:
 # ── THE LANE TABLE ──────────────────────────────────────────────────────────
 #
 # THE VALUES LIVE IN `guards.json`, BESIDE `projects.json` AT BRAIN'S ROOT, and
-# this file and `deny-repo-writes.js` read the same copy. Until 2026-09-23 each
-# half carried its own literal table. They agreed, but only because someone kept
-# them in step by hand, and every path in them spelled one machine. The lane
+# this file reads that copy. Until 2026-09-23 it carried its own literal
+# table, and every path in it spelled one machine. The lane
 # data moved to `projects.json` in stage 2 of the harness opening. This is the
 # guards' half of stage 3: what the policy protects now comes from a file, and
 # this code is only the mechanism. What each key means:
@@ -275,8 +273,7 @@ else:
 #
 # A MISSING OR MALFORMED FILE FAILS CLOSED. Loading happens at import, so a
 # policy that cannot be read raises here, and every shim already turns a failed
-# import into a refusal (see `.claude/hooks/deny-repo-writes.py` and the Codex
-# guard). Every field is checked for shape, and an unknown key is refused
+# import into a refusal (see `.claude/hooks/deny-repo-writes.py`). Every field is checked for shape, and an unknown key is refused
 # rather than ignored. A typo in `worktree_roots` that got ignored would drop an
 # exemption silently, and one in `product_repos` would drop a root.
 POLICY_PATH = os.path.join(
@@ -730,8 +727,7 @@ def _same_tree(cfg, cand):
     only in case, under one parent, as one directory, and `realpath` does
     not fold the case, so every text comparison above saw two trees. Measured
     2026-09-29: a redirect into the case-variant spelling of a protected root
-    was ALLOWED while the lower-case spelling was denied, by the Python guard,
-    the JavaScript one and Codex's. Asking the filesystem is the only answer
+    was ALLOWED while the lower-case spelling was denied, by the guard. Asking the filesystem is the only answer
     that is right on both kinds of filesystem: on ext4 the variant names
     nothing, its ancestors match no root and it stays allowed. Only ADDS
     matches, like the other candidates. A root that does not exist has no
@@ -1372,11 +1368,9 @@ def _lands_outside_protected(cfg, token, cwd):
     target — unlike the cwd axis, where the same over-reach denies a whole
     unrelated directory's worth of work and is fixed in `_inside_protected`.
 
-    `not cwd.startswith("/")` comes from the JS copies, which had it while all
-    four Python copies checked only `not cwd`. With a RELATIVE cwd, the Python
-    joined and normalised to a relative path, which can never equal an absolute
-    root — so it returned True ("outside") and let the write through. The JS was
-    right; this is the union, not a new rule.
+    `not cwd.startswith("/")`: with a RELATIVE cwd the join normalises to a
+    relative path, which can never equal an absolute root — so it would return
+    True ("outside") and let the write through.
     """
     if any(root in token or root in _canon_text(token) for root in cfg["roots"]):
         return False
@@ -1531,7 +1525,6 @@ def _is_copy_out_of_protected(cfg, probe, cwd):
 # to allow. So the old pattern's targets are all still asked, exactly as
 # before, and a quote-aware scan ADDS the word after every `>` that is not
 # inside quotes. A command can only gain targets to check, never lose one.
-# deny-repo-writes.js carries the same two passes.
 _WORD = r"""(?:"[^"]*"|'[^']*'|\\.|[^\s;|&()<>\\])+"""
 _SHELL_WORD = re.compile(_WORD)
 _BARE_REDIRECT_TARGET = re.compile(r"(?<![0-9&])>{1,2}(?!&)\s*([^\s;|&()<>]+)")
@@ -1645,7 +1638,7 @@ def _redirect_lands_in_protected(cfg, probe, cwd, segs=()):
 # redirect check more (target, directory) pairs; it never closes a path the
 # passes above opened, so the chain below still decides, and a READ through a
 # relative path (`cat ../<repo>/x > out`) still matches no mutator and is
-# allowed. `deny-repo-writes.js` carries the same reading, step for step.
+# allowed.
 
 _MARK = "\x00"          # a part of a word the guard cannot know
 _GLOB_CHARS = re.compile(r"[*?\[]")
@@ -2043,8 +2036,7 @@ def _segments_resolve_protected(cfg, segs):
 # ── `env` OPTIONS ARE NOT THE PROGRAM ───────────────────────────────────────
 #
 # Every rule below sees through a bare `env` (`env rm -rf <repo>/x` is judged
-# as `rm`), but NOT through its options: measured 2026-09-30 on all three
-# drivers (py, js, codex), `env -u HOME rm -rf <repo>/src`, `env --unset=HOME`,
+# as `rm`), but NOT through its options: measured 2026-09-30, `env -u HOME rm -rf <repo>/src`, `env --unset=HOME`,
 # `env -i`, `env --`, `env -S 'rm -rf <repo>/src'` and their GNU
 # abbreviations (`--uns`, `--ign`, `--spl`) were ALLOWED, because the word after
 # `env` was an option, so `rm` was no longer in command position, and a `-S`

@@ -27,7 +27,7 @@ const t3RulingQueueCap = 5
 
 type execState struct {
 	verdict, status, rundir, seq, cwd string
-	vendor                            string // herdr's `agent` for the pane: claude, codex, opencode, pi
+	vendor                            string // herdr's `agent` for the pane: claude, pi
 	children, endedAt                 string // the pane's tokens children_running and turn_ended_at
 }
 
@@ -537,9 +537,9 @@ loop:
 		if t.steerPi(pane, rundir, st.seq, num, st.vendor) {
 			return 0
 		}
-	} else if st.vendor != "claude" && st.vendor != "opencode" {
-		// A pi pane that was NOT steered left no trace in the run dir (retro herdr-app-viewer: 4 rulings queued 40 min). claude and
-		// opencode keep the queue by design and are not logged; an unreadable vendor is, because it may be the pi pane.
+	} else if st.vendor != "claude" {
+		// A pi pane that was NOT steered left no trace in the run dir (retro herdr-app-viewer: 4 rulings queued 40 min). claude
+		// keeps the queue by design and is not logged; an unreadable vendor is, because it may be the pi pane.
 		why := "verdict=" + st.verdict + " is not working"
 		if st.vendor != "pi" {
 			why = "vendor=" + strconv.Quote(st.vendor) + " is not pi"
@@ -581,8 +581,8 @@ func queueBody(d string) (string, map[string]bool) {
 // steerPi delivers the queue to a WORKING pi executor now, through pi's own steering: text typed into a pi session while
 // it works is delivered after the tool call in flight, with no wait for a turn end. Measured 2026-11-04: pi turns last
 // hours, four executors held 3-5 queued rulings for over an hour, and the brainer delivered them by hand with
-// `herdr pane send-text`. The route is `herdr agent prompt`, the one channel-send uses for every pane; claude and opencode
-// keep the queue (their gate refuses mid-turn delivery on purpose: a ruling lands where the loop happens to be).
+// `herdr pane send-text`. The route is `herdr agent prompt`, the one channel-send uses for every pane; claude
+// keeps the queue (its gate refuses mid-turn delivery on purpose: a ruling lands where the loop happens to be).
 // ORDER: send, THEN claim. A claim first would record a delivery that did not happen when the send fails; a send first
 // leaves the rulings queued for the turn end if it fails, and claiming after a good send writes the delivered records
 // (via=pi-steer) and removes the pending files THAT WERE SENT, so the turn end finds nothing to repeat and a ruling queued
@@ -639,27 +639,17 @@ func (t *t3) resumeBlocked(pane, rundir, seq, text string, dry bool) int {
 	}
 	since := blockedField(claim, "since")
 
-	if !brReadable(t.binDir() + "/invoker-common.sh") { // _next_load_invoker_lib: the lib is sourced in bash; here only its presence is the contract
-		t.die("cannot find invoker-common.sh beside " + t.binDir() + " — this brain/bin is incomplete")
-	}
 	route, target, ep := "herdr", pane, "-"
 	if mux.IsHCAddress(t.getenv, pane) {
 		route = "hc"
-	} else if vendor, session, endpoint := t.nextResolveSender(pane); nextVendorNative(vendor) && session != "" && endpoint != "" {
-		route, target, ep = vendor, session, endpoint
 	}
 	msg := "RULING FROM YOUR BRAINER, answering your --blocked report on task " + seq + ". It RESUMES THE SAME TASK in this session: keep what you have, act on the ruling — and if it contradicts what you already did, say so rather than quietly redoing it — then report again with done-invoker (no --retask: the task counter did not move).\n\n" + text
-	var args []string
-	if route == "opencode" {
-		args = []string{"--require", "processed", "--id", t3Base(rundir) + ":t" + seq + ":resume", route, target, ep, msg}
-	} else {
-		args = []string{route, target, ep, msg}
-	}
-	cmd := exec.Command(t.binDir()+"/channel-send", args...)
+	cmd := exec.Command(t.binDir()+"/channel-send", route, target, ep, msg)
 	cmd.Stderr = t.err
 	sendRC := exitStatus(cmd.Run()) // stdout to /dev/null, as bash sends it
-	// 4 on a native route and 5 anywhere mean the message is, or may be, in the receiver: putting `done` back would
-	// refuse the report it is about to make.
+	// 5 anywhere, and 4 on the hc route (the receiver took the message and its turn ended in error), mean the message
+	// is, or may be, in the receiver: putting `done` back would refuse the report it is about to make. On herdr 4 means
+	// it did not land.
 	switch sendRC {
 	case 4:
 		if route == "herdr" {

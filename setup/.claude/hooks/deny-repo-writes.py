@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """Lane shim: the `setup` brainer's read-only guard.
 
 THE LOGIC IS NOT HERE. It is in `setup/guards/deny_repo_writes.py`, once, for

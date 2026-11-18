@@ -292,6 +292,11 @@ func (d *dsp) invokerPaneInit() {
 	if strings.HasPrefix(r, "!refuse ") { // # MUTATION-ANCHOR: 844-R108
 		d.die(strings.TrimPrefix(r, "!refuse "))
 	}
+	if r == "" && d.dispatchDry { // # MUTATION-ANCHOR: 844-R119
+		// a dry run builds nothing, so it needs no return channel: the manifest says UNRESOLVED instead of dying
+		d.invokerResolved, d.invokerHow = "", ""
+		return
+	}
 	if r == "" { // # MUTATION-ANCHOR: 844-R109
 		d.die("HW_INVOKER_PANE is UNRESOLVED — every executor launched here would have nowhere to report. Export the id `" + d.listCommand() + "` actually shows for your brainer, or pass --no-report for a deliberate fire-and-forget dispatch.") // # MUTATION-ANCHOR: 844-R110
 	}
@@ -453,16 +458,6 @@ func (d *dsp) resolveInvokerContext() {
 	d.hwInvokerVendor = jqRawOr(info, "", "result", "agent", "agent")
 	d.hwInvokerSession = jqRawOr(info, "", "result", "agent", "agent_session", "value")
 	switch d.hwInvokerVendor {
-	case "opencode":
-		process, _ := herdrOut(0, "pane", "process-info", "--pane", pane)
-		if port := rtOpencodePort(bashSub(process)); port != "" {
-			d.hwInvokerEndpoint = "http://127.0.0.1:" + port
-		}
-	case "codex":
-		if d.hwInvokerSession == "" {
-			d.hwInvokerSession = rtCwdBase(info)
-		}
-		d.hwInvokerEndpoint = d.env("HOME") + "/.codex/app-server-control/app-server-control.sock"
 	case "claude":
 		d.hwInvokerEndpoint = "-"
 	}
@@ -470,24 +465,6 @@ func (d *dsp) resolveInvokerContext() {
 	d.setEnv("HW_INVOKER_VENDOR", d.hwInvokerVendor)
 	d.setEnv("HW_INVOKER_SESSION", d.hwInvokerSession)
 	d.setEnv("HW_INVOKER_ENDPOINT", d.hwInvokerEndpoint)
-}
-
-// rtCwdBase is `jq -r '.result.agent.cwd // empty | split("/")[-1]'`.
-func rtCwdBase(info string) string {
-	vals, _ := parseStream([]byte(info))
-	var outs []string
-	for _, v := range vals {
-		cur, ok := rtJqSteps(v, []any{"result", "agent", "cwd"})
-		if !ok || !cur.truthy() {
-			continue
-		}
-		if cur.kind != vStr {
-			continue // split on a non-string is an error
-		}
-		parts := strings.Split(cur.s, "/")
-		outs = append(outs, parts[len(parts)-1])
-	}
-	return bashSub(strings.Join(outs, "\n"))
 }
 
 // rtIter is jq's `.[]?` over a value: its elements (array order, object member order), none for a scalar.
@@ -503,58 +480,6 @@ func rtIter(v *jval) []*jval {
 		return out
 	}
 	return nil
-}
-
-// rtOpencodePort is the jq program of `_resolve_invoker_context` for opencode: the value after `--port` in the
-// argv of the first foreground process that has an argument exactly `opencode`.
-func rtOpencodePort(process string) string {
-	vals, _ := parseStream([]byte(process))
-	var outs []string
-	for _, v := range vals {
-		pi, ok := rtJqSteps(v, []any{"result", "process_info", "foreground_processes"})
-		if !ok {
-			continue
-		}
-		var argv *jval
-		errored := false
-	find:
-		for _, proc := range rtIter(pi) {
-			// `.argv` on anything but an object or null is an error (the `?` of `.argv[]?` guards only the
-			// iteration), and it ends this input unless an earlier process already matched (`first`).
-			if proc.kind != vObj && proc.kind != vNull {
-				errored = true
-				break
-			}
-			a, ok := proc.get("argv")
-			if !ok {
-				continue
-			}
-			for _, w := range rtIter(a) {
-				if w.kind == vStr && w.s == "opencode" {
-					argv = a
-					break find
-				}
-			}
-		}
-		if errored || argv == nil || argv.kind != vArr {
-			continue
-		}
-		idx := -1
-		for i, w := range argv.arr {
-			if w.kind == vStr && w.s == "--port" {
-				idx = i
-				break
-			}
-		}
-		if idx < 0 || idx+1 >= len(argv.arr) {
-			continue
-		}
-		nx := argv.arr[idx+1]
-		if nx.truthy() {
-			outs = append(outs, nx.raw())
-		}
-	}
-	return bashSub(strings.Join(outs, "\n"))
 }
 
 // checkAgentNameFree is `_check_agent_name_free`: herdr agent names are unique across every lane.
@@ -615,8 +540,7 @@ func (d *dsp) checkAgentNameFree(name string) {
 // the call (HW_EXECUTOR_VENDOR, the invoker's vendor/session/endpoint, and HW_INVOKER_PANE when it was exported).
 func (d *dsp) rtChildEnv() []string {
 	// AGENT is a shell variable of the bash process, not an exported one, and `cmd_next` runs in that process: the
-	// preamble it builds reads HW_EXECUTOR_VENDOR, else AGENT (the codex rules are added for a pane whose
-	// run env records no vendor). A child process sees it only through the environment.
+	// preamble it builds reads HW_EXECUTOR_VENDOR, else AGENT. A child process sees it only through the environment.
 	over := map[string]string{"HW_EXECUTOR_VENDOR": d.agent, "AGENT": d.agent}
 	// The same goes for what the dispatch's own flags and brief decided and `_next_authorization` / the preamble read
 	// as shell variables: CHECK_HANDLES (--no-handle-check), REQUESTED_BY (--requested-by or the brief's) and

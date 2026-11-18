@@ -48,32 +48,40 @@ HW_SRC="${HW_SOURCE:-$ROOT/bin/hw}"
 # inside a double-quoted argv word), a `$` expansion, and an embedded quote.
 PAYLOAD='fix touches `deny-repo-writes.py`; cost is $0 either way, says "the brief"'
 
-# ── codex stub: proves the BYTES, not just that something was accepted ──────
-# channel-send's codex route runs `codex queue --remote ... --message "$MESSAGE"`
-# directly (no shell re-interpretation of its own), so logging codex's argv
-# verbatim is a faithful witness of exactly what channel-send decided MESSAGE
-# was — the strongest evidence available without a live receiver.
-mkdir -p "$TMP/cxbin"
-cat > "$TMP/cxbin/codex" <<'STUB'
+# ── herdr stub: proves the BYTES, not just that something was accepted ─────
+# channel-send's herdr route runs `herdr agent prompt <target> <message>` directly (no shell re-interpretation of its
+# own), so logging herdr's argv verbatim is a faithful witness of exactly what channel-send decided the message was —
+# the strongest evidence available without a live receiver. (A copy of bin/ beside stub herdr/herdr-rpc, the way
+# setup/tests/05 runs channel-send; a budget of one witness slice is ONE wait-agent, answered at once.)
+csb="$TMP/csb"; mkdir -p "$csb/bin"
+cp "$ROOT/bin/channel-send" "$csb/bin/"
+[ ! -f "$ROOT/bin/invoker-common.sh" ] || cp "$ROOT/bin/invoker-common.sh" "$ROOT/bin/runenv" "$csb/bin/"
+cat > "$csb/bin/herdr" <<'STUB'
 #!/usr/bin/env bash
-: > "$CODEX_LOG"
-for _a in "$@"; do printf '%s\n' "$_a" >> "$CODEX_LOG"; done
+case "${1:-} ${2:-}" in
+  "agent prompt") printf '%s' "$4" > "$PROMPT_LOG"; echo '{"result":{}}' ;;
+  "agent get") printf '{"result":{"agent":{"agent_status":"idle","cwd":"","tokens":{}}}}\n' ;;
+  *) echo '{"result":{}}' ;;
+esac
 STUB
-chmod +x "$TMP/cxbin/codex"
-CODEX_LOG="$TMP/codex.log"; export CODEX_LOG
+cat > "$csb/bin/herdr-rpc" <<'STUB'
+#!/usr/bin/env bash
+exit 0
+STUB
+chmod +x "$csb/bin/herdr" "$csb/bin/herdr-rpc"
+PROMPT_LOG="$TMP/prompt.log"; export PROMPT_LOG
+export WITNESS_SLICE_MS=100000000
 
-send_codex() {
-  PATH="$TMP/cxbin:$PATH" "$CS_SRC" --require admitted codex fakethread /tmp/fake.sock "$@" 2>&1
+send_herdr() {
+  : > "$PROMPT_LOG"
+  PATH="$csb/bin:$PATH" "$csb/bin/channel-send" herdr wT:p1 - "$@" 2>&1
 }
-codex_message_logged() {
-  # the --message value is the token right after the literal --message
-  awk '/^--message$/{getline; print; exit}' "$TMP/codex.log"
-}
+message_logged() { cat "$PROMPT_LOG"; }
 
 # ── 1. EXISTING ARGV INVOCATIONS STILL WORK, unchanged, for all four ────────
-out="$(send_codex plain unquoted words)"
+out="$(send_herdr plain unquoted words)"
 [ "$?" = 0 ] || fail "channel-send's ordinary argv path regressed: $out"
-[ "$(codex_message_logged)" = "plain unquoted words" ] || fail "argv words were not joined into one message as before: $(codex_message_logged)"
+[ "$(message_logged)" = "plain unquoted words" ] || fail "argv words were not joined into one message as before: $(message_logged)"
 pass "channel-send's existing argv-words message path is unchanged"
 
 out="$(env -u HW_INVOKER_PANE "$AI_SRC" "a plain question" 2>&1 || true)"
@@ -86,9 +94,9 @@ out="$(env -u HW_INVOKER_PANE "$HW_SRC" ruling nopane "a plain ruling" 2>&1 || t
 case "$out" in *"herdr reports no cwd"*) pass "hw ruling's existing argv-words text path still reaches its normal refusal" ;; *) fail "hw ruling's argv path regressed: $out" ;; esac
 
 # ── 2. '-' DELIVERS THE EXACT BYTES, backticks and '$' untouched ────────────
-out="$(printf '%s' "$PAYLOAD" | send_codex -)"
+out="$(printf '%s' "$PAYLOAD" | send_herdr -)"
 [ "$?" = 0 ] || fail "channel-send's stdin path failed to deliver: $out"
-[ "$(codex_message_logged)" = "$PAYLOAD" ] || fail "the message read from stdin does not match what was piped in — got: $(codex_message_logged)"
+[ "$(message_logged)" = "$PAYLOAD" ] || fail "the message read from stdin does not match what was piped in — got: $(message_logged)"
 pass "channel-send delivers a backtick-and-\$-bearing message byte-for-byte when given as '-'"
 
 out="$(printf '%s' "$PAYLOAD" | env -u HW_INVOKER_PANE "$AI_SRC" - 2>&1 || true)"
@@ -112,7 +120,7 @@ esac
 # ── 3. THE THREE DISTINCT ERRORS, for all four commands ─────────────────────
 
 # 3a. empty stdin
-out="$(printf '' | send_codex -)" && rc=0 || rc=$?
+out="$(printf '' | send_herdr -)" && rc=0 || rc=$?
 [ "$rc" != 0 ] || fail "channel-send accepted an empty stdin message"
 case "$out" in *"stdin for '-' produced no bytes"*) pass "channel-send names an empty '-' read distinctly" ;; *) fail "channel-send's empty-stdin refusal is missing or generic: $out" ;; esac
 
@@ -126,7 +134,7 @@ out="$(printf '' | env -u HW_INVOKER_PANE "$HW_SRC" ruling nopane - 2>&1 || true
 case "$out" in *"stdin for '-' produced no bytes"*) pass "hw ruling names an empty '-' read distinctly" ;; *) fail "hw ruling's empty-stdin refusal is missing or generic: $out" ;; esac
 
 # 3b. text given BOTH ways — argv words AND '-'
-out="$(printf 'x' | send_codex - "extra words")" && rc=0 || rc=$?
+out="$(printf 'x' | send_herdr - "extra words")" && rc=0 || rc=$?
 [ "$rc" != 0 ] || fail "channel-send accepted a message given both as argv text and '-'"
 case "$out" in *"given twice"*) pass "channel-send refuses a message given both ways, distinctly from the empty case" ;; *) fail "channel-send's double-channel refusal is missing or reuses the empty-stdin wording: $out" ;; esac
 

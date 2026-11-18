@@ -18,7 +18,7 @@ import (
 
 const brainHelp = `brain — open (or focus) a lane's long-lived brainer.
 
-usage: brain <lane> [--opencode|--claude] [--reset [--self] [--force]]
+usage: brain <lane> [--claude] [--reset [--self] [--force]]
        brain <lane> --resume <session-id>
        brain relaunch [--all | <lane|pane>...] [--dry-run]
        brain restore [<lane>...] [--dry-run]
@@ -172,7 +172,7 @@ func (b *brainRun) main(args []string) (rc int) {
 					b.outf("  %s\n", n)
 				}
 			}
-			b.outf("\nusage: brain <%s> [--opencode|--claude] [--reset [--self] [--force]]\n", strings.Join(tab.names, "|"))
+			b.outf("\nusage: brain <%s> [--claude] [--reset [--self] [--force]]\n", strings.Join(tab.names, "|"))
 			return 0
 		}
 		b.errf("unknown brainer: %s  (try: %s)\n", first, strings.Join(tab.names, ", "))

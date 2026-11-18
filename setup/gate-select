@@ -74,10 +74,9 @@ RUNNER = re.compile(
     r"^setup/(test-hw|test-hw-snapshot\.py|fast-gate-budget\.sh|suite-data/test-budgets\.json"
     r"|mutation/mutation-coverage|gate-select|suite-data/retired-subjects\.txt|go-test-core\.sh)$|^setup/tests/")
 GUARD = re.compile(
-    r"^setup/guards/|^([^/]+/)?\.claude/hooks/deny-repo-writes\.py$"
-    r"|^([^/]+/)?\.opencode/plugin/deny-repo-writes\.js$")
+    r"^setup/guards/|^([^/]+/)?\.claude/hooks/deny-repo-writes\.py$")
 # Where the code a subject can run lives: the closure is taken over these.
-CODE_DIRS = ("bin", "lib", "setup", "lanes", "shell", ".claude", ".opencode")
+CODE_DIRS = ("bin", "lib", "setup", "lanes", "shell", ".claude")
 CODE_SKIP = re.compile(
     r"^setup/(tests|decisions|briefs|evidence|baselines|plans|export/overlay)/"
     r"|\.(md|timeline|png|svg|jpg|gif|pdf)$|^setup/decisions\.md$")

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # pi's write guard (setup/briefs/pi-vendor-v1.md, piece 4): `tool_call` blocks
-# bash/edit/write into a protected tree with the SAME detection as the opencode
-# half (setup/guards/deny-repo-writes.js: `decide`, `insideProtected`), driven
+# bash/edit/write into a protected tree with the SAME detection as the shared
+# guard (setup/guards/deny_repo_writes.py, asked per call through deny_repo_writes_ask.py: `decide`, `_inside_protected`), driven
 # with pi's payload shapes and the real guards.json. And in an executor the raw
 # engram server is refused in favour of the label proxy (hw_engram).
 # OLD: no adapter — pi runs `echo x > <product repo>/…` unasked (live, in
@@ -12,6 +12,9 @@ ADAPTER="${PI_ADAPTER_SOURCE:-$ROOT/setup/pi/hw-executor.ts}"
 DRIVER="$ROOT/setup/pi/test-hw-executor.mjs"
 command -v node >/dev/null 2>&1 || fail "node is required to drive the pi adapter"
 [ -r "$ADAPTER" ] || fail "no pi adapter at $ADAPTER — a pi executor's writes are unguarded"
+
+# Every guard question spawns python; the runner forbids bytecode, so each would recompile the guard module (0.22 s -> 0.06 s cached).
+export HW_GUARD_PYCACHE="$TMP/guard-pycache"
 
 for env_set in "plain" "executor"; do
   if [ "$env_set" = executor ]; then set -- HW_TASK=t HW_RUN=r HW_WORKDIR="$TMP" ENGRAM_PROJECT=brain; else set --; fi
@@ -51,7 +54,7 @@ pw="$(eval echo "~$(id -un)")"
 # its own path).
 FX="$TMP/fxbrain"; lane=fxlane
 mkdir -p "$FX/setup/guards"
-cp "$ROOT/setup/guards/deny-repo-writes.js" "$FX/setup/guards/"
+cp "$ROOT/setup/guards/deny_repo_writes.py" "$ROOT/setup/guards/deny_repo_writes_ask.py" "$FX/setup/guards/"
 jq '.lanes.fxlane = (.lanes.setup | .repo = "~/fx-lane/app" | .worktrees = "~/fx-lane/app/.worktrees")
     | .product_repos += ["~/fx-lane/app"]' "$ROOT/guards.json" > "$FX/guards.json"; cp "$ROOT/projects.json" "$FX/" \
   || fail "could not build the fixture lane from $ROOT/guards.json"

@@ -616,6 +616,7 @@ release() {  # only what this process took
   pick_drop
   stop_idle_watch; resume_now; stop_awake
   stop_watch
+  [ "$WHEN_IDLE" = 0 ] || acct_end   # a wait cut short (exit 75, a signal) must not leave the pause clock running
   [ -z "$MYT" ] || rm -f "$MYQ/$MYT"
   if [ -n "$HOLD" ]; then
     read_owner "$HOLD"
@@ -689,7 +690,10 @@ reclaim_at() {  # <lock dir> <what to call it>
 
 [ "$WHEN_IDLE" = 0 ] || acct_begin   # the wait for a slot is not the caller's running time either
 last=0; first=1
+# A TICKET THAT IS GONE IS NEVER SERVED. The queue dir removed under a waiter (2026-11-16: ten short waiters slept ~4 h) leaves no
+# ticket to be head or to take a slot for: exit 75 at once, naming it. A queue that is merely long is not stuck, so there is no clock.
 while :; do
+  [ -e "$MYQ/$MYT" ] || { echo "setup/heavy: $TAG's queue ticket $MYQ/$MYT was removed while it waited — it can never be served: exiting 75, nothing ran" >&2; exit 75; }  # MUTATION-ANCHOR: 1040-H30
   # ONE READ, NEVER A PIPE INTO `head`. `live_tickets … | head -n 1` made the ticket printer write into a closed pipe once the
   # head left, and one gate log carried 394 `Broken pipe` lines for 6 filter calls (2026-11-04).
   live="$(live_tickets "$MYQ")"  # MUTATION-ANCHOR: 1040-H01
@@ -744,6 +748,44 @@ preflight() {
     echo "setup/heavy: HW_HEAVY_REQUIRE_FREE=1 and ${f}% is free — refusing to start $TAG (exit 75)" >&2
     exit 75
   fi
+}
+
+# PROCESS HEADROOM. A job that cannot fork dies late and obscurely: rc.2 run 3 reached its mutation batch with ~3443 orphaned `cat` (ppid 1) of kern.maxprocperuid 4000
+# and died on `fork: Resource temporarily unavailable`, 2026-11-16. Measured the same day on this Mac: this user's whole process table is 519-576 at rest and while
+# a release cut's mutation batch runs, so a job needs a few hundred forks. The room it must find is a QUARTER OF THE LIMIT, at most 1000 and at least 100 (a fixed 1000 refused
+# every job, build-core's included, on a machine whose limit is 1333: review of 45a3e96); HW_HEAVY_PROC_HEADROOM=<n> sets it flat and 0 turns the check off.
+# The short lane (<= 120 s: build-core, a focused test) is not checked: it ends before a slow exhaustion matters and it must stay able to rebuild hw-core.
+# Refuses (exit 75) naming the count, the limit and the commands with most processes, ppid-1 orphans first. The limit and the count are setup/proc-limit.sh's
+# (shared with go-test-core.sh); a machine that cannot say reads as fine, as does a tree that carries no such file (a fixture).
+[ ! -r "$(dirname "$0")/proc-limit.sh" ] || . "$(dirname "$0")/proc-limit.sh"
+proc_preflight() {
+  local lim head report
+  [ "$SHORT" = 0 ] || return 0
+  command -v proc_limit >/dev/null 2>&1 || return 0
+  lim="$(proc_limit)"
+  case "$lim" in ''|*[!0-9]*) return 0 ;; esac
+  head="${HW_HEAVY_PROC_HEADROOM:-}"
+  case "$head" in
+    ''|*[!0-9]*) head=$((lim / 4)); [ "$head" -le 1000 ] || head=1000; [ "$head" -ge 100 ] || head=100 ;;
+  esac
+  [ "$head" -gt 0 ] || return 0
+  report="$(proc_list | awk -v lim="$lim" -v head="$head" '
+    { n++; c = $0; sub(/^[ \t]*[0-9]+[ \t]+[0-9]+[ \t]+/, "", c); sub(/.*\//, "", c); all[c]++; if ($2 == 1) orph[c]++ }
+    function top(arr, label,   k, i, m, best, line) {
+      line = ""
+      for (i = 0; i < 5; i++) { best = ""; m = 0; for (k in arr) if (arr[k] > m) { m = arr[k]; best = k } if (best == "") break; line = line (line == "" ? "" : ", ") best " x" m; delete arr[best] }
+      printf "heavy:   %s %s\n", label, (line == "" ? "none" : line)
+    }
+    END {
+      if (n == 0 || lim - n >= head) exit 0
+      printf "heavy: this user runs %d processes of a limit of %d: %d left, under the %d a heavy job needs\n", n, lim, lim - n, head
+      top(orph, "ppid 1 orphans, most first:"); top(all, "most processes by command:")
+      exit 1
+    }')" || {
+    printf '%s\n' "$report" >&2
+    echo "setup/heavy: refusing to start $TAG (exit 75): it would die on fork. Kill the orphans (your own, by pid; never pkill -f) or set HW_HEAVY_PROC_HEADROOM=0 to run anyway" >&2
+    exit 75  # MUTATION-ANCHOR: 1387-M01
+  }
 }
 
 # What the command left in its process group when it ended. A child that outlives its parent is reparented to launchd and, if the
@@ -806,6 +848,7 @@ HEAVY_BIN="$(cd -P "$(dirname "$0")/../bin" 2>/dev/null && pwd)"
 wait_quiet
 
 preflight
+proc_preflight
 
 export HW_HEAVY_RUNNING=1 HW_HEAVY_RUN="$$"
 [ "$WHEN_IDLE" = 0 ] || export HW_HEAVY_WHEN_IDLE_ACTIVE=1

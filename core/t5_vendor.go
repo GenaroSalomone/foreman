@@ -14,7 +14,6 @@ import (
 type vdState struct {
 	vdTable      *jval // projects.json as jq reads it, loaded on first use
 	vdTableTried bool
-	vdEngramOver string // OPENCODE_ENGRAM_OVERLAY
 }
 
 // vdLaneObj is the lane's object in the lane table file, nil when it cannot be read.
@@ -69,8 +68,6 @@ func (d *dsp) vdLane(proj, name string) string {
 			return "0"
 		}
 		return "1"
-	case "opencode_config_dir":
-		return expandHome(orDefault(field(v, "opencode_config_dir"), ""), d.c.home) // # MUTATION-ANCHOR: 844-B05
 	case "artifacts":
 		return orDefault(field(v, "artifacts"), orDefault(field(v, "account"), "default")) // # MUTATION-ANCHOR: 844-B06
 	}
@@ -250,16 +247,13 @@ func (d *dsp) applyModelDefault() {
 		d.piApplyModelDefault()
 		return
 	}
-	if !(d.model == "" && d.agent == "claude" && d.reusePane == "") { // # MUTATION-ANCHOR: 844-B19
+	if !(d.model == "" && d.agent == "claude" && d.reusePane == "") {
 		return
 	}
 	if d.projectModelFloor(d.proj) != "" { // # MUTATION-ANCHOR: 844-B20
 		return
 	}
 	if d.vdLane(d.proj, "model") != "" { // # MUTATION-ANCHOR: 844-B21
-		return
-	}
-	if d.sddEffectiveMode == "speckit" {
 		return
 	}
 	kind := d.vdBriefKind()
@@ -280,12 +274,12 @@ func (d *dsp) checkModelFloor() {
 	accepts := d.vdLane(d.proj, "model_floor_accepts")
 	floorTier := d.modelTier(floor)
 	if d.model == "" {
-		if d.agent == "claude" && d.reusePane == "" { // # MUTATION-ANCHOR: 844-B24
+		if d.agent == "claude" && d.reusePane == "" {
 			d.model, d.modelSrc = floor, "floor of "+d.proj
 			d.modelFloorLine = floor + " — met (pinned: no model was named, and claude's inherited default is unmeasured)"
 		} else {
 			d.modelFloorLine = floor + " — UNESTABLISHED: " + d.agent + "'s inherited default is not a model hw can rank"
-			d.warn("model floor: " + d.proj + " requires at least " + floor + ", and this " + d.agent + " dispatch names no model, so what it runs was not checked") // # MUTATION-ANCHOR: 844-B25
+			d.warn("model floor: " + d.proj + " requires at least " + floor + ", and this " + d.agent + " dispatch names no model, so what it runs was not checked")
 		}
 		return
 	}

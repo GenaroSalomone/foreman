@@ -1,13 +1,11 @@
 package main
 
-// Train T5, area B: the brain guard, the engram label proxy, the artifact tools and the sandbox.
-// bin/hw: _brain_guard_applies/_dir/_claude_plugin/_opencode_config/_present/_check/_args, _engram_label,
-// _engram_proxy_bin/_mcp_bin/_mcp_claude_file, _engram_proxy_args, _artifacts_verdict, _artifacts_args,
-// _check_sandbox.
+// Train T5, area B: the brain guard, the engram label proxy, the artifact tools.
+// bin/hw: _brain_guard_applies/_dir/_claude_plugin/_present/_check/_args, _engram_label,
+// _engram_proxy_bin/_mcp_bin/_mcp_claude_file, _engram_proxy_args, _artifacts_verdict, _artifacts_args.
 
 import (
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -53,15 +51,25 @@ func (d *dsp) brainGuardDir() string { return d.vdRoot() + "/setup/guards" }
 
 func (d *dsp) brainGuardClaudePlugin() string { return d.brainGuardDir() + "/brain-guard" }
 
-func (d *dsp) brainGuardOpencodeConfig() string {
-	return d.brainGuardDir() + "/brain-guard.opencode.json"
+// brainGuardFiles are the files of the brain guard under setup/guards: the plugin, the
+// guard and the three modules it imports (without any of them it fails closed on every call). Dispatch, revive and hw done's
+// leak scan each require all of them.
+var brainGuardFiles = []string{"brain-guard/hooks/hooks.json", // # MUTATION-ANCHOR: 844-B69
+	"deny_brain_writes.py", "deny_brain_writes_shell.py", "deny_brain_writes_main.py", "deny_repo_writes.py"}
+
+// brainGuardFilesIn reports whether every file of the brain guard is on disk under dir.
+func brainGuardFilesIn(dir string) bool {
+	for _, f := range brainGuardFiles {
+		if !isFile(dir + "/" + f) {
+			return false
+		}
+	}
+	return true
 }
 
-// brainGuardPresent is _brain_guard_present: the four files of the guard are on disk.
+// brainGuardPresent is _brain_guard_present: the files of the guard are on disk.
 func (d *dsp) brainGuardPresent() bool {
-	g := d.brainGuardDir()
-	return isFile(g+"/brain-guard/hooks/hooks.json") && isFile(g+"/brain-guard.opencode.json") && // # MUTATION-ANCHOR: 844-B69
-		isFile(g+"/deny-brain-writes.js") && isFile(g+"/deny_brain_writes.py")
+	return brainGuardFilesIn(d.brainGuardDir())
 }
 
 // brainGuardCheck is _brain_guard_check: a launch refuses what a dry run warns about.
@@ -121,7 +129,7 @@ func (d *dsp) engramLabel(proj string) string {
 // engramProxyArgs is _engram_proxy_args: each vendor's way to launch `engram mcp` behind the label proxy. A dry
 // run writes nothing (the claude --mcp-config file is the launch's), and Go only ever runs a dry dispatch.
 func (d *dsp) engramProxyArgs() {
-	d.vdEngramOver, d.engramProxyLine = "", ""
+	d.engramProxyLine = ""
 	label := d.engramLabel(d.proj)
 	proxy := d.vdRoot() + "/bin/engram-label-proxy"
 	eng := d.vdCommandV("engram")
@@ -150,18 +158,6 @@ func (d *dsp) engramProxyArgs() {
 	case "claude":
 		d.agentArgs = vdJoinArg(d.agentArgs, "--mcp-config "+file)
 		d.engramProxyLine = "--mcp-config " + file // # MUTATION-ANCHOR: 844-B78
-	case "opencode":
-		cmd := &jval{kind: vArr}
-		for _, w := range []string{proxy, "--label", label, "--", eng, "mcp", "--tools=agent"} {
-			cmd.arr = append(cmd.arr, jstr(w))
-		}
-		engram := &jval{kind: vObj, obj: []member{{"type", jstr("local")}, {"command", cmd}}}
-		over := &jval{kind: vObj, obj: []member{{"mcp", &jval{kind: vObj, obj: []member{{"engram", engram}}}}}}
-		d.vdEngramOver = over.toJSON()
-		d.engramProxyLine = "OPENCODE_CONFIG_CONTENT mcp.engram" // # MUTATION-ANCHOR: 844-B79
-	case "codex":
-		d.agentArgs = vdJoinArg(d.agentArgs, `-c mcp_servers.engram.command="`+proxy+`" -c mcp_servers.engram.args=["--label","`+label+`","--","`+eng+`","mcp","--tools=agent"]`)
-		d.engramProxyLine = "-c mcp_servers.engram.*" // # MUTATION-ANCHOR: 844-B80
 	case "pi":
 		d.engramProxyLine = piEngramProxyLine // t6_pi.go: the extension registers hw_engram, nothing rides the launch line
 	}
@@ -196,32 +192,13 @@ func (d *dsp) artifactsArgs() {
 	d.artifactsLine = "DENIED — --disallowedTools " + vdArtifactTools + " (" + v + ")"
 }
 
-// checkSandbox is _check_sandbox: --sandbox is claude's and pi's, on a machine hw-sandbox says is supported.
-func (d *dsp) checkSandbox() {
-	d.sandboxLine = ""
-	if !d.sandbox { // # MUTATION-ANCHOR: 844-B84
-		return
-	}
-	if d.agent != "claude" && d.agent != "pi" { // # MUTATION-ANCHOR: 844-B85
-		d.die("--sandbox refused: it is measured for claude and pi only, and this dispatch runs " + d.agent + ". Dispatch with --agent claude or --agent pi, or without --sandbox. NOTHING was built.")
-	}
-	bin := d.env("HW_CORE_BIN_DIR") + "/hw-sandbox"
-	cmd := exec.Command(bin, "supported")
-	cmd.Env = childEnv()
-	cmd.Env = os.Environ()
-	for k, v := range d.envOver {
-		cmd.Env = append(cmd.Env, k+"="+v)
-	}
-	out, err := cmd.CombinedOutput()
-	why := strings.TrimRight(string(out), "\n")
-	if err != nil { // # MUTATION-ANCHOR: 844-B86
-		if len(out) == 0 {
-			why = bin + ": " + err.Error()
-		}
-		d.die("--sandbox refused: " + why + " NOTHING was built.")
-	}
-	d.sandboxLine = "on (" + d.sandboxSrc + ") — Seatbelt hard profile: writes only in the workdir, artifacts, TMPDIR and the agent's own state; no unix sockets (herdr, docker, ssh-agent); ~/.ssh, ~/.config/gh, ~/.docker unreadable. Reports leave through the outbox broker. TCP is NOT confined."
-	if d.agent == "pi" { // pi's own state differs (bash: the line after _check_sandbox's claude one)
-		d.sandboxLine = "on (" + d.sandboxSrc + ") — Seatbelt hard profile: writes only in the workdir, artifacts, TMPDIR and pi's session dir for this workdir (+ the settings/auth/models lock dirs); ~/.pi/agent/{extensions,mcp.json,settings.json,auth.json} stay read-only; no unix sockets (herdr, docker, ssh-agent), so herdr's pi integration publishes no agent_session from inside; ~/.ssh, ~/.config/gh, ~/.docker unreadable. Reports leave through the outbox broker. TCP is NOT confined."
-	}
+// speckitRemoved is the one message for the removed Spec Kit flow; each surface (flag, brief key, re-task flag, re-task brief)
+// names itself in `what` and says what to do instead in `tail`.
+func speckitRemoved(what, tail string) string {
+	return what + ", but the Spec Kit flow was removed from hw (setup/decisions.md, 2026-11-16). " + tail
+}
+
+// sandboxRemoved is the one message for the removed Seatbelt option: a dispatch that asked for confinement must not run without it.
+func sandboxRemoved(what string) string {
+	return what + " was removed: hw no longer runs an executor under a Seatbelt profile (setup/decisions.md, 2026-11-16). Dispatch without it. NOTHING was built."
 }

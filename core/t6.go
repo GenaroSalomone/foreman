@@ -1,13 +1,13 @@
 package main
 
-// Train T6: the verbs that were bash-only when foreman-sh 0.4.0 made `hw` Go-only — train, suite, unstick,
+// Train T6: the verbs that were bash-only when foreman-sh 0.4.0 made `hw` Go-only — train, suite,
 // ledger, briefs, and the two that bin/hw only exec'd (cockpit-state, secret). Each is a port of
 // the bash it names, with the same stdout, stderr and exit status, in its own t6_<verb>.go. `--version` is T6's
 // too (bin/hw answered it before the lane table loaded).
 
 // t6Verbs are the verbs of this train.
 var t6Verbs = map[string]bool{
-	"train": true, "suite": true, "unstick": true, "ledger": true, "briefs": true,
+	"train": true, "suite": true, "ledger": true, "briefs": true,
 	"cockpit-state": true, "secret": true, "review": true, "-V": true, "--version": true,
 }
 
@@ -19,8 +19,6 @@ func (a *app) cmdT6(verb string) int {
 		return a.cmdTrain()
 	case "suite":
 		return a.cmdSuite()
-	case "unstick":
-		return a.cmdUnstick()
 	case "ledger":
 		return a.cmdLedger()
 	case "briefs":

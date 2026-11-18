@@ -13,12 +13,12 @@ EXIT STATUS
     `hw wait` additionally reports VERDICTS, which are not refusals — the wait
     ran, and these say what it found about the TARGET. 1 still means hw refused
     (bad argument, unknown pane, missing cross-check library) and never that the
-    executor is in some state. The numbers match state-witness.sh's own, so the
+    executor is in some state. The numbers match the state witness's own, so the
     toolchain has one number space:
     2   the budget was spent and the pane never reached idle/done. The ordinary
         timeout, and what an `unknown` cross-check costs: nothing extra.
-    5   SETTLED — proved unable to change. A larger budget buys nothing.
-    6   AWAITING-HUMAN — its own endpoint confirms an outstanding prompt.
+    6   AWAITING-HUMAN — blocked on a prompt only a person can answer, on the
+        pane itself. No budget answers it.
     7   ENDED AND NEVER REPORTED — turn_state=ended_unreported together with
         done_state=undelivered. No wait is started: the report exists, it did
         not arrive, and the turn that would have retried it is over.

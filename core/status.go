@@ -971,7 +971,7 @@ func (s *statusRun) reportTasks(out *bufio.Writer) (map[string]bool, []*orphanRe
 			stranded := turnEnded && eqStr(doneState, "undelivered") && !doneNewest
 			strandNote := func() {
 				notes = append(notes, "turn "+turns+" ended "+turnAt+" and the delivery had already failed — nothing in that pane is going to retry it")
-				notes = append(notes, "ENDED AND NEVER REPORTED: read its tokens (sum/sum2/…) and its engram observations, then `hw done` it. A larger budget and `hw unstick` both answer a question nobody is asking — the work finished, the delivery did not")
+				notes = append(notes, "ENDED AND NEVER REPORTED: read its tokens (sum/sum2/…) and its engram observations, then `hw done` it. A larger budget answers a question nobody is asking — the work finished, the delivery did not")
 				limits["turn"] = true
 			}
 			switch {

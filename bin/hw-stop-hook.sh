@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 #
-# hw-stop-hook.sh — a Claude Code/Codex `Stop` hook that makes the harness carry
+# hw-stop-hook.sh — a Claude Code `Stop` hook that makes the harness carry
 # turn-end facts an agent keeps forgetting to act on.
 #
 #   ~/.claude/settings.json  → hooks.Stop → bash '<this file>' stop
 #   ~/.claude/settings.json  → hooks.StopFailure → bash '<this file>' stop-failure   (a turn that died on an API error)
 #   ~/.claude/settings.json  → hooks.PostToolUse → bash '<this file>' post-tool   (a queued ruling, delivered between two tool calls)
-#   ~/.codex/hooks.json      → hooks.Stop → bash '<this file>' stop
 #
 # WHY THIS EXISTS
 #
@@ -38,8 +37,8 @@
 # WHERE THE SIGNAL GOES
 #
 # Into `pane.report_metadata` tokens on the executor's own pane, through
-# invoker-common.sh's `invoker_publish` — the same publishing path the invokers
-# use, not a second copy of it. Tokens survive without a keystroke and are
+# the same publishing path the invokers use (core/invokers/publish.go), not a
+# second copy of it. Tokens survive without a keystroke and are
 # readable with `herdr agent list`; `hw status` reads them from there.
 #
 # THE TOKEN BUDGET IS THE REASON THIS IS A SEPARATE PUBLISH. herdr caps tokens
@@ -50,7 +49,7 @@
 # keys written here (`turn_state`, `turn_ended_at`, `turns`) appear in neither
 # invoker's key set, so no publish deletes another's keys.
 #
-# GUARDS. Every wired Claude Code/Codex session on this machine runs this file.
+# GUARDS. Every wired Claude Code session on this machine runs this file.
 # It has two narrow jobs: publish an unreported executor turn, and refuse an
 # explicit handback from a brainer. Everything else is inert.
 #
@@ -69,9 +68,12 @@ case "${1:-}" in
   *) exit 0 ;;
 esac
 
-# post-tool runs after EVERY tool call: with nothing queued, answer before the core lookup and its staleness scan.
+# post-tool runs after EVERY tool call: with nothing queued and no ask waiting for its answer (a pending-reply hold, which the
+# core retires once a prompt answered it), answer before the core lookup and its staleness scan.
 if [ "${1:-}" = post-tool ]; then
-  compgen -G "${HW_WORKDIR:-/nonexistent}/.hw/${HW_RUN:-none}/pending-ruling*" >/dev/null || exit 0
+  _t_run="${HW_WORKDIR:-/nonexistent}/.hw/${HW_RUN:-none}"
+  compgen -G "$_t_run/pending-ruling*" >/dev/null || compgen -G "$_t_run/pending-reply-*" >/dev/null \
+    || compgen -G "$_t_run/t[0-9]*/pending-reply-*" >/dev/null || exit 0
 fi
 
 # ── guard 2: are we inside a multiplexer pane at all ───────────────────────
@@ -85,7 +87,7 @@ if [ -z "${HC_TERMINAL_ID:-}" ]; then
 fi
 
 # ── the Go implementation: hw-core stop-hook (core/stop_hook.go) ───────────
-# 0.7.0 removed the bash body: this file stays the registered hook (install.sh, ~/.claude/settings.json, ~/.codex/hooks.json) and
+# 0.7.0 removed the bash body: this file stays the registered hook (install.sh, ~/.claude/settings.json) and
 # execs `hw-core stop-hook` with this hook's stdin untouched. HW_IMPL_STOP_HOOK or a `stop-hook=bash` line is retired: bin/impl-retired.sh
 # says so once and Go runs. hw-core is HW_CORE (a seam of the suite, never rebuilt), else beside this file, else
 # core/dist/<os>-<arch>/ (setup/build-core builds it); one not built or older than core/'s sources is rebuilt by bin/core-rebuild

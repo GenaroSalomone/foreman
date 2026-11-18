@@ -17,9 +17,9 @@ lines for your shell profile: add them and open a new terminal.
 
 - macOS, or Linux (Debian/Ubuntu-class, bash 5; Linux works, not verified per release, see
   `KNOWN-LIMITATIONS.md` L1). Windows was removed in 0.7.0 (see [Windows](#windows) below).
-- `git` with `user.name` and `user.email` set (a dispatch commits as you; an unset identity can fail it), `jq` 1.7 or newer, `python3`, `sd`, `fd` and `rg` (`hw` calls all three).
+- `git` with `user.name` and `user.email` set (a dispatch commits as you; an unset identity can fail it), `jq` 1.7 or newer, `python3` (the pi executor's adapter runs its write guard with `/usr/bin/python3`, an absolute path so a `PATH` entry cannot stand in for it: without one there, every pi tool call is refused), `sd`, `fd` and `rg` (`hw` calls all three).
   On Linux (Debian: `apt install sd fd-find ripgrep`, then link `fdfind` as `fd`)
-  also Node 22.7 or newer (the OpenCode guard plugin is an ES module in a `.js` file).
+  also Node 22.7 or newer (the pi executor's adapter, `setup/pi/hw-executor.ts`, and the guard's conformance drivers run on it; the guard's decision itself is Python).
   On macOS, `--check` does not name `sd`, `fd` and `rg` yet; the Homebrew formula
   and `--with-recommended` install them.
 - [herdr](https://herdr.dev), running, with its Claude Code integration:
@@ -31,11 +31,8 @@ lines for your shell profile: add them and open a new terminal.
   without it the installer refuses before writing anything, and `--check` lists Go as missing
 - optional: the Bitwarden CLI (`npm i -g @bitwarden/cli`), only for a brief that declares `secrets:`
   (see [Secrets](#secrets-bitwarden))
-- for an OpenCode lane: [OpenCode](https://opencode.ai) 1.18.31 or newer, and herdr's OpenCode
-  integration: `herdr integration install opencode` (run `opencode` once first,
-  so its config directory exists)
 
-Every version floor above (herdr, Claude Code, OpenCode, Node, jq and engram)
+Every version floor above (herdr, Claude Code, Node, jq and engram)
 is one row of `lib/hw/deps.conf`. `--check` prints each installed version against its floor and
 refuses one below it with the command to update it; `hw preflight --json -- <dispatch>` does the
 same for the tools that dispatch uses (rule `dep-floor`). A tool that is not installed is reported
@@ -86,9 +83,7 @@ the Command Line Tools, `/usr/bin/git` and `/usr/bin/python3` exist as shims tha
 
 It installs packages and configures nothing. Claude Code's first run,
 `herdr integration install claude` and `engram setup claude-code` stay yours;
-`--check` names them. OpenCode is not in the list: its Homebrew formula was
-1.18.30 when measured, below the 1.18.31 this harness was measured against, so
-an OpenCode lane keeps `npm install -g opencode-ai@latest`.
+`--check` names them.
 
 ```sh
 ./install.sh --with-recommended --check   # prints the commands, runs none
@@ -225,8 +220,7 @@ upgrades with `foreman-setup upgrade --brain ~/brain`, and the `FOREMAN_SH_*` va
 are now `FOREMAN_*` (the three a 0.9.x installer hands to the new one are still read).
 The formula also links `foreman-sh`, only so that a 0.9.x install's own `foreman-sh upgrade`
 completes; it is deprecated, like the name.
-The [1.0 promise](REFERENCE.md#what-10-promises) covers this install; OpenCode and Codex
-are deprecated and outside it.
+The [1.0 promise](REFERENCE.md#what-10-promises) covers this install.
 
 `upgrade` reads what a lane declares from `projects.json`, so your hand edits there
 win. `hw status` tells you when a newer release exists (once a day, silent offline).
@@ -258,8 +252,8 @@ Then:
 ```sh
 brain myapp                                   # open the brainer
 $EDITOR ~/brain/myapp/briefs/first-task.md    # write a brief
-hw myapp first-task --brief ~/brain/myapp/briefs/first-task.md --sdd none --no-report --dry-run
-hw myapp first-task --brief ~/brain/myapp/briefs/first-task.md --sdd none
+hw myapp first-task --brief ~/brain/myapp/briefs/first-task.md --no-report --dry-run
+hw myapp first-task --brief ~/brain/myapp/briefs/first-task.md
 ```
 
 `brain` needs herdr's server up: start `herdr` once in a terminal first (measured on a
@@ -291,8 +285,7 @@ per-lane default `--effort`: `hw` takes `--effort` per dispatch only.
 ## Permissions: skip (recommended) or ask
 
 `hw` and `brain` launch agents with their permission prompts skipped: Claude
-Code with `--dangerously-skip-permissions`, OpenCode with `--auto`. Codex gets
-no flag and keeps its own `approval_policy`. That is **recommended** because
+Code with `--dangerously-skip-permissions`. That is **recommended** because
 an executor runs unattended, and it is a choice, not a requirement:
 
 ```sh
@@ -306,36 +299,22 @@ one word. In a terminal the installer asks once when nothing is set; with no
 terminal, a pipe, or `--check`, it asks nothing and writes nothing. The order
 is the flag, then `HW_PERMISSIONS`, then that file, then `skip`, and the
 manifest's `permissions` line shows which one won. Anything other than `ask`
-or `skip` is refused.
+or `skip` is refused. With `ask`, an unattended executor waits on its prompts until a person answers them in its pane; `hw` has no detector for that dialog.
 
-The cost of `ask`: Claude Code and Codex then stop on every prompt, and
-`hw` cannot answer it or detect it (OpenCode shows it as `blocked
-reason=permission`). Codex is pinned to `-a on-request`. A running pane keeps
+The cost of `ask`: Claude Code then stops on every prompt, and
+`hw` cannot answer it or detect it. A running pane keeps
 what it launched with. The Bypass Permissions warning in "first run" above
 matters only for `skip`.
 
 ## Your own files in the bin directory
 
 Every link the installer writes (`hw`, `brain`, `done-invoker`, `ask-invoker`,
-`channel-send`, `decisions`, and `opencode-auto` for an OpenCode lane) is
+`channel-send` and `decisions`) is
 checked before anything is written. A file or directory of yours under one of
 those names, or a link that points elsewhere, stops the run naming the path,
 and so does a `--bin-dir` that cannot be a directory. Nothing is overwritten.
 
-## OpenCode executors
-
-OpenCode is **deprecated**: outside the [1.0 promise](REFERENCE.md#what-10-promises), it keeps working and can be removed without a major version.
-
-```sh
-./install.sh --brain ~/brain --lane myapp --repo ~/code/myapp --vendor opencode --model opencode/big-pickle
-brain myapp
-```
-
-`--vendor opencode` makes OpenCode the lane's executor. The brainer is still
-Claude Code, and `brain <lane>` opens it without any flag (a lane that ships
-an OpenCode brainer of its own, with an `opencode.json`, keeps opening that
-one; `--claude` forces Claude Code, and `--opencode` still needs that file). `--model` takes
-`provider/model` and is optional; without it OpenCode uses its own default.
+## Reopening brainers
 
 A brainer already open without the cockpit mod picks it up without losing its
 conversation: `brain relaunch --all` (or `brain relaunch <lane>…`, `--dry-run` to
@@ -362,41 +341,14 @@ Executors are not relaunched.
 The cockpit mod needs Claude Code 2.1.289 or newer: below that, `brain` prints
 `cockpit needs claude >= 2.1.289` and opens without it. To open a brainer without
 it on purpose, set `FOREMAN_COCKPIT=0` or pass `brain <lane> --no-cockpit`. What
-it shows and what its buttons run are in the README.
+it shows is in [REFERENCE.md](REFERENCE.md#the-cockpit).
 
-The executor gets its own guard. The installer writes
-`~/brain/<lane>/.opencode-executor/`, and `hw` passes that directory to the
-executor as `OPENCODE_CONFIG_DIR`. It holds a plugin that refuses any shell
-write into your repository, with a policy of its own that leaves the task's
-own worktree writable. Nothing is written to `~/.config/opencode` or to the
-worktree.
+## `--sdd`
 
-`opencode-auto` is linked too: `opencode --auto` with background subagents on,
-the same thing `hw` launches, as a command you can type.
+`--sdd none` is the only mode and the default, so omit it: a dispatch runs outside any framework and needs nothing.
+`--sdd none` and `sdd: none` in a brief are accepted and ignored.
 
-1.18.31 is the oldest OpenCode the harness has been measured against, so it is
-the minimum the installer accepts. It was also measured on 1.18.33.
-
-Signing OpenCode into a provider is yours: `opencode auth login`, or a model
-that needs no login. The installer never reads it.
-
-The vendor is fixed when the lane is created. Running the installer again
-with another `--vendor` for the same lane is refused.
-
-## Frameworks for `--sdd`
-
-`none` is the default: a dispatch without `--sdd` runs outside any framework,
-and needs nothing. `--sdd speckit` opts in. `speckit` is a third-party project the installer
-does not install, and it is refused before anything is built when it is not
-there:
-
-| Mode | What the machine needs |
-|---|---|
-| `speckit` | [Spec Kit](https://github.com/github/spec-kit) (MIT), with a `speckit-*` skill in the repository's `.claude/skills` or in `~/.claude/skills`. Claude Code only: Codex and OpenCode dispatches are refused. |
-
-foreman is not part of that project and implies no endorsement by it.
-
-There is no other mode: `--sdd gentle` and `sdd: gentle` in a brief are gone and
+`--sdd gentle` and `sdd: gentle` in a brief are gone and
 warn, then run `--sdd none`; `hw gentle-home` no longer exists; and the
 `sdd_modes` lane field is not a field any more, so a `projects.json` that still
 carries it fails to load (`unknown lane field(s)`): delete the key. A
@@ -425,8 +377,7 @@ A brief can ask for third-party code-quality plugins with `plugins: [thermo, pon
 in its frontmatter. `hw` loads them into **that executor only**: a Claude Code executor gets one
 `--plugin-dir` per plugin (that session; the plugins' hooks run natively in it), a pi executor one
 `-e <plugin dir>` per plugin (that run: skills and extension; a plugin whose skill an earlier one already ships is handed
-as a per-run mirror of itself with that skill left out, since pi keeps the first copy and warns about the second); opencode and codex are told `NOT APPLIED`
-in the dry run. Nothing is installed globally; what a hook writes goes to `$HW_ARTIFACTS/plugin-state`,
+as a per-run mirror of itself with that skill left out, since pi keeps the first copy and warns about the second). Nothing is installed globally; what a hook writes goes to `$HW_ARTIFACTS/plugin-state`,
 never to `~/.claude` or `~/.pi`; the receipt of the run records the field.
 
 When a brief closes with these plugins' reviews (`review:`, below), each plugin has one focus and every piece runs once:
@@ -464,13 +415,12 @@ skills. A re-task with `hw next` cannot add plugins to a live executor.
 | `~/.config/hw/impl` | never written: Go needs no file (`$XDG_CONFIG_HOME` and `HW_IMPL_FILE` are honoured). An install that builds a core removes the byte-identical `default=bash` file an older `--no-core` install wrote; any other file is left as it is (a `bash` line in it is said once at run time, below) |
 | `~/brain/projects.json`, `guards.json` | your lanes and what the guards protect; created, then only added to |
 | `~/brain/<lane>/` | `CLAUDE.md`, `decisions.md`, `briefs/`, and `.claude/` with the read-only guard |
-| `~/brain/<lane>/.opencode-executor/` | an OpenCode lane only: the executor's guard plugin and its policy |
 | `~/work/<lane>/<task>` | each task's git worktree: beside the brain, never inside it (the brain guard would refuse every command an executor ran there), and outside your repo. Set by `"work"` in `projects.json` |
 | `~/.config/hw/permissions` | only with `--permissions` or an answer in a terminal: `ask` or `skip` (see Permissions above) |
 | `~/work/.hw-ledger/<lane>.jsonl` | the dispatch ledger `hw ledger` reads: one line per real dispatch (brief and its sha, run, account, model, effort, vendor, base, pane). Outside every worktree, so `hw reap` never removes it; `HW_LEDGER_DIR` moves it |
 | `~/brain/<lane>/briefs/archive/<yyyy-mm>/` | what `hw briefs archive --apply` moves a finished brief into, with a `MANIFEST.tsv` (path, blob, reason) that `hw briefs unarchive` reads. Inside the brain, committed; `hw <lane> <task>` refuses an archived task instead of launching it with no brief |
 | `~/archive/<lane>/<task>/` | what `hw reap --apply` and `hw done` keep of a merged task before removing its worktree: its `.artifacts`, `qa-report`, `test-results`, `playwright-report`, and a `pg_dump -Fc` of its database on a lane with `db.provisioned`. Beside `"work"`; `HW_ARCHIVE_ROOT` moves it |
-| `~/.local/bin` | links: `hw`, `brain`, `done-invoker`, `ask-invoker`, `channel-send`, `decisions`, and `opencode-auto` for an OpenCode lane |
+| `~/.local/bin` | links: `hw`, `brain`, `done-invoker`, `ask-invoker`, `channel-send` and `decisions` |
 | `~/.claude/settings.json` (or `$CLAUDE_CONFIG_DIR`) | one Stop hook, merged; the previous file is kept as `settings.json.bak-brain-install` |
 | `~/.claude/skills/judgment-day/`, `~/.claude/agents/jd-*.md` | only with `--with-judgment-day` (see Judgment Day below) |
 
@@ -514,13 +464,13 @@ builds it and refuses without Go, and a command with no `hw-core` stops, naming
   would run against this release's `bin/hw`. Install Go and run the installer again.
 - **Which one runs.** Go, with no switch. `hw shadow` (a 0.5.x diagnostic that ran both and
   logged the differences) is gone: it says so and exits 64.
-- **The eight small tools run Go, with no switch (0.7.0).** The Stop hook
+- **The five small tools run Go, with no switch (0.7.0).** The Stop hook
   (`bin/hw-stop-hook.sh`, still the registered script, which execs `hw-core stop-hook`),
-  `hw secret` and six wrappers — `browser-close`, `brain-archive`, `secret-unlock`,
-  `opencode-auto`, `codex-channel-session-hook.sh` and `hw-sandbox` — are shims that exec
+  `hw secret` and three wrappers — `browser-close`, `brain-archive` and `secret-unlock`
+  — are shims that exec
   their `hw-core` verb. Their bash bodies are gone: a `HW_IMPL_<TOOL>=bash` or `<tool>=bash`
   line is read only to say once that bash was removed, and Go runs. The way back for one of
-  them is `foreman-setup upgrade --to 0.6.3`. KNOWN-LIMITATIONS L16 has what differs.
+  them is `foreman-setup upgrade --to 0.6.3`.
 - **Lane hooks.** The export carries the builders of git-worktree lanes only; a lane
   `build` hook of another name is refused before anything is created (`hw` has no bash left to source it
   into); dispatch with `--worktree none` for a plain work directory.
@@ -558,20 +508,20 @@ own `bw get|unlock|export|list|serve`, and the job that runs `secret-unlock
 `secret-unlock` before the dispatch).
 Without the guard, `hw secret run` is the sanctioned path and nothing forces an
 agent onto it, and the session token opens the whole vault, not just the folder.
-See `KNOWN-LIMITATIONS.md` L23.
+The session token and the master password are readable by your own processes (`KNOWN-LIMITATIONS.md` L2).
 
 ## Windows
 
 Removed in 0.7.0: the Windows code (the `_windows.go` build files, the Git Bash
 compatibility layer `bin/msys-compat.sh`, and the Windows CI workflow) is gone.
 foreman runs on macOS and Linux only. WSL2 is a Linux, so the Linux path may
-work there, but it is not tested (see `KNOWN-LIMITATIONS.md`, L1b).
+work there, but it is not tested (see `KNOWN-LIMITATIONS.md`, L1).
 
 ## Judgment Day (optional)
 
 Nothing requires it, with one exception: a brief that declares `boundary:` is
 not accepted as done without an `APPROVED` design judgment, which needs this
-skill (see KNOWN-LIMITATIONS.md, L10).
+skill.
 
 Judgment Day is a blind review by two judges of a diff before it counts as
 finished: both read the same target, neither sees the other's findings, and only
@@ -616,24 +566,8 @@ manifest and recorded in the run's receipt.
 
 ## Limits, stated
 
-- **Claude Code or OpenCode executors.** pi is dispatched with `--agent pi`, not installed
-  by this script (`herdr integration install pi`; L3b). Codex lanes are not installed: nothing
-  can prove a Codex executor end to end today, so `--vendor codex` is refused.
-  The installer does not write `~/.codex/hooks.json` either, so a Codex session
-  is unguarded until you register the Codex guard yourself (L3, L5).
-- **An OpenCode lane's guard is a plugin, not `permission.edit`.** It judges
-  the `bash` tool and OpenCode's file tools (`write`, `edit`, `multiedit`,
-  `patch`, `apply_patch`) by absolute path. A lane's `permission.edit` deny on
-  a protected repo does not hold by itself: OpenCode 1.18.34 matches edit rules
-  against the path relative to the worktree, so an absolute pattern never
-  matches a file outside it. Any other tool that writes files is not judged.
-- **No OpenCode agent may carry `tools: {edit|write|bash: true}`.** That
-  legacy map appends an allow-all rule after every deny in the config, so
-  `permission` denies stop applying to that agent. Grant tools through
-  `permission` instead; `setup/check-machine` checks the live config.
-- **An OpenCode executor gets no `--agent`** unless `~/.config/opencode/opencode.json`
-  defines the one `hw` asks for (`direct-worker` by default). Without it `hw`
-  warns and OpenCode runs its default agent.
+- **Claude Code executors.** pi is dispatched with `--agent pi`, not installed
+  by this script (`herdr integration install pi`).
 - **One brain per user.** The Stop hook in your Claude Code settings belongs to
   one brain.
 - **A task's worktree is a plain `git worktree add`.** Ignored files like
@@ -645,12 +579,7 @@ manifest and recorded in the run's receipt.
   for the Bypass warning and the fullscreen offer. To repeat it on a new user:
   `./install.sh --check`, then `brain <lane>` *before* the command above (it
   names the waiting screen), then the command, then `hw <lane> probe --brief
-  ~/brain/<lane>/briefs/probe.md --sdd none --model haiku`.
-- **The sandbox is macOS, and Claude Code or pi, only.** `hw <lane> <task> --sandbox`
-  (or `sandbox: true` in a brief) runs an executor inside a Seatbelt profile;
-  the installer sets nothing up for it, and it is refused elsewhere. What it
-  confines and what it leaves open: `THREAT-MODEL.md` and `KNOWN-LIMITATIONS.md`
-  (L11).
+  ~/brain/<lane>/briefs/probe.md --model haiku`.
 - **Your repo's own `.claude/settings.json` hooks must resolve.** hw refuses
   to launch into a worktree whose versioned hooks name a missing binary.
   `--allow-stale-hooks` overrides, and the override is recorded.

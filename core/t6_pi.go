@@ -9,7 +9,7 @@ package main
 // _pi_skills, _pi_project_skill_dir, _pi_skill_args, _plugins_pi_line_check, the `pi)` arms of _build_agent_args,
 // _engram_proxy_args, _validate_sdd_vendor_pair and _dispatch_manifest (PI_LINES), and
 // lib/hw/explorer.sh's pi arms. The launch half (environment, startup screens, the brief's processed proof, the receipts)
-// is t6_pi_launch.go. The pi arms that other files carry (permissions line, brain-guard line, plugins line, sandbox line,
+// is t6_pi_launch.go. The pi arms that other files carry (permissions line, brain-guard line, plugins line,
 // capabilities) stay where the other vendors' are, as one more `case`.
 //
 // No `# MUTATION-ANCHOR` comments here: the bash ids of pi (984, 986, 989, 991, 979-M09, 781-M07, 1003-M03) are named in
@@ -754,16 +754,6 @@ func (d *dsp) piBuildArgs(perm string) {
 }
 
 // ── the refusals ─────────────────────────────────────────────────────────────
-
-// piRefuseSdd is the `pi:*` arm of _validate_sdd_vendor_pair: pi is none-mode only. An UNTYPED --sdd resolves to speckit
-// from the speckit-* skills on disk in a product lane; the refusal then says so, or it names a flag nobody passed.
-func (d *dsp) piRefuseSdd(requested, surface string) {
-	why := ""
-	if requested == "" {
-		why = " (not typed: resolved from the speckit-* skills on disk in " + surface + ")"
-	}
-	d.die("pi framework dispatch REFUSED BEFORE BUILDING ANYTHING: --sdd " + d.sddEffectiveMode + why + " has no pi entry (pi runs --sdd none only). Nothing was built. Use --sdd none, or --agent claude for a framework flow.")
-}
 
 // ── the manifest ─────────────────────────────────────────────────────────────
 

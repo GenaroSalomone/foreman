@@ -492,7 +492,6 @@ var layoutBaseEnvKeys = []string{"HW_PROJECT", "HW_TASK", "HW_WORKDIR", "HW_RUN"
 	"HW_EXECUTOR_VENDOR", "HW_INVOKER_VENDOR", "HW_INVOKER_SESSION",
 	"HW_INVOKER_ENDPOINT", "HW_INVOKER_PANE", "HW_NO_REPORT",
 	"HW_CHAINING_ENABLED", "HW_LAUNCH_MODE", "HW_NEXT_WAIT_MS",
-	"HW_AGENT_PORT", "HW_AGENT_ENDPOINT",
 	"HW_LOCK_DIR",
 	"HW_PORT_WEB", "HW_PORT_API",
 	"HW_REVIEW_BASE_REF", "HW_REVIEW_BASE_BRANCH",
@@ -500,10 +499,6 @@ var layoutBaseEnvKeys = []string{"HW_PROJECT", "HW_TASK", "HW_WORKDIR", "HW_RUN"
 	"CLAUDE_CONFIG_DIR",               // # MUTATION-ANCHOR: 847-B1-06
 	"CLAUDE_CODE_DISABLE_AUTO_MEMORY", // # MUTATION-ANCHOR: 847-B1-07
 	"CLAUDE_CODE_SUBAGENT_MODEL",      // # MUTATION-ANCHOR: 847-B1-08
-	"OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS",
-	"OPENCODE_CONFIG_CONTENT", // # MUTATION-ANCHOR: 847-B1-09
-	"HW_OPENCODE_EFFORT", "HW_OPENCODE_EFFORT_AGENT",
-	"OPENCODE_CONFIG",
 	// pi's guard halves and roster fallback (t6_pi_launch.go: exportHwEnv exports them)
 	"HW_PI_BRAIN_GUARD", "HW_PI_FALLBACK_MODEL", "HW_PI_FALLBACK_THINKING", "HW_PI_ASKED_MODEL", "HW_PI_SUBAGENTS_DIR",
 	"HW_PI_SUBAGENT_MODELS", "HW_PI_EXPLORE_AGENT",
@@ -543,9 +538,6 @@ func (l *lch) renderLayout(tpl string) (string, int) {
 		if v := env[k]; v != "" { // os.environ.get(k): unset and empty are both left out
 			r.baseEnv = append(r.baseEnv, member{k, jstr(v)})
 		}
-	}
-	if v := env["OPENCODE_EXECUTOR_CONFIG"]; v != "" { // keyed on the lane's own declaration, not an inherited dir
-		r.baseEnv = append(r.baseEnv, member{"OPENCODE_CONFIG_DIR", jstr(v)})
 	}
 	if v := env["HW_EXECUTOR_TMPDIR"]; v != "" { // the run's own temp dir, never hw's shared one
 		r.baseEnv = append(r.baseEnv, member{"TMPDIR", jstr(v)})
@@ -962,7 +954,6 @@ func (l *lch) runHere(cwd string) {
 		l.ensureArtifactsDir(cwd)
 	}
 	l.trustDir(cwd)
-	l.applySdd(cwd, l.sdd) // `|| true`
 
 	// Before the split, so the file is already there when the pane's shell starts: a --here pane is the one shape
 	// that carries HW_INVOKER_PANE, which a restored executor cannot obtain any other way.
@@ -1004,7 +995,6 @@ func (l *lch) runHere(cwd string) {
 		if rc := l.sendBrief(pane); rc != 0 { // set -e: the delivery's status ends the run
 			panic(exitNow{rc})
 		}
-		l.verifyOpencodeEffort()
 	} else {
 		// No agent means no task.
 		l.warn(l.agent + " did NOT start in " + pane + " — the pane is a plain shell; start it by hand")

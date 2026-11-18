@@ -80,12 +80,8 @@ func (a *app) usageLaunch() {
 		if v == "" {
 			v = "claude"
 		}
-		if v != "claude" || m != "" {
-			plus := ""
-			if m != "" {
-				plus = " + " + m
-			}
-			a.printf("        vendor: %s%s — no flag needed.\n", v, plus)
+		if note := launchVendorNote(v, m); note != "" {
+			a.printf("        %s\n", note)
 		}
 		if a.c.checkout(l) != "" {
 			b := t.get(l, "branch")
@@ -218,4 +214,20 @@ func foldS(text string, width int) []string {
 	}
 	out = append(out, string(buf))
 	return out
+}
+
+// launchVendorNote is the lane row's vendor line under `hw help launch`, "" when the lane is plain claude. A vendor
+// the dispatch refuses (a retired one, what the released install.sh --vendor wrote, or any other) is not "no flag
+// needed": hw refuses it, in the refusal's words.
+func launchVendorNote(v, m string) string {
+	if !supportedVendor(v) {
+		return "vendor: " + v + " — " + unsupportedVendorWords
+	}
+	if v == "claude" && m == "" {
+		return ""
+	}
+	if m != "" {
+		m = " + " + m
+	}
+	return "vendor: " + v + m + " — no flag needed."
 }

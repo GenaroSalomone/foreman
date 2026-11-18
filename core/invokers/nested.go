@@ -15,8 +15,8 @@ import (
 // took "BRIEFWORD" for its brief, and its ask-invoker reached the brainer and
 // spent one of the REAL run's asks. refuseForeignPaneRun cannot see it: the
 // HW_RUN is the same. What differs is the process tree — a real executor is an
-// interactive agent, and a headless one (claude -p/--print, pi -p/--print,
-// opencode run) among the ancestors is a probe or a subagent shell.
+// interactive agent, and a headless one (claude -p/--print, pi -p/--print)
+// among the ancestors is a probe or a subagent shell.
 
 var interpreters = map[string]bool{"node": true, "bun": true, "bash": true, "sh": true, "python3": true, "env": true}
 
@@ -34,7 +34,7 @@ func headlessAgent(argv string) bool {
 	}
 	flags := f[1:]
 	for i, a := range flags {
-		if a == "--" || a == "--prompt" { // what follows is the brief (opencode's TUI takes it as --prompt): prose, not flags
+		if a == "--" { // what follows is the brief: prose, not flags
 			flags = flags[:i]
 			break
 		}
@@ -52,8 +52,6 @@ func headlessAgent(argv string) bool {
 	switch filepath.Base(f[0]) {
 	case "claude", "pi":
 		return has("-p", "--print")
-	case "opencode":
-		return has("run") // shortcut: a flag VALUE spelled `run` also matches; harmless, such a probe is nested anyway
 	}
 	return false
 }

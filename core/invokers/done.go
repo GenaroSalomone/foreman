@@ -75,15 +75,6 @@ func (c *Ctx) done(args []string) error {
 		c.printf(c.Stdout, "%s\n", doneHelp)
 		return nil
 	}
-	if c.get("HW_SANDBOX") == "1" { // 322-M02
-		sb := c.BinDir + "/hw-sandbox"
-		if st, err := os.Stat(sb); err != nil || st.IsDir() || st.Mode()&0o111 == 0 {
-			return die("running in the sandbox, but %s is missing, so nothing can leave it. NOTHING was sent.", sb)
-		}
-		rc := c.run(runOpts{stdin: c.Stdin, stdout: c.Stdout, stderr: c.Stderr}, sb, append([]string{"request", "done-invoker"}, args...)...)
-		c.exitSpoken = true
-		return &Die{Code: rc}
-	}
 	c.loadRoots()
 
 	status := "done"

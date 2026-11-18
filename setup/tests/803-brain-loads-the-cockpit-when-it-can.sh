@@ -6,8 +6,7 @@
 # the tree and the mod with it and nothing is written to ~/.claude. The flag goes
 # on only for the claude vendor, only with claude >= 2.1.289, and only when
 # neither FOREMAN_COCKPIT=0 nor --no-cockpit is set. Below the floor it is one
-# line on stderr and the brainer opens anyway; an opt-out says nothing; an
-# opencode brainer is not told anything (it has no mods).
+# line on stderr and the brainer opens anyway; an opt-out says nothing.
 #
 #     bash setup/tests/803-brain-loads-the-cockpit-when-it-can.sh
 #
@@ -15,17 +14,16 @@
 . "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 BH="$TMP/tree/brain"
-mkdir -p "$BH/bin" "$BH/lib/hw" "$BH/demo" "$BH/demo2" "$BH/cockpit/.claude-plugin" "$TMP/stub"
+mkdir -p "$BH/bin" "$BH/lib/hw" "$BH/demo" "$BH/cockpit/.claude-plugin" "$TMP/stub"
 cp "$ROOT/lib/hw/deps.sh" "$ROOT/lib/hw/deps.conf" "$BH/lib/hw/"   # the claude floor is a row of this manifest
 cp "${BRAIN_SOURCE:-$ROOT/bin/brain}" "$BH/bin/brain"
 cp "$ROOT/bin/engram-label-proxy" "$ROOT/bin/project-spaces.sh" "$ROOT/bin/runenv" "$BH/bin/"
 chmod +x "$BH/bin/brain"
 BHP="$(cd -P "$BH" && pwd)"
 printf '{"name":"cockpit","version":"0.1.0"}\n' > "$BH/cockpit/.claude-plugin/plugin.json"
-jq '.lanes.demo.space = "demo" | .lanes.demo2 = (.lanes.setup | .vendor = "opencode" | .engram = "demo2label" | .space = "demo2" | .hw_aliases = [] | .brain_aliases = [])' \
+jq '.lanes.demo.space = "demo"' \
   "$ROOT/projects.json" > "$BH/projects.json"
 printf '# demo\n' > "$BH/demo/CLAUDE.md"
-printf '# demo2\n' > "$BH/demo2/CLAUDE.md"; printf '{}\n' > "$BH/demo2/opencode.json"
 
 cat > "$TMP/stub/herdr" <<'STUB'
 #!/usr/bin/env bash
@@ -93,12 +91,6 @@ ENVX="FOREMAN_COCKPIT=0" run 2.1.200 demo --no-cockpit; need_started "opt-out be
 [ "$(cockpit_lines)" = 0 ] || fail "an opt-out below the floor still printed the floor line: $(cat "$TMP/out")"
 pass "803: FOREMAN_COCKPIT=0 and --no-cockpit omit the flag and say nothing"
 
-run 2.1.291 demo2; need_started "opencode"
-[ -z "$(flag_dir)" ] && [ "$(cockpit_lines)" = 0 ] || fail "an opencode brainer was given the cockpit or told about it: $(tr '\n' ' ' < "$TMP/calls.agent-start") :: $(cat "$TMP/out")"
-run 2.1.100 demo2; need_started "opencode below the floor"
-[ "$(cockpit_lines)" = 0 ] || fail "an opencode brainer was told about the claude floor: $(cat "$TMP/out")"
-pass "803: an opencode brainer gets no flag and no message"
-
 mv "$BH/cockpit" "$BH/cockpit.away"
 run 2.1.291 demo; need_started "no mod on disk"
 [ -z "$(flag_dir)" ] && [ "$(cockpit_lines)" = 1 ] || fail "with no cockpit folder brain must open without the flag and print one line: $(cat "$TMP/out")"
@@ -125,9 +117,9 @@ pass "803: the cockpit's claude floor is read from lib/hw/deps.conf; with no man
 #   the opt-out is ignored                    go-803-M02  core/brain_launch.go
 #   --no-cockpit is ignored                   go-803-M03  core/brain_launch.go
 #   the floor message is dropped              go-803-M04  core/brain_launch.go
-#   the flag goes to opencode too             go-803-M05  core/brain_launch.go
+#   (go-803-M05, `the flag goes to opencode too`, is retired: the opencode vendor was removed, fe0ff2fd2)
 #   only the major version is compared        go-803-M06  core/brain_helpers.go
 #   the flag points at a different folder     go-803-M07  core/brain_launch.go
 #   the work root is not passed to the pane   go-803-M08  core/brain_launch.go
 # (The old/new arm that ran the base's bash brain is gone with it: the base's brain is a shim now, and it passes the flag.)
-printf 'coverage - 803: 0 mutants (the 8 bash mutants are retired; go-803-M01..M08 hold them in Go)\n'
+printf 'coverage - 803: 0 mutants (the 8 bash mutants are retired; go-803-M01..M08 minus the retired M05 hold them in Go)\n'

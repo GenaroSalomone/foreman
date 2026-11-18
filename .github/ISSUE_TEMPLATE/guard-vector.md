@@ -11,7 +11,7 @@ as `SECURITY.md` describes.
 
 ## Which guard
 
-<!-- Claude Code / OpenCode / Codex; the hook or plugin file under setup/guards/. -->
+<!-- Claude Code / pi; the hook or plugin file under setup/guards/. -->
 
 ## The command or tool call
 

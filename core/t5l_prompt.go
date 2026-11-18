@@ -17,18 +17,14 @@ type promptFacts struct {
 	// `hw next`: the message opens with the counter and the entry line it builds.
 	retask    bool
 	retaskSeq string
-	entryLine string
 
 	// the launch's frame, above the preamble
 	assetsNote string
 
-	// grants and the SDD entry
+	// grants
 	secrets     string
 	requestedBy string
 	authorizes  []string // "<destination> :: <operation> :: <handle>"
-	sdd         string   // the framework mode in play ("" = none)
-	sddEntry    string   // its single entry command ("" = none)
-	operator    string   // who a speckit decision belongs to
 
 	// the preamble
 	lane, task                    string
@@ -71,7 +67,7 @@ type promptBlock struct {
 // the sections, in the order the executor reads them
 const (
 	grpContract = iota // what this is and how to report, who to ask, what to remember, whom to delegate to
-	grpGranted         // what this brief grants, the framework's entry
+	grpGranted         // what this brief grants
 	grpClose           // how a build closes
 	grpBrief           // the brief itself
 )
@@ -89,7 +85,6 @@ func closesWithJD(f *promptFacts) bool { return f.jd }
 
 func hasAuthorization(f *promptFacts) bool  { return len(f.authorizes) > 0 } // # MUTATION-ANCHOR: 862-G18
 func hasGrants(f *promptFacts) bool         { return hasSecrets(f) || hasAuthorization(f) }
-func hasLaunchEntry(f *promptFacts) bool    { return !f.retask && f.sddEntry != "" }
 func hasSpecialists(f *promptFacts) bool    { return f.piNote == "" && f.specialists != "" }
 func hasLaneQAOverride(f *promptFacts) bool { return f.laneNote != "" && f.laneQA != "" }
 func closesWithPlugins(f *promptFacts) bool { return !f.jd && f.pluginsOnly }
@@ -122,8 +117,6 @@ const noSpecialistsLine = "No specialist subagents in this lane (no ops-investig
 
 func noSpecialistsText(*promptFacts) string { return noSpecialistsLine } // # MUTATION-ANCHOR: 847-C-05
 
-func isCodex(f *promptFacts) bool { return f.vendor == "codex" } // # MUTATION-ANCHOR: 847-C-06 # MUTATION-ANCHOR: 862-G19
-
 func hasLaneNote(f *promptFacts) bool { return f.laneNote != "" } // # MUTATION-ANCHOR: 847-C-07
 
 func hasQATarget(f *promptFacts) bool { return f.qaTarget && f.portWeb != "" } // # MUTATION-ANCHOR: 847-C-08
@@ -143,13 +136,11 @@ var promptBlocks = []promptBlock{
 	{"remote-none", grpContract, hasNoRemoteLine, noRemoteText},
 	{"pi-guard-session", grpContract, hasPiGuardLine, piGuardText},
 	{"tier", grpContract, hasTier, tierText},
-	{"codex-rules", grpContract, isCodex, codexRulesText},
 	{"lane-note", grpContract, hasLaneNote, func(f *promptFacts) string { return f.laneNote }},
 	{"lane-qa-override", grpContract, hasLaneQAOverride, laneQAOverrideText},
 	{"qa-target", grpContract, hasQATarget, qaTargetText},
 	{"assets", grpGranted, hasAssets, func(f *promptFacts) string { return f.assetsNote }},
 	{"grants", grpGranted, hasGrants, grantsText},
-	{"sdd-entry", grpGranted, hasLaunchEntry, sddEntryLaunchText},
 	{"behaviour-fix", grpClose, isBuild, behaviourFixText},
 	{"checks", grpClose, isBuild, func(*promptFacts) string { return checksNote }},
 	{"design-gate", grpClose, hasDesignGate, designJudgmentText},
@@ -189,7 +180,7 @@ func renderPreamble(f *promptFacts) string {
 }
 
 func retaskOpenText(f *promptFacts) string {
-	return "NEXT TASK (task " + f.retaskSeq + " of this session — the previous one is closed and reported).\nYour ask budget and your done-invoker are reset for it: report this one with\ndone-invoker when it is finished, exactly as you did the last.\n\n" + f.entryLine + "---"
+	return "NEXT TASK (task " + f.retaskSeq + " of this session — the previous one is closed and reported).\nYour ask budget and your done-invoker are reset for it: report this one with\ndone-invoker when it is finished, exactly as you did the last.\n\n---"
 }
 
 // askNote stays whole on every vendor: the measured gap is a pi executor that ignored a prohibition the brief itself wrote
@@ -238,48 +229,6 @@ func grantsText(f *promptFacts) string {
 		sb.WriteString("Inside it, act without asking. Any other destination, operation, credential or\nsession is unauthorized, for you and every subagent: ask-invoker, or --blocked.")
 	}
 	return sb.String()
-}
-
-// sddEntryLaunchText is the launch's FIRST ACTION line (the framework entry).
-func sddEntryLaunchText(f *promptFacts) string {
-	phase := ""
-	if f.sdd == "speckit" {
-		phase = "\n\n" + speckitPhaseNote(f.operator)
-	}
-	return "FIRST ACTION, before anything else: run " + f.sddEntry + " for this task.\nThe framework mode here is " + f.sdd + " and this brief is its input, not a licence to\nstart editing. Do not read code, write files or run tests until " + f.sddEntry + " has run." + phase
-}
-
-// sddEntryRetaskText is `hw next`'s entry line, the text that opens the re-task message under the counter.
-func sddEntryRetaskText(f *promptFacts) string {
-	if f.sdd == "" {
-		return ""
-	}
-	if f.sddEntry == "" {
-		return bashSub("Framework mode for this task: " + f.sdd + ". hw forces no entry command.\n\n")
-	}
-	entry := bashSub("FIRST ACTION, before anything else: run " + f.sddEntry + " for this task. The framework mode\nfor it is " + f.sdd + " and what follows is its input, not a licence to start editing.\n\n")
-	if f.sdd == "speckit" {
-		entry += "\n\n" + bashSub(speckitPhaseNote(f.operator)) + "\n\n"
-	}
-	return entry
-}
-
-func speckitPhaseNote(operator string) string {
-	return `A SPEC KIT PHASE IS NOT THE TASK. Finishing /speckit-specify — or plan, tasks,
-or any other speckit-* phase — is not finishing this task: go straight on to the
-next phase, through implementation, and close with done-invoker only when the
-flow and the brief are both done. A [NEEDS CLARIFICATION] marker is yours to
-resolve from the brief and the code: decide, write the decision and its reason
-into the spec, and continue. Do not wait for a human for it. Only a decision
-that is genuinely ` + operator + `'s — money, a third party, an irreversible or outward
-action — goes through ask-invoker, and the task stays open while it waits.
-
-BETWEEN /speckit-tasks AND /speckit-implement, A FRESH /speckit-analyze. Run it
-in a new subagent that sees only spec.md, plan.md, tasks.md and the project
-constitution — not this conversation, not your reasoning. Its report is
-read-only. A CRITICAL finding is corrected once, in the artifact it names, and
-then you go on to /speckit-implement without re-running it. Anything below
-CRITICAL does not stop the flow.`
 }
 
 func contractText(f *promptFacts) string {
@@ -332,7 +281,7 @@ func tierText(f *promptFacts) string {
 
 // memoryText: the proxy accepts the label (bin/engram-label-proxy), forces
 // all_projects on a search, and refuses a decision/discovery/bugfix save without a topic_key: the executor is told the last
-// because pi and codex load no rule saying so.
+// because pi loads no rule saying so.
 func memoryText(f *promptFacts) string {
 	label := orDefault2(f.label, "brain")
 	key := "a decision/discovery/bugfix save also needs a topic_key, e.g. " + f.lane + "/" + f.task + "/findings."
@@ -344,14 +293,6 @@ func memoryText(f *promptFacts) string {
 
 func specialistsText(f *promptFacts) string {
 	return "Specialists: " + strings.Join(strings.Fields(f.specialists), ", ") + ". When the job is theirs, delegate it: they carry the access and its conventions."
-}
-
-func codexRulesText(f *promptFacts) string {
-	return `RULES CODEX DOES NOT LOAD (shared rules, one line each):
-- Secrets: never print, copy into a new file, paste or commit .env, *.db, *.credentials or secrets/; report key names, never values.
-- A credential comes as a ` + "`secrets:`" + ` item (` + "`hw secret run`" + `) or a Keychain handle; never ask for a value.
-- Browser: close it with ` + f.binDir + `/browser-close, and never retry a failed launch (a failed launch is a blocked report).
-- Artifacts (audio, exports, captures, generated files) go to $HW_ARTIFACTS, never into git status.`
 }
 
 func laneQAOverrideText(f *promptFacts) string {

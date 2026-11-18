@@ -118,7 +118,7 @@
           ],
           "description": "The suite or gate running for this task: a live suite-gate slot (bin/suite-gate, pid and start time) whose owner.task is the task or whose owner.cmd is `hw done verification of <task>`; else a running `setup/test-hw` process whose cwd is inside the task's worktree (one `ps` and one `lsof`, cached 15 s). null when none."
         },
-        "vendor": { "type": "string", "minLength": 1, "description": "The harness as hw recorded it (claude, opencode, codex, pi, …): text as it is, not a closed list; `unknown` when the run recorded none." },
+        "vendor": { "type": "string", "minLength": 1, "description": "The harness as hw recorded it (claude, pi, …): text as it is, not a closed list; `unknown` when the run recorded none." },
         "model": { "type": ["string", "null"] },
         "effort": { "type": ["string", "null"], "description": "The run's resolved effort, from the `effort=` line of its dispatch file; null when the run has none (or only the agent's own default). The card shows it beside the model, nothing when null." },
         "agent_status": { "enum": ["idle", "working", "unknown"], "description": "herdr's own status for the pane." },
@@ -129,7 +129,7 @@
         "turn_ended_at": { "oneOf": [{ "$ref": "#/$defs/ms" }, { "type": "null" }] },
         "dispatched_at": { "$ref": "#/$defs/ms", "description": "When the run began: the first line of its receipt, else its dispatch file, else its env file. The card says `working <now - dispatched_at>`." },
         "turn_started_at": { "oneOf": [{ "$ref": "#/$defs/ms" }, { "type": "null" }], "description": "When the current turn began, for a `working` row; null otherwise. No adapter publishes a turn start, so it is derived from the tokens: the previous turn's `turn_ended_at`, or dispatched_at in the first turn. A turn that started after an idle gap (a ruling woke it) is therefore overstated by that gap." },
-        "last_progress_at": { "oneOf": [{ "$ref": "#/$defs/ms" }, { "type": "null" }], "description": "For a `working` row, the newest of: dispatched_at, the last commit of the executor's worktree (its HEAD reflog), the newest file mtime in that worktree (not `.git`, `.hw`, `node_modules` or other caches; cached 30-60 s), and the mtime of its transcript (claude only: an opencode or codex executor woken after an idle gap reads as stalled until its first commit or file write). null for a row that is not working." },
+        "last_progress_at": { "oneOf": [{ "$ref": "#/$defs/ms" }, { "type": "null" }], "description": "For a `working` row, the newest of: dispatched_at, the last commit of the executor's worktree (its HEAD reflog), the newest file mtime in that worktree (not `.git`, `.hw`, `node_modules` or other caches; cached 30-60 s), and the mtime of its transcript (claude only: a pi executor woken after an idle gap reads as stalled until its first commit or file write). null for a row that is not working." },
         "turns": { "type": ["integer", "null"], "minimum": 0 },
         "children_running": { "type": ["string", "null"], "description": "Free text from the adapter, e.g. `2 shell`; null when none." },
         "subagents": {

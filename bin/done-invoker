@@ -31,7 +31,7 @@
 # for a completion report means the brainer may act on it mid-thought about
 # something else. So: publish the completion into herdr's own state, notify
 # the operator, and only then prompt, gated on the brainer being idle. See
-# invoker-common.sh for the rationale and the wait budget.
+# core/invokers (done.go) for the rationale and the wait budget.
 #
 # EXIT CODES — DELIVERY AND CLOSE ARE TWO FACTS, SO THEY GET TWO CODES
 #

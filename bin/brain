@@ -4,7 +4,6 @@
 #
 #   brain <lane> | <alias>   a lane of projects.json, by name or by one of
 #                            its brain_aliases
-#   brain <name> --opencode  same brainer, opencode instead of claude
 #   brain <name> --reset     replace the agent, keeping the space, tab and pane
 #   brain <name> --reset --self   the brainer resetting ITSELF (see below)
 #   brain                    list what exists
@@ -33,11 +32,6 @@
 # the reset has been ARMED, not performed — the detached arm writes what it did
 # to a log this command names, because the conversation that asked will not be
 # there to read it.
-#
-# The two agents read the SAME brainer: CLAUDE.md, decisions.md and the command
-# bodies are one copy each. opencode reaches them through opencode.json
-# (`instructions`) and .opencode/command/*.md symlinks, so nothing is duplicated
-# and the two cannot drift apart.
 #
 # THE SHIM (go-060 S5): this file keeps the name (the interface, setup/release-standard.md «Versioning») and execs
 # `hw-core brain` with the same argv, stdin and environment; the behaviour is core/brain*.go. hw-core is HW_CORE (a seam of the

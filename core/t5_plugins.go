@@ -106,7 +106,7 @@ func (d *dsp) checkPlugins() {
 
 // pluginsArgs is _plugins_args: claude gets one --plugin-dir per plugin, after the guard's.
 func (d *dsp) pluginsArgs() {
-	if d.agent != "claude" { // # MUTATION-ANCHOR: 847-P-02
+	if d.agent != "claude" {
 		return
 	}
 	for _, n := range d.pluginsDeclaredInstalled() {
@@ -148,7 +148,7 @@ func (d *dsp) pluginsLines() string {
 // pluginsReceiptValue is _plugins_receipt_value.
 func (l *lch) pluginsReceiptValue() string {
 	asked := strings.Join(l.pluginsDeclared(), ",")
-	if l.agent == "claude" || l.agent == "pi" { // # MUTATION-ANCHOR: 847-P-03
+	if l.agent == "claude" || l.agent == "pi" {
 		return asked
 	}
 	return "NOT APPLIED — " + orDefaultStr(l.agent, "unknown") + " does not load plugins (asked: " + asked + ")"

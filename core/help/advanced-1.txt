@@ -4,8 +4,7 @@ ADVANCED
   PERMISSIONS
     --permissions <ask|skip>
                        skip (recommended, and the default): Claude Code gets
-                       --dangerously-skip-permissions, OpenCode --auto, Codex keeps
-                       its own approval_policy. ask: none of those flags, so every
+                       --dangerously-skip-permissions. ask: not that flag, so every
                        permission prompt stays on; an unattended executor then waits
                        on it and a person must answer in its pane. Order: the flag,
                        HW_PERMISSIONS, the machine file ~/.config/hw/permissions
@@ -20,7 +19,7 @@ ADVANCED
                        listed below; anywhere else `personal` is reached
                        only by typing it, and the manifest marks it chosen.
                        Claude Code only:
-                       opencode and codex do not read it, and the manifest says
+                       pi does not read it, and the manifest says
                        NOT APPLIED rather than claiming a redirect. A non-default
                        account is refused unless `claude-personal --check` proves
                        its skills and plugins match the default account.

@@ -1,73 +1,49 @@
-// Cross-runtime AND cross-lane conformance for the read-only guard.
+// Cross-lane conformance for the read-only guard.
 //
 // Python is exercised through its PreToolUse stdin contract, from each lane's
-// real registered hook path; JS through each lane's real opencode plugin and
-// its `tool.execute.before` hook, with bash `args.workdir`. Both are the shims
-// an agent actually loads, so a broken shim fails here rather than in a pane.
+// real registered hook path (the lane shim), so a broken shim fails here rather
+// than in a pane. (The pi executor asks the same Python, through
+// setup/guards/deny_repo_writes_ask.py: setup/tests/181 and 208 drive that question.)
 //
-// WHAT THIS SUITE USED TO PROVE, AND WHY THAT WAS NOT ENOUGH. Until 2026-09-06
-// it asserted, per lane, that the lane's Python and the lane's JavaScript
-// agreed. It never compared one lane against another. So an 11.5 KB spread
-// across the four Python copies — one lane's copy alone had heredoc
-// stripping, quote masking and the teardown exemption, and that same copy
-// alone had LOST the boundary-correct cwd test — sat under a green 180/180 for
-// as long as each lane happened to agree with its own twin on 15 vectors. That
-// is the same "confidence without protection" shape the guard itself is about,
-// one level up.
-//
-// So there are three assertions per vector per lane now:
+// There are two assertions per vector per lane:
 //   <lane>/<runtime>   the verdict is what the vector says
-//   <lane> parity      python and javascript agree            (runtime parity)
 //   cross-lane         every lane agrees with every other     (LOGIC parity)
 //
-// THREE DRIVERS, NOT TWO (2026-09-29). Codex's guard is a third entry point,
-// `deny-repo-writes-codex.py`, that resolves its OWN cwd and lane from the
-// payload and the environment before it asks the shared core anything. Until
-// today none of the vectors reached it, so the audit's measured 80 x 2 drivers
-// left the only guard that scopes itself untested by the suite that claims to
-// test "the guards". It runs every vector below, with one difference that is
-// the design and not a gap: a brain-ROOT session is guarded only when the
-// payload's cwd is inside brain (a launch-time variable naming the bare root is
-// deliberately not trusted, see `main` there), so for the `brain` lane a vector
-// whose cwd is outside brain EXPECTS `allow` under Codex, and says so in its
-// name. Nothing is skipped.
+// A vector marked `lane_specific` is exempt from the cross-lane assertion and
+// must instead declare `expect_with_worktree_roots` (or, for a difference no
+// policy field carries, `expect_by_lane`) — that is how a deliberate per-lane
+// difference (the spent-worktree teardown) stays visible as an assertion rather
+// than becoming the next silent drift.
 //
 // A SECOND ARM RUNS ON A SANDBOX POLICY (`"sandbox"` vectors). A vector that
 // needs a protected root to exist, or to be absent, cannot lean on the machine
 // it runs on: the brain's has every root and the export's has none, and that is
-// how a hole in the JavaScript guard was found by the export and not here. The
+// how a hole in a guard was found by the export and not here. The
 // sandbox arm writes its own `guards.json` under a temporary HOME, copies the
 // guards beside it, and builds exactly the tree each vector needs.
 //
-// Cross-lane is the new one, and it is what makes "one implementation" a
-// measured claim instead of a filesystem observation. A vector marked
-// `lane_specific` is exempt and must instead declare `expect_with_worktree_roots`
-// (or, for a difference no policy field carries, `expect_by_lane`) — that is
-// how a deliberate per-lane difference (the spent-worktree teardown) stays
-// visible as an assertion rather than becoming the next silent drift.
-//
 // ONE PROCESS FOR THE VECTORS, A SAMPLE FOR THE PROCESS (2026-10-20). This suite
-// spawned `python3 <hook>` once per Python and Codex vector, ~2000 interpreters a
-// run, and the mutation arm repeated that for each of 77 mutants. The claim
-// "every vector through the real process entry" is RENAMED, not dropped:
+// spawned `python3 <hook>` once per vector, ~2000 interpreters a run, and the
+// mutation arm repeated that for each of 77 mutants. The claim "every vector
+// through the real process entry" is RENAMED, not dropped:
 //
-//   every vector     through the real hook FILE (the lane shim, or the Codex
-//                    guard) run in-process by `hook-batch.py`: same `main`, same
-//                    `decide`, same refusal protocol, no second implementation.
-//   a fixed sample   (first vector per lane x tool x outcome, for the Claude and
-//                    the Codex entry) through the real `spawnSync("python3",
-//                    [hook])`, whose answer must EQUAL the batch's — status,
-//                    stdout and stderr — and meet the vector's own expectation.
+//   every vector     through the real hook FILE (the lane shim) run in-process
+//                    by `hook-batch.py`: same `main`, same `decide`, same
+//                    refusal protocol, no second implementation.
+//   a fixed sample   (first vector per lane x tool x outcome) through the real
+//                    `spawnSync("python3", [hook])`, whose answer must EQUAL the
+//                    batch's — status, stdout and stderr — and meet the vector's
+//                    own expectation.
 //
 // What a vector no longer proves on its own is the PROCESS: interpreter start-up,
 // the OS's `sys.path[0]`, the exit status the kernel reports. The sample proves
 // that, for one vector per outcome rather than every one. The malformed-payload
-// shapes, Codex's lane-resolution edges and the sandbox arm keep a real spawn each.
+// shapes and the sandbox arm keep a real spawn each.
 import { copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { homedir, tmpdir } from "node:os";
 import { dirname, basename, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 const root = process.env.DENY_GUARD_ROOT ?? fileURLToPath(new URL("../..", import.meta.url));
 const allVectors = JSON.parse(readFileSync(new URL("./deny-repo-writes-vectors.json", import.meta.url)))
@@ -78,8 +54,16 @@ const sandboxVectors = allVectors.filter((v) => v.sandbox);
 // THE LANE ROOTS COME FROM THE GUARD, NOT FROM A COPY OF THEM HERE. This file
 // used to carry its own table of the four lanes' repo/worktrees pairs, which is
 // one more place for the thing being tested and the test to disagree.
-const { LANES, BRAIN_ROOT } = await import(
-  pathToFileURL(`${root}/setup/guards/deny-repo-writes.js`).href);
+const { BRAIN_ROOT, LANES } = (() => {
+  const doc = JSON.parse(execFileSync("python3", ["-c",
+    "import json, sys; sys.path.insert(0, sys.argv[1]); import deny_repo_writes as g; " +
+    "print(json.dumps({'brain': g.BRAIN_ROOT, 'lanes': g.LANES}))", `${root}/setup/guards`], { encoding: "utf8" }));
+  const lanes = {};
+  for (const [name, l] of Object.entries(doc.lanes)) {
+    lanes[name] = { repo: l.repo, worktrees: l.worktrees, worktreeRoots: l.worktree_roots, writeHere: l.write_here };
+  }
+  return { BRAIN_ROOT: doc.brain, LANES: lanes };
+})();
 const laneNames = Object.keys(LANES);
 
 const outside = "/tmp/deny-repo-writes-out";
@@ -186,12 +170,6 @@ function claudeResult(r) {
   catch { return { crashed: `invalid hook output: ${out}` }; }
 }
 
-function codexResult(r) {
-  if (r.status === 0) return { allowed: true, reason: "" };
-  if (r.status === 2) return { allowed: false, reason: r.stderr.trim() };
-  return { crashed: `${r.status}: ${r.stderr}` };
-}
-
 const payloadOf = (command, cwd, toolName = "Bash") =>
   JSON.stringify({ tool_name: toolName, tool_input: { command }, cwd });
 
@@ -263,32 +241,6 @@ function python(path, command, cwd, env) {
   return claudeResult(realEntry({ hook: path, stdin: payloadOf(command, cwd), env }));
 }
 
-async function javascript(path, sessionDir, command, cwd) {
-  const mod = await import(`${pathToFileURL(path).href}?case=${Math.random()}`);
-  const hooks = await mod.DenyRepoWrites({ directory: sessionDir });
-  try {
-    await hooks["tool.execute.before"]({ tool: "bash", sessionID: "test", callID: "test" }, { args: { command, workdir: cwd } });
-    return { allowed: true, reason: "" };
-  } catch (error) { return { allowed: false, reason: String(error.message ?? error) }; }
-}
-
-// CODEX'S PROTOCOL IS ITS OWN: exit 0 allows, exit 2 refuses with the reason on
-// stderr (Claude's JSON on stdout would print a blob and allow). The lane comes
-// from the payload's cwd or from `CODEX_PROJECT_DIR`, so the environment is
-// built here rather than inherited: `PWD` and `CLAUDE_PROJECT_DIR` are what an
-// operator's own shell leaves lying around, and either one naming a lane would
-// guard a case the vector meant to leave unguarded.
-function codexEnv(laneDir, neutralDir, home) {
-  const env = { ...process.env, CODEX_PROJECT_DIR: laneDir, PWD: neutralDir };
-  delete env.CLAUDE_PROJECT_DIR;
-  if (home) env.HOME = home;
-  return env;
-}
-
-function codex(path, command, cwd, env, neutralDir, toolName = "Bash") {
-  return codexResult(realEntry({ hook: path, stdin: payloadOf(command, cwd, toolName), env, cwd: neutralDir }));
-}
-
 let pass = 0, fail = 0;
 const ok = (name) => { pass++; console.log(`ok - ${name}`); };
 // DENY_GUARD_FAIL_FAST=1 STOPS AT THE FIRST `not ok`, for the mutation arm only
@@ -311,9 +263,8 @@ const notOk = (name, detail = "") => {
   }
 };
 
-// Per-driver tally, so the conformance count says how many assertions EACH of
-// the three drivers ran, and a driver that quietly ran none shows as a zero.
-const driverTally = { python: { pass: 0, fail: 0 }, javascript: { pass: 0, fail: 0 }, codex: { pass: 0, fail: 0 } };
+// Per-driver tally, so a driver that quietly ran no assertion shows as a zero.
+const driverTally = { python: { pass: 0, fail: 0 } };
 const tally = (runtime, good) => { driverTally[runtime][good ? "pass" : "fail"]++; };
 
 // One verdict against one vector: the deny/allow shape, its category and
@@ -354,10 +305,6 @@ function judge(label, runtime, vector, expect, result) {
 
 const verdictOf = (r) => r.crashed ? "crashed" : r.allowed ? "allow" : category(r.reason);
 
-const codexPath = `${root}/setup/guards/deny-repo-writes-codex.py`;
-// Codex guards a brain-ROOT session only from the payload's cwd (see the header).
-const underBrain = (dir) => dir === BRAIN_ROOT || dir.startsWith(`${BRAIN_ROOT}/`);
-
 // shape[vectorId][lane] = "allow" | "deny:<category>" | "crashed"
 const shape = Object.create(null);
 // expected[vectorId][lane] = the verdict the lane's own policy row asks for.
@@ -366,7 +313,7 @@ const expected = Object.create(null);
 const voice = Object.create(null);
 
 try {
-  // THE LANE ARM'S PYTHON AND CODEX ANSWERS COME FROM ONE `hook-batch.py`
+  // THE LANE ARM'S ANSWERS COME FROM ONE `hook-batch.py`
   // PROCESS, asked before any assertion so the sample below can run first.
   const lanes = new Map();
   for (const laneName of laneNames) {
@@ -376,16 +323,10 @@ try {
     // became a lane like the other four and its registered files sit directly
     // under it.
     const laneDir = laneName === "brain" ? root : `${root}/${laneName}`;
-    // Where a Codex session of this lane stands: the lane's own directory under
-    // BRAIN, which is where `hw` starts it. The worktree this suite runs from
-    // is not under BRAIN, so the lane cannot be read off `root`.
-    const codexLaneDir = laneName === "brain" ? BRAIN_ROOT : `${BRAIN_ROOT}/${laneName}`;
     lanes.set(laneName, {
       r: laneRender(laneName),
       laneDir,
       pyPath: `${laneDir}/.claude/hooks/deny-repo-writes.py`,
-      jsPath: `${laneDir}/.opencode/plugin/deny-repo-writes.js`,
-      cEnv: codexEnv(codexLaneDir, base),
     });
   }
   // `expect_with_worktree_roots` is the expectation for a lane whose policy
@@ -394,8 +335,8 @@ try {
   const expectFor = (laneName, vector) => vector.expect_by_lane?.[laneName]
     ?? (vector.expect_with_worktree_roots && LANES[laneName].worktreeRoots?.length
       ? vector.expect_with_worktree_roots : vector.expect);
-  // The Claude entry's request, then Codex's, per lane per vector — the order the
-  // assertions below consume them in.
+  // The Claude entry's request per lane per vector — the order the assertions
+  // below consume them in.
   const requests = [];
   const sampleOf = new Map();   // "<lane>|<runtime>|Bash|<outcome>" -> its first request
   for (const [laneName, L] of lanes) {
@@ -404,17 +345,13 @@ try {
       const cwd = render(vector.cwd, L.r);
       const stdin = payloadOf(command, cwd);
       const expect = expectFor(laneName, vector);
-      const codexWanted = laneName === "brain" && !underBrain(cwd) ? "allow" : expect;
       const py = { hook: L.pyPath, stdin, env: null, cwd: null };
-      const cx = { hook: codexPath, stdin, env: L.cEnv, cwd: base };
       // FIXED BY THE VECTOR'S OWN EXPECTATION, never by what the code under test
       // answered: the first vector of each lane x runtime x tool x outcome.
       const outcome = (wanted) => wanted === "allow" ? "allow" : `deny:${vector.category}`;
-      for (const [runtime, request, wanted, claudeShape] of [["python", py, expect, true], ["codex", cx, codexWanted, false]]) {
-        const key = `${laneName}|${runtime}|Bash|${outcome(wanted)}`;
-        if (!sampleOf.has(key)) sampleOf.set(key, { request, vector, wanted, claudeShape, at: requests.length + (runtime === "python" ? 0 : 1) });
-      }
-      requests.push(py, cx);
+      const key = `${laneName}|python|Bash|${outcome(expect)}`;
+      if (!sampleOf.has(key)) sampleOf.set(key, { request: py, vector, wanted: expect, at: requests.length });
+      requests.push(py);
     }
   }
   const batch = runBatch(requests, [...sampleOf.values()].map((s) => s.at));
@@ -433,29 +370,19 @@ try {
     if (same) ok(`sample ${key} (${s.vector.id}): the batch answer equals the real entry's`);
     else notOk(`sample ${key} (${s.vector.id}): the batch answer equals the real entry's`,
       `real=${JSON.stringify(real).slice(0, 300)} batch=${JSON.stringify(answered).slice(0, 300)}`);
-    judge(`sample ${key} (${s.vector.id}) real entry`, runtime, s.vector, s.wanted,
-      (s.claudeShape ? claudeResult : codexResult)(real));
+    judge(`sample ${key} (${s.vector.id}) real entry`, runtime, s.vector, s.wanted, claudeResult(real));
   }
 
   let at = 0;
   for (const laneName of laneNames) {
-    const { r, laneDir, jsPath } = lanes.get(laneName);
+    const { r } = lanes.get(laneName);
     for (const vector of vectors) {
       const command = render(vector.command, r);
       const cwd = render(vector.cwd, r);
       const expect = expectFor(laneName, vector);
       (expected[vector.id] ??= Object.create(null))[laneName] = expect;
-      const codexUnguarded = laneName === "brain" && !underBrain(cwd);
-      const results = [
-        ["python", claudeResult(await batch.answer(at++)), expect, ""],
-        ["javascript", await javascript(jsPath, laneDir, command, cwd), expect, ""],
-        ["codex", codexResult(await batch.answer(at++)),
-          codexUnguarded ? "allow" : expect,
-          codexUnguarded ? " (by design: a brain-root session is guarded only from a cwd inside brain)" : ""],
-      ];
-      for (const [runtime, result, wanted, note] of results) {
-        judge(`${laneName}/${runtime} ${vector.id}${note}`, runtime, vector, wanted, result);
-      }
+      const py = claudeResult(await batch.answer(at++));
+      judge(`${laneName}/python ${vector.id}`, "python", vector, expect, py);
       // A DENIAL MUST BE IN ITS OWN LANE'S VOICE.
       //
       // Until 2026-09-07 a shim naming the wrong lane guarded visibly wrong
@@ -471,24 +398,10 @@ try {
       // branch carries the redirect sentence (the copy-in diagnosis ends on the
       // destination operand instead). Asking it of every vector would fail a
       // correct file; asking it of the SET is exactly the property that matters.
-      for (const [, result] of results) {
-        if (result.crashed || result.allowed) continue;
+      if (!py.crashed && !py.allowed) {
         for (const [other, cfg] of Object.entries(LANES)) {
-          if (result.reason.includes(cfg.writeHere)) (voice[laneName] ??= new Set()).add(other);
+          if (py.reason.includes(cfg.writeHere)) (voice[laneName] ??= new Set()).add(other);
         }
-      }
-
-      const [py, js, cx] = results.map(([, result]) => result);
-      const same = !py.crashed && !js.crashed && py.allowed === js.allowed &&
-        (py.allowed || category(py.reason) === category(js.reason));
-      if (same) ok(`${laneName} parity ${vector.id}`);
-      else notOk(`${laneName} parity ${vector.id}`, `py=${verdictOf(py)} js=${verdictOf(js)}`);
-      // Codex agrees with Python wherever Codex is guarding at all.
-      if (!codexUnguarded) {
-        const cxSame = !py.crashed && !cx.crashed && py.allowed === cx.allowed &&
-          (py.allowed || category(py.reason) === category(cx.reason));
-        if (cxSame) ok(`${laneName} codex parity ${vector.id}`);
-        else notOk(`${laneName} codex parity ${vector.id}`, `py=${verdictOf(py)} codex=${verdictOf(cx)}`);
       }
 
       (shape[vector.id] ??= Object.create(null))[laneName] =
@@ -549,46 +462,21 @@ try {
       `lanes disagree — ${JSON.stringify(byLane)}. Undeclared drift is what the eight-copy split cost; declare it with lane_specific or fix it`);
   }
 
-  // ── WHAT ONLY CODEX DECIDES ────────────────────────────────────────────
-  // Where a session is a brainer is Codex's own question (the other two vendors
-  // answer it with per-directory registration), so the lane-resolution edges get
-  // their own assertions instead of borrowing a vector's cwd.
-  {
-    // The root lane's own repo: every lane protects it, and a lane's extra trees
-    // (a Cowork store) are not the root's to guard.
-    const repo = LANES.brain.repo;
-    const cmd = `rm -rf ${repo}/deny-guard-x`;
-    const rootEnv = codexEnv(BRAIN_ROOT, base);
-    const codexCases = [
-      ["a session standing in the brain root is guarded", codex(codexPath, cmd, BRAIN_ROOT, rootEnv, base), "deny"],
-      ["a session in a brain subdirectory that is no lane gets the root lane", codex(codexPath, cmd, `${BRAIN_ROOT}/bin`, rootEnv, base), "deny"],
-      ["an executor's worktree outside brain is never guarded", codex(codexPath, cmd, outside, rootEnv, base), "allow"],
-      ["a tool that is not Bash is none of this guard's business", codex(codexPath, cmd, BRAIN_ROOT, rootEnv, base, "apply_patch"), "allow"],
-    ];
-    for (const [name, result, want] of codexCases) {
-      const good = !result.crashed && result.allowed === (want === "allow");
-      tally("codex", good);
-      if (good) ok(`codex ${name}`); else notOk(`codex ${name}`, result.crashed ?? result.reason);
-    }
-  }
-
   // ── A PAYLOAD OF THE WRONG SHAPE REFUSES; IT DOES NOT CRASH ─────────────
   // Measured 2026-09-29 (audit F12, probes M03-M05, M08): a payload that is not
   // an object, or a Bash payload whose `tool_input` is not one, raised
-  // AttributeError OUTSIDE `main`'s try in the Claude hook and in Codex's, and
-  // exit 1 is a NON-blocking error in both vendors — the command ran. The
+  // AttributeError OUTSIDE `main`'s try in the Claude hook, and exit 1 is a
+  // NON-blocking error there — the command ran. The
   // runtime builds the payload, not the model, so the live risk is a vendor
   // changing its schema; a guard that cannot read one has not seen a safe
   // command. An empty or truncated stdin stays an allow (it names no tool),
   // and a tool that is not a shell stays none of this guard's business.
   {
     const laneDir = `${root}/setup`;
-    const cEnv = codexEnv(`${BRAIN_ROOT}/setup`, base);
     const raw = (path, input, env, cwd) => spawnSync("python3", [path], { input, encoding: "utf8", env: env ?? process.env, cwd });
     const claudeVerdict = (r) => r.status !== 0 ? `crashed ${r.status}`
       : !r.stdout.trim() ? "allow"
         : /"permissionDecision": "deny"/.test(r.stdout) ? "deny" : `invalid ${r.stdout.trim()}`;
-    const codexVerdict = (r) => r.status === 0 ? "allow" : r.status === 2 ? "deny" : `crashed ${r.status}`;
     const shapes = [
       ["a JSON array", "[]", "deny"],
       ["a JSON string", '"Bash"', "deny"],
@@ -603,10 +491,6 @@ try {
       tally("python", py === want);
       if (py === want) ok(`malformed payload, claude hook: ${name} -> ${want}`);
       else notOk(`malformed payload, claude hook: ${name} -> ${want}`, py);
-      const cx = codexVerdict(raw(codexPath, input, cEnv, base));
-      tally("codex", cx === want);
-      if (cx === want) ok(`malformed payload, codex: ${name} -> ${want}`);
-      else notOk(`malformed payload, codex: ${name} -> ${want}`, cx);
     }
   }
 
@@ -623,7 +507,7 @@ try {
     ok("sandbox arm: not run on win32 (the guard folds drive paths to one spelling there; the sandbox vectors are POSIX filesystem shapes)");
   } else {
     const lane = laneNames.find((n) => n !== "brain");
-    if (!lane) throw new Error("guards.json names no lane besides brain — the sandbox arm has no non-root lane to drive Codex through");
+    if (!lane) throw new Error("guards.json names no lane besides brain — the sandbox arm has no non-root lane to drive");
     const realPolicy = JSON.parse(readFileSync(`${root}/guards.json`, "utf8"));
     const flip = (name) => name.replace(/[a-z]/gi, (c) => (c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()));
 
@@ -676,9 +560,8 @@ try {
         mkdirSync(dirname(`${sb}/${rel}`), { recursive: true });
         copyFileSync(`${root}/${rel}`, `${sb}/${rel}`);
       };
-      for (const f of ["deny_repo_writes.py", "deny-repo-writes.js", "deny-repo-writes-codex.py"]) place(`setup/guards/${f}`);
+      place("setup/guards/deny_repo_writes.py");
       place(`${lane}/.claude/hooks/deny-repo-writes.py`);
-      place(`${lane}/.opencode/plugin/deny-repo-writes.js`);
       // What a link to each protected shape looks like, all built OUTSIDE the
       // repo. `dl_*` dangle when the roots are absent and point at a directory
       // (or a not-yet-created child of one) when they exist; the verdict is the
@@ -729,7 +612,6 @@ try {
         const mode = rootsExist ? "roots exist" : "roots absent";
         const fsNote = t.caseInsensitive ? "case-insensitive fs" : "case-sensitive fs";
         const pyEnv = { ...process.env, HOME: t.r.home };
-        const cEnv = codexEnv(`${t.brainDir}/${lane}`, base, t.r.home);
         process.env.HOME = t.r.home;
         for (const vector of sandboxVectors) {
           if (vector.sandbox !== "both" && vector.sandbox !== (rootsExist ? "exist" : "absent")) continue;
@@ -737,17 +619,8 @@ try {
           const cwd = renderSb(vector.cwd, t);
           const expect = !t.caseInsensitive && vector.expect_case_sensitive_fs ? vector.expect_case_sensitive_fs : vector.expect;
           const tag = `sandbox[${mode}, ${fsNote}] ${vector.id}`;
-          const results = [
-            ["python", python(`${t.sb}/${lane}/.claude/hooks/deny-repo-writes.py`, command, cwd, pyEnv)],
-            ["javascript", await javascript(`${t.sb}/${lane}/.opencode/plugin/deny-repo-writes.js`, `${t.sb}/${lane}`, command, cwd)],
-            ["codex", codex(`${t.sb}/setup/guards/deny-repo-writes-codex.py`, command, cwd, cEnv, base)],
-          ];
-          for (const [runtime, result] of results) judge(`${tag} (${runtime})`, runtime, vector, expect, result);
-          const [py, js, cx] = results.map(([, result]) => result);
-          const agree = !py.crashed && !js.crashed && !cx.crashed && py.allowed === js.allowed && py.allowed === cx.allowed &&
-            (py.allowed || (category(py.reason) === category(js.reason) && category(py.reason) === category(cx.reason)));
-          if (agree) ok(`${tag} parity: all three drivers agree`);
-          else notOk(`${tag} parity`, `py=${verdictOf(py)} js=${verdictOf(js)} codex=${verdictOf(cx)}`);
+          judge(`${tag} (python)`, "python", vector, expect,
+            python(`${t.sb}/${lane}/.claude/hooks/deny-repo-writes.py`, command, cwd, pyEnv));
         }
       }
     } finally {
@@ -765,7 +638,6 @@ try {
   // forcing variable is no exception: it only folds spellings on a supported host.
   {
     const setupHook = `${root}/setup/.claude/hooks/deny-repo-writes.py`;
-    const setupPlugin = `${root}/setup/.opencode/plugin/deny-repo-writes.js`;
     const cygwinCommand = "echo x > 'C:\\work\\product\\HOLE.txt'";
     const payload = payloadOf(cygwinCommand, outside);
     const pyWrapper = `${base}/as-cygwin.py`;
@@ -792,28 +664,6 @@ try {
       ok("unsupported platform (python, sys.platform=cygwin) WITH DENY_REPO_WRITES_AS_NATIVE_WINDOWS=1: the import still refuses");
     } else {
       notOk("cygwin with the forcing variable set", `the variable must not lift the refusal, got ${verdictOf(forced)}`);
-    }
-
-    const jsWrapper = `${base}/as-cygwin.mjs`;
-    writeFileSync(jsWrapper, [
-      'import { pathToFileURL } from "node:url";',
-      'Object.defineProperty(process, "platform", { value: "cygwin" });',
-      'const mod = await import(pathToFileURL(process.argv[2]).href);',
-      'const hooks = await mod.DenyRepoWrites({ directory: process.argv[3] });',
-      'try {',
-      '  await hooks["tool.execute.before"]({ tool: "bash" }, { args: { command: process.argv[4], workdir: process.argv[3] } });',
-      '  process.stdout.write("allow");',
-      '} catch (error) { process.stdout.write("deny:" + String(error.message ?? error)); }',
-      '',
-    ].join("\n"));
-    const jsRun = spawnSync("node", [jsWrapper, setupPlugin, base, cygwinCommand],
-      { encoding: "utf8", env: { ...process.env, DENY_REPO_WRITES_AS_NATIVE_WINDOWS: "1" } });
-    const jsAnswer = (jsRun.stdout ?? "").trim();
-    if (jsAnswer.startsWith("deny:") && /macOS and Linux only/.test(jsAnswer)) {
-      ok("unsupported platform (javascript, process.platform=cygwin): the same C:\\ write is DENIED, naming macOS and Linux");
-    } else {
-      notOk("unsupported platform (javascript, process.platform=cygwin)",
-        `wanted a deny naming macOS/Linux, got ${jsAnswer || `exit ${jsRun.status}: ${jsRun.stderr}`}`);
     }
   }
 

@@ -120,6 +120,5 @@ func (l *lch) promptFacts() *promptFacts {
 	if l.brAuthorizes != "" {
 		f.authorizes = strings.Split(l.brAuthorizes, "\n")
 	}
-	f.operator = l.brOperator()
 	return f
 }

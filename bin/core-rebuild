@@ -13,7 +13,7 @@
 #       2 the build failed
 #       3 it cannot be rebuilt here: no Go toolchain on PATH, no setup/build-core beside bin/, or no core/ sources
 # On 2 and 3 it prints ONE line, what the caller says before it runs the old binary — and prints it once per state of the
-# binary: <program> and the binary's mtime are the key in ${XDG_STATE_HOME:-~/.local/state}/hw/warned (a hook calls these every
+# binary: <program>, the kind (stale, or refused for a 75) and the binary's mtime are the key in ${XDG_STATE_HOME:-~/.local/state}/hw/warned (a hook calls these every
 # turn). A caller prints that line (prefixed with its own name) and runs the stale binary; the exit code is for tests.
 # A build that FAILED is not tried again until the sources change (or the binary does): the next callers get exit 2 and no
 # output, at once — a hook must not pay eleven seconds of a broken build on every turn.
@@ -21,8 +21,8 @@ set -uo pipefail
 [ $# -ge 3 ] || { echo "usage: core-rebuild <bin-dir> <binary> <program>" >&2; exit 64; }
 BIN="$1"; STALE="$2"; PROG="$3"; ROOT="$BIN/.."; SRC="$ROOT/core"; BC="$ROOT/setup/build-core"
 stamp="${XDG_STATE_HOME:-${HOME:-/nonexistent}/.local/state}/hw/warned"
-fail() {  # <code> <what stopped it>
-  local key="$PROG:stale:$(stat -c %Y "$STALE" 2>/dev/null || stat -f %m "$STALE" 2>/dev/null)"
+fail() {  # <code> <what stopped it> [kind]: kind keys the once-per-state warning, so a refusal (75) never spends the one a real failure is owed
+  local key="$PROG:${3:-stale}:$(stat -c %Y "$STALE" 2>/dev/null || stat -f %m "$STALE" 2>/dev/null)"
   if ! grep -qxF -- "$key" "$stamp" 2>/dev/null; then
     printf 'hw-core is older than the sources in core/ and %s, so the old one runs (said once; setup/build-core --native needs Go 1.22 or newer, https://go.dev/dl)\n' "$2"
     { mkdir -p "${stamp%/*}" && printf '%s\n' "$key" >>"$stamp"; } 2>/dev/null || true
@@ -62,7 +62,9 @@ trap 'rm -rf "$tmp"; unlock' EXIT
 
 is_stale || exit 0   # the lock was another caller's, and its build covered this one
 remember() { { mkdir -p "${stamp%/*}" && printf '%s\n' "$failed" >>"$stamp"; } 2>/dev/null || true; }
-if ! "$BC" --native --out "$tmp/out" >"$tmp/log" 2>&1; then remember; fail 2 "setup/build-core --native failed ($(tail -n 1 "$tmp/log"))"; fi
+rc=0; "$BC" --native --out "$tmp/out" >"$tmp/log" 2>&1 || rc=$?
+if [ "$rc" = 75 ]; then fail 2 "setup/build-core --native was refused, not broken (exit 75: setup/heavy refused or gave up waiting — no process headroom or memory, this run already holds a heavy job, or its queue ticket was removed; the next call tries again): $(tail -n 1 "$tmp/log")" refused; fi
+if [ "$rc" != 0 ]; then remember; fail 2 "setup/build-core --native failed ($(tail -n 1 "$tmp/log"))"; fi
 built="$tmp/out/$os-$arch"
 [ -f "$built/hw-core" ] || { remember; fail 2 "the builder made no $os-$arch/hw-core"; }
 

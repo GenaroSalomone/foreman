@@ -13,7 +13,7 @@
 #   · unknown_percent_is_tokens_only  `Ctx: 237.5k | Ctx Use…` (a narrow pane): tokens, percent null
 #   · no_window_is_assumed            283.8k tokens of sonnet-5-5 from a transcript: no percent; a `[1m]` id
 #                                     has one; a turn-end value with no percent shows its tokens
-#   · falls_back_when_the_pane_cannot_be_read  no statusline / a failing read: the old sources; an opencode
+#   · falls_back_when_the_pane_cannot_be_read  no statusline / a failing read: the old sources; a non-claude
 #                                     pane's screen is not a claude statusline
 #   · reads_are_cached                a pane is read once per TTL, shared by the writers; --stdout writes none
 #   · read_timeout_is_bounded         eight hanging reads cost one timeout, and the cards fall back

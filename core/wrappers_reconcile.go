@@ -18,7 +18,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,7 +25,6 @@ import (
 )
 
 var (
-	hrRunRe  = regexp.MustCompile(`^2[0-9]{7}-[0-9]{6}-[0-9]+$`)
 	hrHoldRe = regexp.MustCompile(`^pending-reply-[1-9][0-9]*$`)
 	hrSkip   = map[string]bool{".hw": true, ".git": true, "node_modules": true, ".venv": true, ".next": true, "dist": true, "__pycache__": true}
 )
@@ -294,17 +292,7 @@ func hrCandidates(w *wenv, binDir string, roots []string, repoLanes map[string]b
 // reporting each old attempt is how a recovered task becomes noise again after it eventually succeeds.
 func hrOneHW(w *wenv, binDir, base string, repoLanes map[string]bool, now, holdSeconds int64, seen map[string]bool, out *[]hrCandidate) {
 	workdir := filepath.Dir(base)
-	ents, err := os.ReadDir(base)
-	if err != nil {
-		return
-	}
-	var names []string
-	for _, e := range ents {
-		if hrRunRe.MatchString(e.Name()) && hrIsDir(base+"/"+e.Name()) {
-			names = append(names, e.Name())
-		}
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names)))
+	names := RunIDs(base)
 	if len(names) == 0 {
 		return
 	}
@@ -490,20 +478,12 @@ func hrRun(w *wenv, args []string) int {
 		}
 		if infoOK && hrAgentReadable(info, cand.pane) { // # MUTATION-ANCHOR: bpr4-live
 			tok := func(k string) string { return tokenOf(info, k) }
-			doneStatus, doneState, turnState := tok("done_status"), tok("done_state"), tok("turn_state")
+			doneStatus, doneState := tok("done_status"), tok("done_state")
 			if doneStatus == "done" { // # MUTATION-ANCHOR: bpr4-done
 				reasons = append(reasons, "done-token:"+orStr(doneState, "unknown"))
 				evidence = append(evidence, "pane tokens say done_status=done while disk has no done marker")
 			}
-			if turnState == "ended_unreported" && doneStatus != "done" {
-				wt := a.newWitness()
-				wt.state(cand.pane)
-				switch wt.verdict {
-				case "settled", "awaiting-human":
-					reasons = append(reasons, "ended-unreported:"+wt.verdict)
-					evidence = append(evidence, wt.detail)
-				} // live: a newer moving turn vetoes the stale turn token; unreadable state is not converted into a finding
-			}
+			// A pane that ended a turn unreported is not converted into a finding by its tokens: only the done token and the disk say so.
 		} else if cand.turns > 0 && cand.reportWorthy { // # MUTATION-ANCHOR: bpr4-turns
 			reasons = append(reasons, "ended-unreported:disk")
 			evidence = append(evidence, "durable turns counter="+strconv.FormatInt(cand.turns, 10)+", no live agent readable, and no done marker")

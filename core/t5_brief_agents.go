@@ -2,7 +2,7 @@ package main
 
 // Train T5, area A — the agent-name checks of the brief contract (bin/hw): _check_capabilities,
 // _check_required_agents, _agent_markdown_mode, _agent_mode_matches, _claude_agent_index, _claude_agent_source,
-// _claude_agent_reachable, _opencode_project_config_agent, _opencode_project_agent, _known_agent_names,
+// _claude_agent_reachable, _known_agent_names,
 // _warn_brief_body_agents. git, jq and sort are called as bash calls them; the python snippets are in Go.
 
 import (
@@ -48,12 +48,12 @@ func (d *dsp) checkCapabilities(list string) {
 		}
 		switch want {
 		case "browser", "claude-in-chrome":
-			if d.agent != "claude" { // # MUTATION-ANCHOR: 844-A123
+			if d.agent != "claude" {
 				bad += " " + want + "(needs claude; " + d.agent + " reaches a browser only through agent-browser, which is a CLI and not the same instrument)"
 			}
 		case "subagents":
-			if d.agent != "opencode" && d.agent != "claude" && !(d.agent == "pi" && d.piSubagentsReady()) { // # MUTATION-ANCHOR: 844-A124
-				bad += " " + want + "(hw enables OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS only for opencode, pi needs pi-subagents installed under " + d.piSubagentsDir() + " with its required-child-extension API, and " + d.agent + " has no subagent tool hw can name)"
+			if d.agent != "claude" && !(d.agent == "pi" && d.piSubagentsReady()) {
+				bad += " " + want + "(pi needs pi-subagents installed under " + d.piSubagentsDir() + " with its required-child-extension API, and " + d.agent + " has no subagent tool hw can name)"
 			}
 		case "repo":
 			if !d.wantWT { // # MUTATION-ANCHOR: 844-A125
@@ -63,7 +63,7 @@ func (d *dsp) checkCapabilities(list string) {
 			if !d.wantDB { // # MUTATION-ANCHOR: 844-A126
 				bad += " " + want + "(this dispatch has --no-db, so it shares the main checkout database)"
 			}
-		default: // # MUTATION-ANCHOR: 844-A127
+		default:
 			// the bash writes '"'$want'"' with $want unquoted: IFS runs in it become one space (globs: UNESTABLISHED)
 			d.warn("brief requires '\"" + brIFSCollapse(want) + "\"', which hw cannot check. Known: browser subagents repo database")
 		}
@@ -119,47 +119,6 @@ func (d *dsp) checkSkills(val string) {
 	if len(names) > 0 {
 		d.brAppendDeclared("skills")
 	}
-}
-
-// ── markdown agent definitions ──────────────────────────────────────────────
-
-var brReMode = regexp.MustCompile(`(?i)^[` + brS + `]*mode[` + brS + `]*:[` + brS + `]*['"]?([^'"` + brS + `#]+)`)
-
-// brAgentModeOf is the python of _agent_markdown_mode over its text: the mode, or false for the exit 1.
-func brAgentModeOf(text string) (string, bool) {
-	lines := pySplitlines(text)
-	mode := "all"
-	if len(lines) > 0 && pyStrip(lines[0]) == "---" { // # MUTATION-ANCHOR: 844-A129
-		for _, line := range lines[1:] {
-			if pyStrip(line) == "---" {
-				break
-			}
-			if m := brReMode.FindStringSubmatch(line); m != nil {
-				mode = strings.ToLower(m[1])
-				break
-			}
-		}
-	}
-	switch mode {
-	case "primary", "subagent", "all":
-		return mode, true
-	}
-	return "", false
-}
-
-// brAgentMarkdownMode is _agent_markdown_mode <path>.
-func brAgentMarkdownMode(path string) (string, bool) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", false
-	}
-	text := strings.ReplaceAll(strings.ReplaceAll(brDecodeReplace(data), "\r\n", "\n"), "\r", "\n")
-	return brAgentModeOf(text)
-}
-
-// brAgentModeMatches is _agent_mode_matches.
-func brAgentModeMatches(role, mode string) bool {
-	return role == "any" || mode == "all" || role == mode
 }
 
 // ── the claude agent registry ───────────────────────────────────────────────
@@ -281,111 +240,6 @@ func (d *dsp) claudeAgentReachable(name string) bool {
 	return ok
 }
 
-// ── the opencode agent registry ─────────────────────────────────────────────
-
-// brOpencodeConfigAgent is _opencode_project_config_agent: "mode\tsource", status 0; 1 not defined; 2 invalid mode.
-func brOpencodeConfigAgent(name, conf, repo string) (string, int) {
-	var json string
-	if repo != "" {
-		out, rc := brExec("", "git", "-C", repo, "show", conf)
-		if rc != 0 {
-			return "", 1
-		}
-		json = brSub(out)
-	} else {
-		if !isFile(conf) {
-			return "", 1
-		}
-		data, err := os.ReadFile(conf)
-		if err != nil {
-			return "", 1
-		}
-		json = brSub(string(data))
-	}
-	if _, rc := brExec(json, "jq", "-e", "--arg", "a", name, `.agent[$a] | type == "object" and has("mode")`); rc != 0 {
-		return "", 1
-	}
-	out, rc := brExec(json, "jq", "-r", "--arg", "a", name, ".agent[$a].mode")
-	if rc != 0 {
-		return "", 2
-	}
-	switch mode := brSub(out); mode {
-	case "primary", "subagent", "all":
-		return mode + "\t" + conf, 0
-	}
-	return "", 2
-}
-
-// opencodeProjectAgent is _opencode_project_agent: "mode\tsource" and status 0, 1 when no definition, 2 invalid.
-func (d *dsp) opencodeProjectAgent(name string) (string, int) {
-	taskDir := d.c.work + "/" + d.proj + "/" + d.task
-	ocProjectDir := ""
-	if d.brIsProductRepo() {
-		ocProjectDir = d.c.checkout(d.proj)
-	}
-	for _, path := range []string{taskDir + "/.opencode/agent/" + name + ".md", taskDir + "/.opencode/agents/" + name + ".md"} {
-		if !isFile(path) {
-			continue
-		}
-		mode, ok := brAgentMarkdownMode(path)
-		if !ok {
-			return "", 2
-		}
-		return mode + "\t" + path, 0
-	}
-	agentsFrom := d.brLaneGet(d.proj, "agents_from")
-	agentsRef := d.brAgentsRef()
-	if agentsFrom == "checkout" && d.wantWT { // # MUTATION-ANCHOR: 844-A167
-		for _, path := range []string{ocProjectDir + "/.opencode/agent/" + name + ".md", ocProjectDir + "/.opencode/agents/" + name + ".md"} {
-			if !isFile(path) {
-				continue
-			}
-			mode, ok := brAgentMarkdownMode(path)
-			if !ok {
-				return "", 2
-			}
-			return mode + "\t" + path, 0
-		}
-	}
-	if agentsFrom == "base" && d.wantWT { // # MUTATION-ANCHOR: 844-A135
-		for _, rel := range []string{".opencode/agent/" + name + ".md", ".opencode/agents/" + name + ".md"} {
-			if _, rc := brExec("", "git", "-C", ocProjectDir, "cat-file", "-e", agentsRef+":"+rel); rc == 0 {
-				// `git show … | _agent_markdown_mode -`: the function's own heredoc is python's stdin, so the piped text
-				// is never read and the mode is the default.
-				mode := "all" // # MUTATION-ANCHOR: 844-A136
-				return mode + "\t" + agentsRef + ":" + rel, 0
-			}
-		}
-	}
-	res, st := brOpencodeConfigAgent(name, taskDir+"/opencode.json", "")
-	if st != 1 {
-		return res, st
-	}
-	if agentsFrom == "checkout" && d.wantWT && ocProjectDir != "" {
-		res, st = brOpencodeConfigAgent(name, ocProjectDir+"/opencode.json", "")
-		if st != 1 {
-			return res, st
-		}
-	}
-	if agentsFrom == "base" && d.wantWT && ocProjectDir != "" { // # MUTATION-ANCHOR: 844-A137
-		res, st = brOpencodeConfigAgent(name, agentsRef+":opencode.json", ocProjectDir)
-		if st != 1 {
-			return res, st
-		}
-	}
-	for _, path := range []string{d.c.home + "/.config/opencode/agent/" + name + ".md", d.c.home + "/.config/opencode/agents/" + name + ".md"} {
-		if !isFile(path) {
-			continue
-		}
-		mode, ok := brAgentMarkdownMode(path)
-		if !ok {
-			return "", 2
-		}
-		return mode + "\t" + path, 0
-	}
-	return "", 1
-}
-
 // brSplitTab is `${v%%$(printf '\t')*}` and `${v#*$(printf '\t')}`.
 func brSplitTab(v string) (string, string) {
 	a, b, _ := strings.Cut(v, "\t")
@@ -409,7 +263,6 @@ func brNameOK(n string) bool {
 func (d *dsp) checkRequiredAgents(list string) bool {
 	bad := false
 	rest := list
-	ocConf := d.c.home + "/.config/opencode/opencode.json"
 	for rest != "" {
 		spec := rest
 		if i := strings.IndexByte(rest, ','); i >= 0 {
@@ -423,9 +276,9 @@ func (d *dsp) checkRequiredAgents(list string) bool {
 		}
 		role, required := "any", spec
 		switch {
-		case strings.HasPrefix(spec, "primary:"): // # MUTATION-ANCHOR: 844-A139
+		case strings.HasPrefix(spec, "primary:"):
 			role, required = "primary", strings.TrimPrefix(spec, "primary:")
-		case strings.HasPrefix(spec, "subagent:"): // # MUTATION-ANCHOR: 844-A140
+		case strings.HasPrefix(spec, "subagent:"):
 			role, required = "subagent", strings.TrimPrefix(spec, "subagent:")
 		}
 		if !brNameOK(required) { // # MUTATION-ANCHOR: 844-A138
@@ -442,41 +295,6 @@ func (d *dsp) checkRequiredAgents(list string) bool {
 			continue
 		}
 		switch d.agent {
-		case "opencode":
-			projectAgent, st := d.opencodeProjectAgent(required)
-			if st == 2 { // # MUTATION-ANCHOR: 844-A169
-				d.warn("brief requires agent '" + spec + "', but its project definition has no valid mode (primary, subagent or all)")
-				bad = true
-				continue
-			}
-			if st != 0 {
-				projectAgent = ""
-			}
-			if projectAgent != "" {
-				projectMode, projectSource := brSplitTab(projectAgent)
-				if !brAgentModeMatches(role, projectMode) { // # MUTATION-ANCHOR: 844-A141
-					d.warn("brief requires agent '" + required + "' as " + role + ", but " + projectSource + " declares mode: " + projectMode)
-					bad = true
-				}
-			} else if !brReadable(ocConf) || brJqFails(ocConf, "-e", ".agent | type == \"object\"") {
-				d.warn("brief requires agent '" + spec + "' for opencode, but hw cannot read a valid .agent registry from " + ocConf + " and found no reachable project agent definition")
-				bad = true
-			} else if brJqFails(ocConf, "-e", "--arg", "a", required, ".agent[$a]") { // # MUTATION-ANCHOR: 844-A142
-				d.warn("brief requires agent '" + spec + "', but opencode has no .agent[" + required + "] in " + ocConf + " and no reachable .opencode/agent(s)/" + required + ".md")
-				bad = true
-			} else if role != "any" { // # MUTATION-ANCHOR: 844-A143
-				out, _ := brExec("", "jq", "-r", "--arg", "a", required, `.agent[$a].mode // "all"`, ocConf)
-				configMode := brSub(out)
-				switch configMode {
-				case "primary", "subagent", "all": // # MUTATION-ANCHOR: 844-A168
-				default:
-					configMode = "invalid"
-				}
-				if !brAgentModeMatches(role, configMode) { // # MUTATION-ANCHOR: 844-A144
-					d.warn("brief requires agent '" + required + "' as " + role + ", but " + ocConf + " declares mode: " + configMode)
-					bad = true
-				}
-			}
 		case "claude":
 			projectDir := ""
 			if d.brIsProductRepo() {
@@ -490,7 +308,7 @@ func (d *dsp) checkRequiredAgents(list string) bool {
 				d.warn("brief requires agent '" + required + "' as primary, but Claude .claude/agents/*.md definitions are Task-only subagents")
 				bad = true
 			}
-		default: // # MUTATION-ANCHOR: 844-A147
+		default:
 			d.warn("brief requires agent '" + required + "', but hw cannot verify named agents for vendor " + d.agent)
 			bad = true
 		}
@@ -500,12 +318,6 @@ func (d *dsp) checkRequiredAgents(list string) bool {
 	}
 	d.brAppendDeclared("requires-agents") // # MUTATION-ANCHOR: 844-A149
 	return true
-}
-
-// brJqFails runs `jq <flags…> <file>` the way bash tests it (`! jq -e … file >/dev/null 2>&1`): true when it fails.
-func brJqFails(file string, args ...string) bool {
-	_, rc := brExec("", "jq", append(args, file)...)
-	return rc != 0
 }
 
 // ── the agents a brief names in prose ───────────────────────────────────────
@@ -518,19 +330,6 @@ func (d *dsp) knownAgentNames() []string {
 	add := func(l string) {
 		if l != "" {
 			names = append(names, l)
-		}
-	}
-	for _, dir := range []string{taskDir + "/.opencode/agent", taskDir + "/.opencode/agents", projectDir + "/.opencode/agent", projectDir + "/.opencode/agents", d.c.home + "/.config/opencode/agent", d.c.home + "/.config/opencode/agents"} {
-		if !isDir(dir) {
-			continue
-		}
-		ents, _ := os.ReadDir(dir)
-		for _, e := range ents {
-			n := e.Name()
-			if strings.HasPrefix(n, ".") || !strings.HasSuffix(n, ".md") || !isFile(dir+"/"+n) {
-				continue
-			}
-			add(n[:len(n)-3])
 		}
 	}
 	cut1 := func(entries []string) {
@@ -547,15 +346,6 @@ func (d *dsp) knownAgentNames() []string {
 	}
 	if d.brLaneGet(d.proj, "agents_from") == "base" && projectDir != "" {
 		cut1(brClaudeIndexGit(projectDir, d.brAgentsRef(), ".claude/agents"))
-		out, _ := brExec("", "git", "-C", projectDir, "ls-tree", "--name-only", d.brAgentsRef()+":.opencode/agent")
-		for _, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-			add(strings.TrimSuffix(l, ".md"))
-		}
-	}
-	if out, _ := brExec("", "jq", "-r", ".agent // {} | keys[]", d.c.home+"/.config/opencode/opencode.json"); out != "" { // # MUTATION-ANCHOR: 844-A156
-		for _, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
-			add(l)
-		}
 	}
 	return brSortU(names)
 }
@@ -586,29 +376,12 @@ func (d *dsp) warnBriefBodyAgents() {
 	if len(names) == 0 {
 		return
 	}
-	conf := d.c.home + "/.config/opencode/opencode.json"
 	for _, name := range names {
 		if name == "" || !strings.Contains(body, name) { // # MUTATION-ANCHOR: 844-A150
 			continue
 		}
 		hit := ""
 		switch d.agent {
-		case "opencode":
-			var mode, source string
-			if src, st := d.opencodeProjectAgent(name); st == 0 && src != "" { // # MUTATION-ANCHOR: 844-A155
-				mode, source = brSplitTab(src)
-			} else {
-				out, _ := brExec("", "jq", "-r", "--arg", "a", name, ".agent[$a].mode // empty", conf)
-				if mode = brSub(out); mode != "" {
-					source = conf
-				} else {
-					mode, source = "", ""
-				}
-			}
-			if mode == "" || mode != "subagent" {
-				continue
-			}
-			hit = source + " declares mode: subagent, so it is reachable ONLY as a subagent — `opencode run --agent " + name + "` selects a PRIMARY and the runtime will reject it"
 		case "claude":
 			if d.claudeAgentReachable(name) { // # MUTATION-ANCHOR: 844-A151
 				continue

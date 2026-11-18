@@ -2,7 +2,7 @@
 # cache: never — it drives a REAL herdr server (its own socket and sessions) and the real hw/invokers: a green of another run says nothing about this machine's herdr, so it always runs (setup/verdict-cache).
 # The live herdr path, driven for real, with no paid model.
 #
-# Every other subject runs with herdr stubbed (KNOWN-LIMITATIONS L9), so the
+# Every other subject runs with herdr stubbed (docs/internal-limitations.md L9), so the
 # path hw takes through a real herdr server was only ever exercised by the paid
 # e2e at release cut. The defects that reached that cut or the maintainer sat on this
 # path: "✓ brief delivered" while the executor held the text unsent

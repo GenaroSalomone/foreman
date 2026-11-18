@@ -259,10 +259,9 @@ func (t *t3) outboxForeign(meta, lane string) string {
 	if r := t3OutboxField(meta, "run"); r != "" && r != filepath.Base(run) {
 		return "its meta names run " + r + " but it sits in " + filepath.Base(run)
 	}
-	if b, err := os.ReadFile(run + "/hc-core"); err == nil {
-		if theirs, mine := strings.TrimSpace(string(b)), hcCoreID(t.getenv); theirs != "" && mine != "" && theirs != mine {
-			return "its run belongs to herdr-core " + theirs + ", this one is " + mine
-		}
+	mine := hcCoreID(t.getenv)
+	if theirs, other := hcRunCore(run, mine); other {
+		return "its run belongs to herdr-core " + theirs + ", this one is " + mine
 	}
 	return ""
 }

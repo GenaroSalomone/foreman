@@ -27,7 +27,7 @@ HELP TOPICS                            hw help <topic>
     flags        every launch flag
     commands     the other commands: reports, next, wait, preview, ruling, ...
     exit-codes   what each exit status means
-    recovery     revive, unstick, reap, sweep, worktrees
+    recovery     revive, reap, sweep, worktrees
     advanced     what only some brains use: accounts, model floors, secrets, suites
     lanes        the fields of a lane in projects.json, and `brief_note`
     all          every topic, in one page

@@ -153,7 +153,7 @@ if grep -vqE '^([a-z][a-z0-9-]*)?$' <<<"$sweep_lanes"; then
 fi
 sweep_re="^($(printf '%s\n' "$sweep_lanes" | grep . | paste -sd'|' - || true))/"
 [ -n "$sweep_lanes" ] || sweep_re='^/'   # no lane: no staged path starts with /
-lane="$(printf '%s\n' "$staged" | grep -E "${sweep_re}(decisions|briefs/|CLAUDE\.md|\.claude/|opencode\.json)" || true)"
+lane="$(printf '%s\n' "$staged" | grep -E "${sweep_re}(decisions|briefs/|CLAUDE\.md|\.claude/)" || true)"
 
 # A sweep does not need tooling in it to be a sweep: one that mixes two lanes'
 # briefs and decisions with no tooling file at all is waved through by the
@@ -497,9 +497,9 @@ if [ "$hook_docs" = 1 ] || grep -qE "$SUITE_TRIGGER_PATTERN" <<<"$staged"; then
   # it stands up a stub HTTP server and takes ~10s, so it is not worth paying on
   # every bin/ commit — but it IS the only thing that exercises the delivery
   # contract, and on 2026-08-25 a commit rewrote bin/channel-send's whole
-  # opencode route without it running. It caught a real regression the moment it
+  # delivery route without it running. It caught a real regression the moment it
   # was finally run: the stub still modelled the removed two-route design.
-  if grep -qE '^bin/(channel-send|ask-invoker|done-invoker|invoker-common\.sh)$' <<<"$staged" \
+  if grep -qE '^bin/(channel-send|ask-invoker|done-invoker)$' <<<"$staged" \
      && [ -x "$root/setup/test-channel-send" ]; then
     if ! out="$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE \
                     -u GIT_OBJECT_DIRECTORY -u GIT_ALTERNATE_OBJECT_DIRECTORIES \

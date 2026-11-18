@@ -41,10 +41,6 @@ else
 fi
 
 # ── --model is validated per vendor ─────────────────────────────────────────
-expect_out "model: codex refuses provider/model before creating a pane" \
-  "codex needs a bare model id" setup mp --agent codex --model openai/gpt-6-astra --sdd none
-expect_out "model: codex accepts a bare model id" \
-  "model=gpt-6-astra" setup mp --agent codex --model gpt-6-astra --sdd none
 # `--model terra` dispatched cleanly and the claude CLI then refused to start,
 # leaving an idle pane with the brief inside it and zero context.
 #
@@ -62,18 +58,8 @@ for m in 'future --extra-flag' 'future*' '-future' 'claude-future --resume X' 'c
     "cannot safely pass this Claude model as one literal argument" setup mp --agent claude --model "$m" --sdd none
 done
 expect_out "model: claude refuses a provider/model id" \
-  "opencode's form, not claude's" setup mp --agent claude --model openai/gpt-5.6-terra --sdd none
-expect_out "model: opencode refuses a bare alias" \
-  "needs provider/model, not a bare alias" setup mp --agent opencode --model terra --sdd none
-# `--sdd none` IS PART OF THE FIXTURE, NOT DECORATION. The subject here is
-# ALIAS VALIDATION -- does hw accept this spelling and carry it to the manifest.
-# Since 2026-09-11 a sonnet or haiku ORCHESTRATOR is refused whenever an SDD
-# mode is in force, and the setup lane's live surface is one, so without this
-# flag two of these five aliases would be answered by a gate that has nothing to
-# do with spelling. That refusal is real and deliberate; it is asserted where it
-# belongs, in 130-a-sonnet-may-not-orchestrate-an-sdd-flow.sh.
+  "pi's form, not claude's" setup mp --agent claude --model openai/gpt-5.6-terra --sdd none
+# `--sdd none` is accepted and ignored; the subject here is ALIAS VALIDATION -- does hw accept this spelling and carry it to the manifest.
 for m in opus sonnet haiku fable claude-opus-5; do
   expect_out "model: claude accepts $m" "model=$m" setup mp --agent claude --model "$m" --sdd none
 done
-expect_out "model: opencode accepts a provider/model id" \
-  "model=openai/gpt-5.6-terra" setup mp --agent opencode --model openai/gpt-5.6-terra --sdd none

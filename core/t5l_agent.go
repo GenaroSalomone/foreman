@@ -1,22 +1,13 @@
 package main
 
-// Area B2 — starting the agent (bin/hw: _agent_start, _agent_start_sandboxed, _sandbox_arm_pane, _codex_startup_ready,
-// _claude_startup_ready, _claude_start_failure_screen, _agent_step, _agent_ready_state, _verify_opencode_effort,
+// Area B2 — starting the agent (bin/hw: _agent_start,
+// _claude_startup_ready, _claude_start_failure_screen, _agent_step, _agent_ready_state,
 // _dispatch_publish; bin/project-spaces.sh: claude_startup_dialog, claude_dialog_advice). OWNER: the B2 track.
 
 import (
-	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 )
-
-type lagState struct {
-	sandboxArmed  string // _SANDBOX_ARMED: the pane _agent_start_sandboxed already armed (a per-call prefix assignment in bash)
-	sandboxRundir string // _SANDBOX_RUNDIR: set by revive for a run launched in the sandbox
-	hcShimDir     string // the sandbox shim's directory, first on an hc terminal's PATH (hcSandboxArm); "" with no sandbox
-}
 
 // lSleep is bash's `sleep`; a package variable so a test can set it to nothing. bash has no scale knob, so the
 // contract world runs with real sleeps.
@@ -93,25 +84,6 @@ func (l *lch) agentRead(target string) string {
 	return bashSub(out)
 }
 
-// codexStartupReady is `_codex_startup_ready`: herdr can report idle while a Codex dialog still owns stdin.
-func (l *lch) codexStartupReady(name string) bool {
-	screen := l.agentRead(name)
-	switch {
-	case strings.Contains(screen, "Do you trust the contents of this directory"):
-		if _, rc := l.herdr(true, true, "", "agent", "send-keys", name, "enter"); rc != 0 { // # MUTATION-ANCHOR: 847-B2-01
-			return false
-		}
-		lSleep(2 * time.Second)
-	case strings.Contains(screen, "Hooks need review"):
-		l.errf("%s\n", "codex is waiting for hook trust; review that dialog before delivering a brief")
-		return false // # MUTATION-ANCHOR: 847-B2-02
-	case strings.Contains(screen, "Choose how you'd like Codex to proceed"):
-		l.errf("%s\n", "codex is waiting on a model migration dialog; choose a supported model before delivering a brief")
-		return false // # MUTATION-ANCHOR: 847-B2-03
-	}
-	return true
-}
-
 // claudeStartupReady is `_claude_startup_ready`: answers only the renderer offer ("Not now", Esc); names every
 // other first-run screen and fails.
 func (l *lch) claudeStartupReady(target string) bool {
@@ -151,128 +123,6 @@ func (l *lch) claudeStartFailureScreen(target string) {
 	for _, ln := range keep {
 		l.errf("    %s\n", ln)
 	}
-}
-
-// ── the sandbox ─────────────────────────────────────────────────────────────────────────────────────────────
-
-// bashPrintfQ is `printf '%q'` for the paths and words this file feeds it, as bash 3.2.57 (/bin/bash on macOS, the reference the
-// goldens were captured with) prints it in a UTF-8 locale: it asks isprint of each BYTE, so the C1 range 0x80-0x9f (the
-// middle bytes of most non-Latin runes: the snowman is e2 98 83) forces the $'...' form and prints those bytes as octal,
-// while every other high byte stays raw. é (c3 a9) is plain; ☃ is $'\xe2' raw followed by \230\203.
-func bashPrintfQ(s string) string {
-	if s == "" {
-		return "''"
-	}
-	var sb strings.Builder
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c == '\n' || c == '\t' || c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f):
-			return bashAnsiQ(s)
-		case strings.IndexByte("\\'\"` !$&()*;<>?[]^{|}", c) >= 0, (c == '#' || c == '~') && i == 0:
-			sb.WriteByte('\\')
-		}
-		sb.WriteByte(c)
-	}
-	return sb.String()
-}
-
-func bashAnsiQ(s string) string {
-	var sb strings.Builder
-	sb.WriteString("$'")
-	for i := 0; i < len(s); i++ {
-		switch c := s[i]; {
-		case c == '\n':
-			sb.WriteString(`\n`)
-		case c == '\t':
-			sb.WriteString(`\t`)
-		case c == '\\' || c == '\'':
-			sb.WriteByte('\\')
-			sb.WriteByte(c)
-		case c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f):
-			sb.WriteString("\\" + strconv.FormatInt(int64(c)+0o1000, 8)[1:])
-		default:
-			sb.WriteByte(c)
-		}
-	}
-	sb.WriteString("'")
-	return sb.String()
-}
-
-// rundirArmable is the `case "$rundir" in /*/.hw/?*)` pattern.
-func rundirArmable(rundir string) bool {
-	if !strings.HasPrefix(rundir, "/") {
-		return false
-	}
-	rest := rundir[1:]
-	for i := 0; i+len("/.hw/") < len(rest); i++ {
-		if strings.HasPrefix(rest[i:], "/.hw/") && len(rest) > i+len("/.hw/") {
-			return true
-		}
-	}
-	return false
-}
-
-// sandboxArmPane is `_sandbox_arm_pane`: put the shim on the pane's PATH before `agent start` types the command.
-func (l *lch) sandboxArmPane(pane, kind, rundir string) bool {
-	if !rundirArmable(rundir) { // # MUTATION-ANCHOR: 847-B2-06
-		l.warn("sandbox: no run directory to arm (" + rundir + ")")
-		return false
-	}
-	out, rc := l.sh(cmdSpec{name: l.binDir() + "/hw-sandbox", args: []string{"arm", rundir, kind, l.proj, l.task},
-		env: l.sandboxArmEnv(), mut: true})
-	shimdir := bashSub(out)
-	if rc != 0 { // # MUTATION-ANCHOR: 847-B2-07
-		l.warn("sandbox: could not arm " + rundir + " — the agent is NOT started unconfined")
-		return false
-	}
-	if _, rc := l.sh(cmdSpec{name: "herdr", args: []string{"pane", "run", pane, "export PATH=" + bashPrintfQ(shimdir) + ":$PATH; hash -r 2>/dev/null; clear"}, mut: true, quiet: true}); rc != 0 {
-		l.warn("sandbox: could not put the shim on " + pane + "'s PATH — the agent is NOT started unconfined")
-		return false
-	}
-	l.receiptInto(rundir, "sandbox", filepath.Dir(shimdir)+"/profile.sb", "hw-sandbox arm ("+kind+"); shim "+shimdir+" exported in "+pane)
-	return true
-}
-
-// sandboxArmEnv is the environment of `hw-sandbox arm`: the profile allows arm's own TMPDIR, so it must be the executor's per-run one.
-func (l *lch) sandboxArmEnv() []string {
-	e := []string{"HW_WORKDIR=" + l.lHwWorkdir(), "HW_ARTIFACTS=" + l.env("HW_ARTIFACTS")}
-	if t := l.env("HW_EXECUTOR_TMPDIR"); t != "" {
-		e = append(e, "TMPDIR="+t)
-	}
-	return e
-}
-
-// agentStartSandboxed is `_agent_start_sandboxed`: arm, start through the ordinary path, then PROVE it.
-func (l *lch) agentStartSandboxed(pane, name, kind string) bool {
-	rundir := l.sandboxRundir
-	if rundir == "" {
-		rundir = l.lHwWorkdir() + "/.hw/" + l.lHwRun()
-	}
-	if !l.sandboxArmPane(pane, kind, rundir) {
-		return false
-	}
-	out, _ := l.sh(cmdSpec{name: l.binDir() + "/hw-sandbox", args: []string{"statedir", rundir}})
-	st := bashSub(out)
-	prev := l.sandboxArmed
-	l.sandboxArmed = pane
-	ok := l.agentStart(pane, name, kind)
-	l.sandboxArmed = prev
-	if !ok { // # MUTATION-ANCHOR: 847-B2-08
-		return false
-	}
-	// An agent that started is not proof it started in the sandbox: the broker's heartbeat is.
-	if l.readonly { // the broker is started by the helper a read-only leg only records: there is no heartbeat to wait for
-		return true
-	}
-	for n := 0; n < 20; n++ {
-		if fi, err := os.Stat(st + "/broker.alive"); err == nil && fi.Mode().IsRegular() {
-			return true
-		}
-		lSleep(500 * time.Millisecond)
-	}
-	l.warn("sandbox: " + kind + " started in " + pane + " but the broker never came up (" + st + "/broker.alive) — it may be running UNCONFINED. Close it: hw done " + l.proj + " " + l.task)
-	return false
 }
 
 // ── agent start ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -342,10 +192,7 @@ func (l *lch) agentStart(pane, name, kind string) bool {
 	if kind == "pi" && (!l.piProjectSkillsPrepare() || !l.piPluginMirrorsPrepare()) { // the project skills' one directory of links, and the plugins' -e mirrors, before anything starts
 		return false
 	}
-	if l.sandbox && l.sandboxArmed != pane { // # MUTATION-ANCHOR: 847-B2-09
-		return l.agentStartSandboxed(pane, name, kind)
-	}
-	if kind == "claude" { // # MUTATION-ANCHOR: 847-B2-10
+	if kind == "claude" {
 		l.claudeSessionEnvPrep(pane, l.explorerClaudeArm(pane))
 	}
 	tries, registered := 0, false
@@ -356,9 +203,6 @@ func (l *lch) agentStart(pane, name, kind string) bool {
 			probe := bashSub(out)
 			if !probeIsAgent(probe, pane, name, kind) {
 				l.errf("%s\n", probe)
-				return false
-			}
-			if kind == "codex" && !l.codexStartupReady(pane) {
 				return false
 			}
 			if kind == "claude" && !l.claudeStartupReady(pane) {
@@ -384,9 +228,6 @@ func (l *lch) agentStart(pane, name, kind string) bool {
 		out := bashSub(raw)
 		if rc == 0 && startReady(out) { // # MUTATION-ANCHOR: 847-B2-13
 			// Herdr can report idle + interactive_ready while a dialog still owns stdin: read the buffer first.
-			if kind == "codex" && !l.codexStartupReady(name) {
-				return false
-			}
 			if kind == "claude" && !l.claudeStartupReady(pane) {
 				return false
 			}
@@ -463,102 +304,6 @@ func (l *lch) dispatchPublish(pane string) {
 
 // ── the effort read back ────────────────────────────────────────────────────────────────────────────────────
 
-// effortOf is `jq -r --arg a A '.agent[$a] | (.reasoningEffort // .options.reasoningEffort // "null")' || echo unreadable`.
-func effortOf(body, agent string) string {
-	vals, perr := parseStream([]byte(body))
-	var outs []string
-	failed := perr != nil
-	for _, v := range vals {
-		ag, ok := v.get("agent")
-		var x *jval
-		if ok {
-			x, ok = ag.get(agent)
-		}
-		var res *jval
-		if ok {
-			if re, ok2 := x.get("reasoningEffort"); !ok2 {
-				// `//` swallows an error on its left side
-			} else if re.truthy() {
-				res = re
-			}
-			if res == nil {
-				op, ok2 := x.get("options")
-				if ok2 {
-					var re2 *jval
-					if re2, ok2 = op.get("reasoningEffort"); ok2 && re2.truthy() {
-						res = re2
-					}
-				}
-				if !ok2 {
-					failed = true
-					break
-				}
-				if res == nil {
-					res = jstr("null")
-				}
-			}
-		} else {
-			failed = true
-			break
-		}
-		outs = append(outs, res.raw())
-	}
-	if failed {
-		outs = append(outs, "unreadable")
-	}
-	return bashSub(strings.Join(outs, "\n"))
-}
-
-// verifyOpencodeEffort is `_verify_opencode_effort`: asked of the live executor, after start; warns, never dies.
-func (l *lch) verifyOpencodeEffort() {
-	if !(l.agent == "opencode" && l.effort != "") { // # MUTATION-ANCHOR: 847-B2-18
-		return
-	}
-	endpoint := l.hwAgentEndpoint
-	if endpoint == "" {
-		endpoint = l.env("HW_AGENT_ENDPOINT")
-	}
-	shown := endpoint
-	if shown == "" {
-		shown = "<no endpoint>"
-	}
-	src := "GET " + shown + "/config (the executor's own server)"
-	if endpoint == "" {
-		l.receipt("effort_applied", "unverified — no executor endpoint to read /config from", src)
-		l.warn("effort=" + l.effort + " UNVERIFIED: this executor has no endpoint to read its config back from")
-		return
-	}
-	trS := l.env("HW_EFFORT_VERIFY_TRIES")
-	if trS == "" {
-		trS = "10"
-	}
-	tries, nerr := strconv.Atoi(strings.TrimSpace(trS))
-	body := ""
-	if nerr == nil {
-		for i := 0; i < tries; i++ { // # MUTATION-ANCHOR: 847-B2-19
-			out, _ := l.sh(cmdSpec{name: "curl", args: []string{"-fsS", "-m", "3", endpoint + "/config"}, quiet: true})
-			body = bashSub(out)
-			if body != "" {
-				break
-			}
-			lSleep(time.Second)
-		}
-	}
-	if body == "" {
-		l.receipt("effort_applied", "unverified — "+endpoint+"/config did not answer in "+trS+" tries", src)
-		l.warn("effort=" + l.effort + " UNVERIFIED: " + endpoint + "/config never answered, so nothing says it arrived")
-		return
-	}
-	got := effortOf(body, l.opencodePrimaryAgent)
-	if got == l.effort { // # MUTATION-ANCHOR: 847-B2-20
-		l.receipt("effort_applied", "yes — agent \""+l.opencodePrimaryAgent+"\".reasoningEffort="+got, src)
-		l.ok("effort=" + l.effort + " verified on the live executor (agent " + l.opencodePrimaryAgent + ")")
-	} else {
-		l.receipt("effort_applied", "no — agent \""+l.opencodePrimaryAgent+"\".reasoningEffort="+got+", wanted "+l.effort, src)
-		l.warn("effort=" + l.effort + " NOT APPLIED: the live executor's config says reasoningEffort=" + got + " for " + l.opencodePrimaryAgent)
-	}
-}
-
 // ── the step every build path ends with ─────────────────────────────────────────────────────────────────────
 
 // agentStep is `_agent_step`: start the agent in l.pAgent, record, deliver the brief — or die. Ends with the
@@ -593,18 +338,10 @@ func (l *lch) agentStep() {
 			src = "no citation"
 		}
 		l.receipt("requested_by", trimNL(l.requestedLine()), "_check_requested: "+src)
-		ep := l.hwAgentEndpoint
-		if ep == "" {
-			ep = l.env("HW_AGENT_ENDPOINT")
-		}
-		if ep != "" {
-			l.receipt("endpoint", ep, "--port passed to opencode in _build_agent_args")
-		}
 		l.dispatchPublish(l.pAgent)
 		if rc := l.sendBrief(l.pAgent); rc != 0 { // set -e: a failing _send_brief ends hw with its status
 			panic(exitNow{rc}) // # MUTATION-ANCHOR: 847-B2-22
 		}
-		l.verifyOpencodeEffort()
 	} else {
 		// A launch with no agent is a failed launch. The receipt and its verdict are written first: what hw
 		// measured is worth keeping precisely then.

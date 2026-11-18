@@ -253,7 +253,7 @@ func (b *brainRun) launchHC() int {
 	opened := false
 	if addr == "" {
 		var rc int
-		if addr, rc = b.hcStartBrainer(plan); rc != 0 {
+		if addr, rc = b.hcStartReporting(plan); rc != 0 {
 			return rc
 		}
 		opened = true
@@ -269,10 +269,8 @@ func (b *brainRun) launchHC() int {
 			how = "resuming " + b.resume
 		}
 		b.outf("restarted %s / %s (%s, %s) — %s — cwd %s\n", b.space, b.tabLabel, addr, b.kind, how, b.dir)
-		b.hcWaitReady(addr)
 	} else if opened {
 		b.outf("opened %s / %s (%s, %s) — cwd %s\n", b.space, b.tabLabel, addr, b.kind, b.dir)
-		b.hcWaitReady(addr)
 	} else {
 		// a brainer opened before the tabs were named (or whose rename missed) is named now; a name a person gave it is left (hcNameTab)
 		hcNameTab(b.hcAppFn(), b.sleep, addr, hcTabName)
@@ -299,15 +297,57 @@ func (b *brainRun) hcFocus(addr string) bool {
 	return false
 }
 
-// hcWaitReady holds a started brainer until its program has said a status (up to 60s), as waitThenFlush does on the TUI:
-// a report typed into claude before it is up is lost. A brainer that never answers in that time is flushed to anyway (the report may then be typed in before claude is up, and a flush that fails keeps it in the outbox).
-func (b *brainRun) hcWaitReady(addr string) {
+// hcWaitReady holds a started brainer until its program has said a status (up to 60s), as waitThenFlush does on the TUI.
+// 60s is MEASURED (2026-11-17: 12 claudes started together at load 23-39, 6 of them `--resume` of the largest sessions): the first
+// status came 4.9-11.0s after `hc run` and none stayed silent, so 60s is 5x the slowest boot seen. Silence cannot be told sooner:
+// the 2s probe window is claude's own, it opens when claude starts, and nothing outside claude says it was missed. A report typed
+// into claude before it is up is lost:
+// a report typed into claude before it is up is lost. It says whether the program answered; a brainer that never does is flushed to
+// anyway (the report may then be typed in before claude is up, and a flush that fails keeps it in the outbox).
+func (b *brainRun) hcWaitReady(addr string) bool {
 	for i := 0; i < 60; i++ {
-		if info, ok := hcAgentGetJSON(addr); ok && jqRawOr(info, "unknown", "result", "agent", "agent_status") != "unknown" {
-			return
+		if m, ok := b.hcGet(addr); ok && hcStr(m, "state") == "live" { // the one seam hcClaudeUp reads through, so one decision is not made on two readers
+			if st, _ := m["status"].(jmap); hcStr(st, "state") != "" {
+				return true
+			}
 		}
 		b.sleep(1 * time.Second)
 	}
+	return false
+}
+
+// hcStartAttempts is how many times a brainer is started before a claude that never reports is accepted as it is.
+const hcStartAttempts = 3
+
+// hcStartReporting is hcStartBrainer that does not leave behind a claude the sidebar cannot see. Claude Code reports its status to herdr-core
+// (OSC 7501) only if the core answered a probe it sends once at startup, within 2 s (MEASURED in the 2.1.326 binary: `programStatus` is
+// settled "no" on the first miss and is never asked again); on a loaded machine the answer comes late, and the terminal then runs claude
+// with status null for good (t16j, 2026-11-17; 2 of 6 simultaneous resumes under load 75 on 14 cores). Only a restart asks again, and a
+// brainer that has just started has had no turn to cut, so a claude that is up but silent is ended and started again.
+func (b *brainRun) hcStartReporting(plan brainerLaunch) (string, int) {
+	for try := 1; ; try++ {
+		addr, rc := b.hcStartBrainer(plan)
+		if rc != 0 || b.hcWaitReady(addr) || b.kind != "claude" || !b.hcClaudeUp(addr) {
+			return addr, rc
+		}
+		if try == hcStartAttempts {
+			b.errf("brain: %s runs claude but it never reported a status (its startup probe went unanswered), so the app's sidebar shows no row for it. Replace it with `brain %s --resume <session id>` from another terminal.\n", addr, b.proj)
+			return addr, 0
+		}
+		// hcEnd's working gate cannot see a turn here (a claude with no status never says "working"): it is safe only because the terminal has just started.
+		if !b.hcEnd(addr) { // it said why; the silent terminal may still run, so this is not an "opened"
+			b.errf("brain: %s runs claude with no sidebar row and could not be ended to start it again.\n", addr)
+			return addr, 1
+		}
+	}
+}
+
+// hcClaudeUp says whether the terminal's foreground program is claude: the wait above ran out because claude is silent, not because it is not up yet.
+func (b *brainRun) hcClaudeUp(addr string) bool {
+	m, ok := b.hcGet(addr)
+	fg, _ := m["foreground"].(jmap)
+	argv, _ := fg["argv"].([]any)
+	return ok && len(argv) > 0 && filepath.Base(pyStr(argv[0])) == "claude"
 }
 
 // hcStartBrainer is `hc run`: the terminal is started in the lane's directory with
@@ -319,7 +359,8 @@ func (b *brainRun) hcStartBrainer(plan brainerLaunch) (string, int) {
 		b.errf("brain: %s\n", b.permissionsErr)
 		return "", 1
 	}
-	if b.permissions != "skip" {
+	if b.permissions != "skip" && !b.permsNoted { // once per brain run: a restart does not repeat it
+		b.permsNoted = true
 		b.errf("brain: permissions: ask (%s) — the brainer will stop on permission prompts; answer them in its terminal.\n", b.permissionsSrc)
 	}
 	agentArgs, argRC := b.brainerAgentArgs(plan, "", "", true)
@@ -397,15 +438,12 @@ func (b *brainRun) repointRuns(addr, ended string) {
 	seen := map[string]verdict{}
 	var listed map[string]bool // `hc ls`, read once and only when a terminal's own record settles nothing
 	var lsRead bool
-	mine := hcCoreID(b.getenv) // N3: the same "whose core is this run" reading as hcCoreID in t3_outbox.go; keep them in step
+	mine := hcCoreID(b.getenv) // hcCoreID is defined in hc.go
 	for _, f := range envs {
 		// a run of ANOTHER core (a QA instance, a restart that recycles the numbers) names an address that means nothing here:
 		// `hc get` would answer for whoever holds that number in THIS core, so its liveness is not this run's.
-		core := ""
-		if c, err := os.ReadFile(filepath.Dir(f) + "/hc-core"); err == nil {
-			core = strings.TrimSpace(string(c))
-		}
-		if core != "" && mine != "" && core != mine {
+		core, other := hcRunCore(filepath.Dir(f), mine)
+		if other {
 			continue
 		}
 		ownsRun := core != "" && core == mine // positive evidence: the run names THIS core

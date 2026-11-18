@@ -96,7 +96,6 @@ sys.dont_write_bytecode = True
 MAX_CHAIN = int(os.environ.get("HW_VERDICT_MAX_CHAIN", "3"))
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
 GUARD_JOBS = ("test-deny-repo-writes.mjs", "test-deny-repo-writes-filesystem.mjs",
-              "test-opencode-hw-blocked-reason.mjs", "test-herdr-opencode-background-state.mjs",
               "mutate-deny-repo-writes.sh")
 # Named by the brief, in case the runner's own text stops naming them.
 EXTRA_SHARED = ("setup/verify-for-push", "setup/verdict-incremental", "setup/release/cut",

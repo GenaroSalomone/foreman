@@ -1,20 +1,19 @@
 // hw's executor adapter for pi — loaded by `hw` with `-e <brain>/setup/pi/hw-executor.ts`.
 //
-// One file, the pi half of everything the other vendors already have
+// One file, the pi half of everything Claude Code already has
 // (docs/pi-vendor.md has the whole map):
 //
 //   1. THE WRITE GUARD. `tool_call` can block (`{ block: true, reason }`), so the
 //      lane's read-only policy is judged here for EVERY tool that can write: `bash`,
-//      `edit`, `write` with the SAME detection the opencode half uses
-//      (`setup/guards/deny-repo-writes.js`, `decide` for a command, `insideProtected`
-//      for a file path), and any other tool — an extension's, an MCP server's,
+//      `edit`, `write` with the SAME detection the Claude hook's policy uses
+//      (`setup/guards/deny_repo_writes.py`, asked per call through `deny_repo_writes_ask.py`:
+//      `decide` for a command, `_inside_protected` for a file path), and any other tool — an extension's, an MCP server's,
 //      pi-subagents' — by what it is handed (`classifyTool`, `scanInput`). A handler
 //      that throws also blocks — pi's documented fail-safe — and a guard that cannot
-//      load its module blocks every bash/edit/write, as the opencode shim does.
+//      load its module blocks every bash/edit/write.
 //      A PRODUCT executor also carries the INVERSE guard (`HW_PI_BRAIN_GUARD=1`, set
 //      by hw): it does not write in brain, work from it or commit a path into it —
-//      the same Python decision (`deny_brain_writes.py`) the claude hook and the
-//      opencode plugin ask. The two global hooks every agent is under (Keychain
+//      the same Python decision (`deny_brain_writes.py`) the claude hook asks. The two global hooks every agent is under (Keychain
 //      secret reads, blind `pkill`) are asked here too: `-ne` drops the user-level
 //      extension that would otherwise be their only pi door.
 //      THE GUARD TRAVELS WITH THE SUBAGENTS: pi-subagents' children are sessions of
@@ -82,8 +81,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const HERE = dirname(realpathSync(fileURLToPath(import.meta.url)));
 const SELF = join(HERE, "hw-executor.ts");
 const BRAIN = process.env.HW_BRAIN_ROOT || resolve(HERE, "..", "..");
-const GUARD_MODULE = join(BRAIN, "setup", "guards", "deny-repo-writes.js");
-const BRAIN_GUARD_MODULE = join(BRAIN, "setup", "guards", "deny-brain-writes.js");
+const GUARD_SCRIPT = join(BRAIN, "setup", "guards", "deny_repo_writes_ask.py");
 const LANE = process.env.HW_PROJECT || "brain";
 
 function isHwExecutor(): boolean {
@@ -97,16 +95,52 @@ function runDir(): string | null {
 }
 
 // ── 1. the guard ────────────────────────────────────────────────────────────
-let guard: any = null;
-let guardError: string | null = null;
-async function loadGuard() {
-  if (guard || guardError) return;
+// THE DECISION IS THE PYTHON'S (deny_repo_writes.py, the file the Claude hooks run); this asks it, per question, through
+// `deny_repo_writes_ask.py` (one JSON request on stdin, one JSON answer on stdout, measured ~40 ms a spawn). FAILS CLOSED:
+// anything but exit 0 with a JSON object — no python3, a crash, an unknown lane, unreadable output — throws, and every
+// caller turns the throw into a refusal.
+// EVERY GUARD IS SPAWNED ISOLATED (`-I`): no user site, no PYTHONPATH/PYTHONHOME, no script directory on sys.path. Without it
+// Python runs `usercustomize.py` and `.pth` lines from the user site, a directory outside every protected tree that an
+// executor can write, and a stub there answers for the guard (measured by the review of b3b118dfb). The guards put their
+// own directory on sys.path themselves and import only the standard library.
+const PYTHON = process.platform === "win32" ? "python3" : "/usr/bin/python3";
+function spawnGuard(file: string, input: string, timeout: number) {
+  // HW_GUARD_PYCACHE: a bytecode cache for the 2.7k-line guard module. Under a runner that forbids bytecode (PYTHONDONTWRITEBYTECODE)
+  // every spawn recompiles it (~160 ms of ~220 ms, measured); `-X pycache_prefix` survives `-I` and keeps the cache out of the tree.
+  const cache = process.env.HW_GUARD_PYCACHE ? ["-X", `pycache_prefix=${process.env.HW_GUARD_PYCACHE}`] : [];
+  return spawnSync(PYTHON, ["-I", ...cache, file], { input, encoding: "utf8", timeout });  // # MUTATION-ANCHOR: 1391-M01
+}
+const GUARD_ANSWERS: Record<string, (a: any) => boolean> = {
+  check: () => true,
+  decide: (a) => "reason" in a && (a.reason === null || typeof a.reason === "string"),
+  inside: (a) => Array.isArray(a.inside) && a.inside.length === 1 && typeof a.inside[0] === "boolean",
+};
+function askGuard(req: { op: string } & Record<string, unknown>): any {
+  const r = spawnGuard(GUARD_SCRIPT, JSON.stringify({ lane: LANE, ...req }), 20000);
+  if (r.error) throw new Error(`could not run (${r.error.message})`);
+  if (r.status !== 0) throw new Error(`exit ${r.status === null ? "by a signal" : r.status}: ${(r.stderr ?? "").trim().split("\n").pop()?.slice(0, 300)}`);  // # MUTATION-ANCHOR: 1391-M02
+  let answer: any;
+  try { answer = JSON.parse(r.stdout); } catch { throw new Error(`answered something unreadable (${(r.stdout ?? "").slice(0, 200)})`); }
+  // An answer that is not the shape asked for is a refusal, never an allow: `{}` must not read as "no reason to refuse".
+  const wrongShape = answer === null || typeof answer !== "object" || Array.isArray(answer) || !GUARD_ANSWERS[req.op]?.(answer);  // # MUTATION-ANCHOR: 1391-M03
+  if (wrongShape) throw new Error(`answered the wrong shape (${(r.stdout ?? "").slice(0, 200)})`);
+  return answer;
+}
+const guard = {
+  decide: (command: string, cwd: string): string | null => askGuard({ op: "decide", command, cwd }).reason,
+  inside: (path: string): boolean => askGuard({ op: "inside", paths: [path] }).inside[0],
+};
+// Only a SUCCESS is remembered: one spawn that timed out under load must not refuse the rest of the session.
+let guardLoaded = false;
+async function loadGuard(): Promise<string | null> {
+  if (guardLoaded) return null;
   try {
-    guard = await import(GUARD_MODULE);
-    guard.config(LANE); // an unknown lane refuses below, it does not pass
+    if (!existsSync(GUARD_SCRIPT)) throw new Error("not in this tree");
+    askGuard({ op: "check" }); // an unknown lane refuses, it does not pass
+    guardLoaded = true;
+    return null;
   } catch (e: any) {
-    guardError = String(e?.message ?? e);
-    guard = null;
+    return String(e?.message ?? e);
   }
 }
 
@@ -116,7 +150,7 @@ const WRITE_TOOLS = new Set(["edit", "write"]);
 // guards.json protects each product lane's checkout AND its worktrees root, which
 // is right for a brainer and wrong for the executor whose own worktree sits under
 // that root (Judgment Day, both judges: every edit and every mutating bash of a
-// product-lane pi executor was refused). Claude and opencode executors carry no lane
+// product-lane pi executor was refused). A Claude executor carries no lane
 // repo-write policy at all; so here, when the executor's own workdir is inside
 // its lane's protected trees, that workdir is exempt for edit/write (the main
 // checkout and sibling worktrees stay refused) and bash is not judged by THIS policy —
@@ -124,7 +158,7 @@ const WRITE_TOOLS = new Set(["edit", "write"]);
 // to tell its own worktree apart. What stops such an executor writing in brain is the
 // inverse guard below; docs/pi-vendor.md lists the bash gap towards sibling worktrees.
 function canonical(p: string): string {
-  try { return realpathSync(p); } catch { return guard.normPath(p); }
+  try { return realpathSync(p); } catch { return resolve(p); }
 }
 function within(child: string, parent: string): boolean {
   const c = canonical(child).toLowerCase(), q = canonical(parent).toLowerCase().replace(/\/+$/, "");
@@ -166,10 +200,12 @@ export function withoutOwnWorkdir(command: string, own: string): string {
   }
   return text;
 }
+let ownProtected: { wd: string; inside: boolean } = { wd: "", inside: false };
 function ownWorkdirProtected(): string | null {
   const wd = process.env.HW_WORKDIR;
   if (!isHwExecutor() || !wd) return null;
-  return guard.insideProtected(guard.config(LANE), canonical(wd)) ? wd : null;
+  if (ownProtected.wd !== wd) ownProtected = { wd, inside: guard.inside(canonical(wd)) };
+  return ownProtected.inside ? wd : null;
 }
 
 // WHAT A TOOL IS, BY NAME, because pi's tools are an open set: the built-ins, whatever an
@@ -230,7 +266,7 @@ export function scanInput(input: unknown, depth = 0): { paths: string[]; command
 // `~` as the guard reads it: the password-database home, not $HOME.
 function absolutePath(p: string, cwd: string): string {
   const expanded = p.startsWith("~/") ? join(userInfo().homedir, p.slice(2)) : p;
-  return guard.normPath(isAbsolute(expanded) ? expanded : join(cwd, expanded));
+  return resolve(isAbsolute(expanded) ? expanded : join(cwd, expanded));
 }
 
 // ── 1b. THE SECRET READ GUARD ───────────────────────────────────────────────
@@ -249,8 +285,8 @@ function absolutePath(p: string, cwd: string): string {
 // ADDED beyond the Claude list: `*.db` (shared rule) and the agents' own login files (pi's, codex's, opencode's `auth.json`).
 // It judges `read`, `grep`, `edit`, `write`, every other tool's path arguments and every `bash` (and any command
 // argument). A bash is judged by the paths its text NAMES, not by what it runs: this is a string-level guard, not a
-// sandbox. A path assembled at run time (`cat $(printf .e)nv`) is not seen; `--sandbox` denies the OS-level read of
-// ~/.ssh (bin/hw-sandbox) and nothing else (docs/pi-vendor.md, "The secret read guard").
+// sandbox. A path assembled at run time (`cat $(printf .e)nv`) is not seen.
+// (docs/pi-vendor.md, "The secret read guard").
 const HOME_DIR = (() => { try { return userInfo().homedir; } catch { return process.env.HOME || ""; } })();
 function homeDir(): string { return HOME_DIR; }
 const SECRET_SUFFIXES: Array<[string, string]> = [[".db", "*.db"], [".credentials", "*.credentials"], [".pem", "*.pem"], [".key", "*.key"]];
@@ -531,33 +567,32 @@ export function redactSecretLines(text: string, cwd: string, searchPath: string 
   return { text: kept.join("\n"), dropped };
 }
 
-// THE INVERSE GUARD (brain), asked per call with the Claude-shaped payload its Python half reads.
-// A product executor only; fails closed like the opencode shim.
-let brainGuard: any = null;
-let brainGuardError: string | null = null;
-async function loadBrainGuard() {
-  if (brainGuard || brainGuardError) return;
+// A CLAUDE-SHAPED HOOK, ASKED PER CALL (the payload its Python reads): exit 2 is its refusal, the deny JSON on stdout (exit 0)
+// is its refusal, empty stdout is "not mine". FAILS CLOSED on everything else: a guard that is missing, cannot run, ends
+// non-zero or answers something unreadable has not established that the call is safe.
+function claudeHookVerdict(file: string, label: string, payload: Record<string, unknown>, timeout: number): string | null {
+  if (!existsSync(file)) {
+    return `Blocked: the ${label} could not load ${file} (not in this tree), so this call was not judged. ` +
+      "A guard that is not running has not established that the call is safe.";
+  }
+  const r = spawnGuard(file, JSON.stringify(payload), timeout);
+  if (r.error) return `Blocked: the ${label} could not run (${r.error.message}), so this call was not judged.`;
+  if (r.status === 2) return (r.stderr || "").trim() || `Blocked by ${file}`;
+  if (r.status !== 0) {
+    return `Blocked: the ${label} ended with ${r.status === null ? "a signal" : "exit " + r.status} and reached no verdict, so this call was not judged.`;
+  }
+  const out = (r.stdout ?? "").trim();
+  if (!out) return null;
   try {
-    const mod = await import(BRAIN_GUARD_MODULE);
-    brainGuard = mod.DenyBrainWrites;
-    if (typeof brainGuard?.verdict !== "function") throw new Error("DenyBrainWrites.verdict is missing");
-  } catch (e: any) {
-    brainGuardError = String(e?.message ?? e);
-    brainGuard = null;
+    const d = JSON.parse(out).hookSpecificOutput;
+    return d?.permissionDecision === "deny" ? String(d.permissionDecisionReason || `Blocked by ${file}`) : null;
+  } catch {
+    return `Blocked: the ${label} answered something unreadable (${out.slice(0, 200)}).`;
   }
 }
-async function brainVerdict(payload: Record<string, unknown>): Promise<string | null> {
-  await loadBrainGuard();
-  if (!brainGuard) {
-    return `Blocked: the brain guard could not load ${BRAIN_GUARD_MODULE} (${brainGuardError}). ` +
-      "A product executor is refused every write until it does: a guard that is not running has not established that the call is safe.";
-  }
-  try {
-    return brainGuard.verdict(payload) ?? null;
-  } catch (e: any) {
-    return `Blocked: the brain guard CRASHED while deciding (${String(e?.message ?? e)}). It reached no verdict, so the call is refused.`;
-  }
-}
+// THE INVERSE GUARD (brain): a PRODUCT executor does not write in brain (deny_brain_writes.py, the file the Claude hook asks).
+const BRAIN_GUARD = join(BRAIN, "setup", "guards", "deny_brain_writes.py");
+const brainVerdict = (payload: Record<string, unknown>) => claudeHookVerdict(BRAIN_GUARD, "brain guard", payload, 60000);
 
 // THE SLEEP-POLL RULE IS ASKED HERE TOO (pi parity, 2026-11-04). It is the one hw rule that lives in a personal
 // guard rather than an exported one (setup/export/manifest), so the copy THIS TREE carries is the one asked:
@@ -591,17 +626,14 @@ function sleepPollVerdict(command: string, bg: boolean): string | null {
   if (!command.includes("sleep") && !command.includes("tail") && !command.includes("pgrep") && !/go\s+test/.test(command)) return null;
   const file = sleepPollGuard();
   if (!file) return null;
-  const r = spawnSync(process.platform === "win32" ? "python3" : "/usr/bin/python3", [file], {
-    input: JSON.stringify({ tool_name: "Bash", tool_input: { command, run_in_background: bg }, background_tool: BG_TOOL, cwd: process.cwd(), active_work: activeWork() }),
-    encoding: "utf8", timeout: 20000,
-  });
+  const r = spawnGuard(file, JSON.stringify({ tool_name: "Bash", tool_input: { command, run_in_background: bg }, background_tool: BG_TOOL, cwd: process.cwd(), active_work: activeWork() }), 20000);
   if (r.error) return `Blocked: the sleep-poll guard ${file} could not run (${r.error.message}), so this command was not judged.`;
   if (r.status === 2) return (r.stderr || "").trim() || `Blocked by the sleep-poll guard ${file}`;
   return null;
 }
 
 // THE TWO GLOBAL HOOKS EVERY AGENT IS UNDER (~/.claude/hooks, one Python rule set each, the same
-// one Claude, Codex and OpenCode ask): a Keychain secret read, a blind pkill/killall.
+// one Claude asks): a Keychain secret read, a blind pkill/killall.
 // Exit 2 is their refusal; a python that could not start reached no verdict, so it refuses too.
 const GLOBAL_BASH_HOOKS: Array<{ file: string; applies: RegExp }> = [
   { file: "block-keychain-secret-read.py", applies: /\bsecurity\b/ },
@@ -611,9 +643,7 @@ function globalHookVerdict(command: string): string | null {
   for (const h of GLOBAL_BASH_HOOKS) {
     if (!h.applies.test(command)) continue;
     const script = join(homedir(), ".claude", "hooks", h.file);
-    const r = spawnSync(process.platform === "win32" ? "python3" : "/usr/bin/python3", [script], {
-      input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }), encoding: "utf8", timeout: 20000,
-    });
+    const r = spawnGuard(script, JSON.stringify({ tool_name: "Bash", tool_input: { command } }), 20000);
     if (r.error) return `Blocked: the global guard ${h.file} could not run (${r.error.message}), so this command was not judged.`;
     if (r.status === 2) return (r.stderr || "").trim() || `Blocked by ${h.file}`;
   }
@@ -628,26 +658,7 @@ const SETUP_BRAIN_GUARD = join(BRAIN, "setup", "guards", "deny_setup_brain_write
 function setupBrainGuardOn(): boolean {
   return isHwExecutor() && process.env.HW_PROJECT === "setup";
 }
-function setupBrainVerdict(payload: Record<string, unknown>): string | null {
-  if (!existsSync(SETUP_BRAIN_GUARD)) {
-    return `Blocked: the setup brain-write guard ${SETUP_BRAIN_GUARD} is not in this tree, so this call was not judged.`;
-  }
-  const r = spawnSync(process.platform === "win32" ? "python3" : "/usr/bin/python3", [SETUP_BRAIN_GUARD], {
-    input: JSON.stringify(payload), encoding: "utf8", timeout: 20000,
-  });
-  if (r.error) return `Blocked: the setup brain-write guard could not run (${r.error.message}), so this call was not judged.`;
-  if (r.status === 2) return (r.stderr || "").trim() || `Blocked by ${SETUP_BRAIN_GUARD}`;
-  // FAIL CLOSED: a guard that crashed (exit 1 with a traceback) or was killed (status null) reached no verdict, and only
-  // exit 0 is the guard saying "not mine / allowed" (Judgment Day, judge A).
-  if (r.status !== 0) return `Blocked: the setup brain-write guard ended with ${r.status === null ? "a signal" : "exit " + r.status} and reached no verdict, so this call was not judged.`;
-  try {
-    const out = JSON.parse(r.stdout || "{}");
-    if (out?.hookSpecificOutput?.permissionDecision === "deny") {
-      return String(out.hookSpecificOutput.permissionDecisionReason || `Blocked by ${SETUP_BRAIN_GUARD}`);
-    }
-  } catch { /* no JSON on stdout: the guard said nothing */ }
-  return null;
-}
+const setupBrainVerdict = (payload: Record<string, unknown>) => claudeHookVerdict(SETUP_BRAIN_GUARD, "setup brain-write guard", payload, 20000);
 
 export async function judge(toolName: string, input: any, cwd: string): Promise<string | null> {
   const raw = /^mcp__engram__/.test(toolName);
@@ -659,16 +670,19 @@ export async function judge(toolName: string, input: any, cwd: string): Promise<
   if (secret) return secret;
   const kind = classifyTool(toolName);
   if (kind === "read") return null;
-  await loadGuard();
-  if (!guard) {
-    return `Blocked: the ${LANE} read-only guard could not load ${GUARD_MODULE} (${guardError}). ` +
+  const loadError = await loadGuard();
+  if (loadError) {
+    return `Blocked: the ${LANE} read-only guard could not load ${GUARD_SCRIPT} (${loadError}). ` +
       `Every ${toolName} call is refused until it loads, because a guard that is not running ` +
       "cannot tell a protected tree from any other directory.";
   }
   if (input === null || typeof input !== "object" || Array.isArray(input)) {
     return `Blocked: the ${LANE} read-only guard could not read the ${toolName} arguments. Refused rather than guessed.`;
   }
-  const own = ownWorkdirProtected();
+  let own: string | null;
+  try { own = ownWorkdirProtected(); } catch (e: any) {
+    return `Blocked: the ${LANE} read-only guard CRASHED while reading this executor's own worktree (${String(e?.message ?? e)}). It reached no verdict, so the call is refused.`;
+  }
   const commandIn = (command: string, background = false): string | null => {
     const g = globalHookVerdict(command);
     if (g) return g;
@@ -678,8 +692,7 @@ export async function judge(toolName: string, input: any, cwd: string): Promise<
     // checkout and its sibling worktrees stay protected, the worktree it was given does not.
     const judged = own ? withoutOwnWorkdir(command, own) : command;  // # MUTATION-ANCHOR: 991-M06
     try {
-      const verdict = guard.decide(LANE, judged, own ? NEUTRAL_CWD : cwd);
-      return verdict ? verdict.reason : null;
+      return guard.decide(judged, own ? NEUTRAL_CWD : cwd);
     } catch (e: any) {
       return `Blocked: the ${LANE} read-only guard CRASHED while deciding (${String(e?.message ?? e)}). ` +
         "It reached no verdict, so the command is refused.";
@@ -688,9 +701,13 @@ export async function judge(toolName: string, input: any, cwd: string): Promise<
   const pathIn = (p: string): string | null => {
     const abs = absolutePath(p, cwd);
     if (own && within(abs, own)) return null;
-    if (guard.insideProtected(guard.config(LANE), abs)) {
-      return `Blocked: ${toolName} would write ${abs}, inside a product repo or a live worktree. ` +
-        `The ${LANE} lane is read-only there.`;
+    try {
+      if (guard.inside(abs)) {
+        return `Blocked: ${toolName} would write ${abs}, inside a product repo or a live worktree. ` +
+          `The ${LANE} lane is read-only there.`;
+      }
+    } catch (e: any) {
+      return `Blocked: the ${LANE} read-only guard CRASHED while deciding (${String(e?.message ?? e)}). It reached no verdict, so the call is refused.`;
     }
     return null;
   };
@@ -730,11 +747,11 @@ export async function judge(toolName: string, input: any, cwd: string): Promise<
   }
   if (brainGuardOn()) {  // # MUTATION-ANCHOR: 988-M01
     for (const c of commands) {
-      const r = await brainVerdict({ tool_name: "Bash", tool_input: { command: c }, cwd });
+      const r = brainVerdict({ tool_name: "Bash", tool_input: { command: c }, cwd });
       if (r) return r;
     }
     for (const p of paths) {
-      const r = await brainVerdict({ tool_name: "Write", tool_input: { file_path: absolutePath(p, cwd) }, cwd });
+      const r = brainVerdict({ tool_name: "Write", tool_input: { file_path: absolutePath(p, cwd) }, cwd });
       if (r) return r;
     }
   }

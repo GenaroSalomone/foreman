@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"path"
-	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -63,40 +62,6 @@ func (d *dsp) leaseSeconds(arg string) string {
 }
 
 // ── the run directory ───────────────────────────────────────────────────────
-
-// nextRunDir is `_next_run_dir`: the newest run directory of a live executor, found from the cwd herdr reports
-// for its pane, walking up. "" when there is none.
-func (d *dsp) nextRunDir(cwd string) string {
-	dir := cwd
-	for hops := 0; hops < 12 && dir != "" && dir != "/"; hops++ {
-		if isDir(dir + "/.hw") {
-			if n := rtNewestRun(dir + "/.hw"); n != "" {
-				return n
-			}
-		}
-		dir = rtBashDirname(dir)
-	}
-	return ""
-}
-
-// rtNewestRun is `fd -H -t d -d 1 '^2[0-9]{7}-[0-9]{6}-[0-9]+$' <hw> | sort -r | head -1`, minus a trailing slash.
-func rtNewestRun(hw string) string {
-	ents, err := os.ReadDir(hw)
-	if err != nil {
-		return ""
-	}
-	var names []string
-	for _, e := range ents {
-		if e.IsDir() && RunIDPattern.MatchString(e.Name()) {
-			names = append(names, e.Name())
-		}
-	}
-	if len(names) == 0 {
-		return ""
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(names))) // # MUTATION-ANCHOR: 844-R13
-	return hw + "/" + names[0]
-}
 
 // rtDigits is `tr -dc '0-9'`.
 func rtDigits(s string) string {
@@ -248,7 +213,7 @@ func (d *dsp) chainingLeaseField(rundir, key string) string {
 	last := ""
 	for _, line := range rtRecords(text) {
 		if strings.HasPrefix(line, key+"=") {
-			last = line[len(key)+1:] // # MUTATION-ANCHOR: 844-R16
+			last = line[len(key)+1:]
 		}
 	}
 	return last
@@ -407,7 +372,7 @@ func (d *dsp) checkReusableExecutor(proj string) {
 		if cwd == "" {
 			continue
 		}
-		rundir := d.nextRunDir(cwd)
+		rundir, _ := nextRunDir(cwd)
 		if rundir == "" {
 			continue
 		}
@@ -603,25 +568,7 @@ func (d *dsp) reuseRoute() {
 	refuse := func(flag, value, tail string) {
 		d.die(flag + " " + value + " REFUSED on the REUSE route: " + tail)
 	}
-	codexHandoff := false
-	if d.modelSrc == "chosen" || d.agentSrc == "chosen" || d.effort != "" { // # MUTATION-ANCHOR: 844-R51
-		var surface string
-		if d.c.t.get(d.proj, "product_repo") == "1" {
-			surface = d.c.checkout(d.proj) // _surface_dir
-		} else {
-			surface = path.Dir(path.Dir(d.reuseRundir)) // # MUTATION-ANCHOR: 844-R52
-		}
-		d.resolveEffectiveSddMode(d.sddRequested(), surface, d.runDispatchFramework(d.reuseRundir)) // # MUTATION-ANCHOR: 844-R53
-		// # MUTATION-ANCHOR: 844-136-M04
-		if d.agentSrc == "chosen" {
-			switch d.agent + ":" + d.sddEffectiveMode {
-			case "codex:speckit": // # MUTATION-ANCHOR: 844-136-M03
-				codexHandoff = true
-			}
-		} // # MUTATION-ANCHOR-END: 844-136-M04
-
-	}
-	if d.modelSrc == "chosen" && !codexHandoff { // # MUTATION-ANCHOR: 844-136-M01
+	if d.modelSrc == "chosen" { // # MUTATION-ANCHOR: 844-136-M01
 		d.reuseFlagDecision(d.model, d.reuseModel)
 		switch d.reuseFlagVerdict {
 		case "unmeasurable":
@@ -630,16 +577,16 @@ func (d *dsp) reuseRoute() {
 			refuse("--model", d.model, "pane "+d.reusePane+" is already running with "+d.reuseMeasuredDesc(d.reuseModel, "--model")+", fixed at ITS launch — --model cannot reach a live session. Nothing was sent. Launch a fresh executor with that model instead: add --fresh to this command.") // # MUTATION-ANCHOR: 844-R55
 		}
 	}
-	if d.agentSrc == "chosen" && !codexHandoff { // # MUTATION-ANCHOR: 844-136-M05
+	if d.agentSrc == "chosen" {
 		d.reuseFlagDecision(d.agent, d.reuseVendor)
 		switch d.reuseFlagVerdict {
 		case "unmeasurable":
 			refuse("--agent", d.agent, "pane "+d.reusePane+"'s current vendor could not be measured (herdr reports no vendor for "+d.reusePane+"), and --agent cannot reach a live session regardless. Nothing was sent. Launch a fresh executor with that vendor instead: add --fresh to this command.") // # MUTATION-ANCHOR: 844-R56
 		case "mismatch":
-			refuse("--agent", d.agent, "pane "+d.reusePane+" is already running "+d.reuseMeasuredDesc(d.reuseVendor, "--agent")+", fixed at ITS launch — --agent selects which vendor process to start, and there is no live process left to select. Nothing was sent. Launch a fresh executor with that vendor instead: add --fresh to this command.") // # MUTATION-ANCHOR: 844-R57
+			refuse("--agent", d.agent, "pane "+d.reusePane+" is already running "+d.reuseMeasuredDesc(d.reuseVendor, "--agent")+", fixed at ITS launch — --agent selects which vendor process to start, and there is no live process left to select. Nothing was sent. Launch a fresh executor with that vendor instead: add --fresh to this command.")
 		}
 	}
-	if d.effort != "" && !codexHandoff { // # MUTATION-ANCHOR: 844-136-M06
+	if d.effort != "" { // # MUTATION-ANCHOR: 844-136-M06
 		d.reuseFlagDecision(d.effort, d.reuseEffort)
 		switch d.reuseFlagVerdict {
 		case "unmeasurable":
@@ -653,7 +600,7 @@ func (d *dsp) reuseRoute() {
 		switch d.reuseVendor {
 		case "", "claude": // # MUTATION-ANCHOR: 844-R59
 		default:
-			vendorClause = " AND SEPARATELY, BY VENDOR: that pane is running " + d.reuseVendor + ", which does not read CLAUDE_CONFIG_DIR at all, so no account would reach it even on a fresh launch under that vendor — a fresh launch under this account needs --agent claude as well." // # MUTATION-ANCHOR: 844-R60
+			vendorClause = " AND SEPARATELY, BY VENDOR: that pane is running " + d.reuseVendor + ", which does not read CLAUDE_CONFIG_DIR at all, so no account would reach it even on a fresh launch under that vendor — a fresh launch under this account needs --agent claude as well."
 		}
 		want, known := d.accountConfigDirOf(d.account)
 		if !known { // # MUTATION-ANCHOR: 844-R61
@@ -671,9 +618,6 @@ func (d *dsp) reuseRoute() {
 		args = append(args, "--brief", d.brief)
 	} else {
 		args = append(args, d.task)
-	}
-	if d.sdd != "" && !d.sddDefaulted { // # MUTATION-ANCHOR: 844-R65
-		args = append(args, "--sdd", d.sdd)
 	}
 	if d.allowStaleHooks {
 		args = append(args, "--allow-stale-hooks")

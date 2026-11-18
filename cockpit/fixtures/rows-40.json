@@ -46,7 +46,7 @@
     "last_at": 1789989200000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "idle",
@@ -208,7 +208,7 @@
    "title": null,
    "commits": null,
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "idle",
@@ -311,7 +311,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "working",
@@ -359,7 +359,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "working",
@@ -503,7 +503,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "working",
@@ -551,7 +551,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "working",
@@ -599,7 +599,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "working",
@@ -743,7 +743,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "working",
@@ -791,7 +791,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "working",
@@ -839,7 +839,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "working",
@@ -983,7 +983,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "working",
@@ -1031,7 +1031,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "working",
@@ -1223,7 +1223,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "working",
@@ -1271,7 +1271,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "working",
@@ -1463,7 +1463,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "working",
@@ -1511,7 +1511,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "working",
@@ -1754,7 +1754,7 @@
     "last_at": null
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "idle",
@@ -1803,7 +1803,7 @@
     "last_at": null
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "idle",
@@ -1852,7 +1852,7 @@
     "last_at": null
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "idle",
@@ -1901,7 +1901,7 @@
     "last_at": null
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": null,
    "agent_status": "idle",

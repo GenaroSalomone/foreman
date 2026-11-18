@@ -23,7 +23,7 @@ type nextState struct {
 	force, dry, allowStale                      bool
 
 	info, cwd, vendor, status string
-	rundir, wtdir, prior      string
+	rundir, wtdir             string
 	reopened                  bool
 	reopenedMarker            string
 	requestedBy               string
@@ -31,7 +31,6 @@ type nextState struct {
 	seq, marker               string
 
 	route, target, endpoint string
-	snd                     nextSender
 }
 
 func (a *app) cmdNext() int {
@@ -128,20 +127,16 @@ loop:
 	// nothing to name, refuses the re-task exactly as the launch does.
 	if s.brief != "" {
 		a.nextReviewGate(s.brief)
+		a.nextSddGate(s.brief) // # MUTATION-ANCHOR: 862-G31
 	}
 	switch s.nextSDD {
-	case "", "speckit", "none":
+	case "", "none":
 	case "gentle": // RETIRED SPELLING (gentle-ai left hw): warn and run none, as the launch does.
 		a.warn("hw next --sdd gentle is retired: gentle-ai is no longer part of hw. Running --sdd none.")
-		s.nextSDD = "none"
+	case "speckit": // REMOVED: the Spec Kit flow left hw
+		a.die(speckitRemoved("--sdd speckit was given", "Nothing was sent and the task counter did not move. Re-task without --sdd (or --sdd none)."))
 	default:
-		a.die("--sdd must be speckit or none (got: " + s.nextSDD + ")")
-	}
-
-	// _next_load_invoker_lib: the invoker library and the state witness, beside bin/hw
-	bin := a.nextBinDir()
-	if !nextReadable(bin + "/invoker-common.sh") {
-		a.die("cannot find invoker-common.sh beside " + bin + " — this brain/bin is incomplete")
+		a.die("--sdd must be none (got: " + s.nextSDD + ")")
 	}
 
 	s.info = a.nextAgentGet(s.pane)
@@ -195,13 +190,11 @@ loop:
 	if files := a.nextRefuseIfStaleHooks(s.wtdir, s.allowStale); files != "" {
 		a.receiptInto(s.rundir, "stale_hooks_allowed", files, "--allow-stale-hooks (hw next)")
 	}
-	s.prior = nextDispatchFramework(s.rundir)
 	// A pane launched --sdd gentle before gentle-ai left hw still carries ODD in its system prompt for the whole
 	// session; hw no longer adds anything to it and says so once.
-	if s.prior == "gentle" {
+	if nextDispatchFramework(s.rundir) == "gentle" {
 		a.warn(s.pane + " was launched --sdd gentle, which is retired: its session still carries ODD, and hw adds nothing of it to this task.")
 	}
-	effective := a.nextValidateSDDVendor(s.vendor, s.nextSDD, s.wtdir, s.prior)
 	// The model check of `hw next`, and the same ONE effort check the dispatch runs (t5_vendor_agent.go
 	// modelEffortSuffixRefusal): a pane launched with a level inside its model id had that level dropped, and re-tasking
 	// it would carry the loss forward in silence. A dispatch no longer produces such a model, so this only ever speaks
@@ -210,7 +203,6 @@ loop:
 	if msg := modelEffortSuffixRefusal(model, "the model this pane was launched with"); msg != "" {
 		a.die(msg)
 	}
-	a.nextValidateSDDModel(model, effective, "this pane was launched with that model; hw next cannot change it")
 	a.nextCheckBriefModel(s.brief, s.pane, model)
 	a.nextCheckBriefEffort(s.brief, s.vendor, s.pane, nextDispatchEffort(s.rundir))
 	a.nextCheckBriefPlugins(s.brief, s.vendor, s.pane, s.rundir)
@@ -252,7 +244,7 @@ loop:
 	}
 
 	// The route, resolved BEFORE the gate so a dry run proves it too.
-	a.nextResolveRoute(s, s.info)
+	a.nextResolveRoute(s)
 
 	nextSeq, _ := nextArith(s.seq)
 	nextSeqS := strconv.FormatInt(nextSeq+1, 10)
@@ -262,41 +254,28 @@ loop:
 	}
 
 	// Gate BEFORE the counter moves.
+	var w nextWitness
 	gateRC := 0
 	if nextFinishedStaleStuck(s.info) {
 		a.info(s.pane + " already reported with delivered completion tokens; ignoring its stale blocked/stuck lifecycle token and re-tasking without --force.")
 	} else {
-		if a.nextClearQuestion(s.pane) == 0 {
-			a.info(s.pane + " was blocked on its own opencode question modal; dismissed it (the executor sees question.rejected) and the pane reached idle. Re-tasking now.")
-		}
-		var w nextWitness
 		gateRC = a.nextWitnessWait(s.pane, waitMS, &w) // # MUTATION-ANCHOR: 862-G08
-		s.snd.witness = w
 	}
 	if gateRC != 0 {
-		if a.nextClearQuestion(s.pane) == 0 {
-			a.info(s.pane + " was blocked on its own opencode question modal; dismissed it (the executor sees question.rejected) and the pane reached idle. Re-tasking now.")
-		} else {
-			busy := a.nextAgentGet(s.pane)
-			if nextFinishedStaleStuck(busy) {
-				a.info(s.pane + " reported while the gate was checking it; delivered completion tokens now prove blocked/stuck is stale. Re-tasking without --force.")
-				a.nextResolveRoute(s, "")
-			} else {
-				detail := s.snd.witness.detail
-				if gateRC == 6 {
-					a.warn(detail)
-					a.die(s.pane + " is waiting for a PERSON, not for time: its own endpoint confirms a prompt is outstanding (see above). The task counter did NOT move and nothing was sent. Answer that prompt on the pane — or have " + a.nextOperator() + " answer it — and re-run this identical hw next. Do not raise the budget and do not reach for --force: neither answers a question.")
-				}
-				if gateRC == 5 {
-					a.warn(detail)
-					a.die(nextSettledMessage(s.pane, waitMS, busy))
-				}
-				if detail != "" {
-					a.warn("cross-check: " + detail)
-				}
-				a.die(nextBusyMessage(s.pane, waitMS, busy))
-			}
+		busy := a.nextAgentGet(s.pane)
+		if nextFinishedStaleStuck(busy) {
+			a.info(s.pane + " reported while the gate was checking it; delivered completion tokens now prove blocked/stuck is stale. Re-tasking without --force.")
+			a.nextResolveRoute(s)
+			return a.nextDeliver(s, nextSeqS)
 		}
+		if gateRC == 6 {
+			a.warn(w.detail)
+			a.die(s.pane + " is waiting for a PERSON, not for time: it is blocked on a prompt (see above). The task counter did NOT move and nothing was sent. Answer that prompt on the pane — or have " + a.nextOperator() + " answer it — and re-run this identical hw next. Do not raise the budget and do not reach for --force: neither answers a question.")
+		}
+		if w.detail != "" {
+			a.warn("cross-check: " + w.detail)
+		}
+		a.die(nextBusyMessage(s.pane, waitMS, busy))
 	}
 	return a.nextDeliver(s, nextSeqS)
 }
@@ -354,4 +333,22 @@ func nextBasename(p string) string {
 func nextHerdrSub(args ...string) string {
 	out, _ := herdrOut(0, args...)
 	return bashSub(out)
+}
+
+// nextDispatchFramework is _run_dispatch_framework: the second word of the first `  framework ` line of the run's dispatch
+// record. hw no longer writes that line; a pane launched before gentle-ai left hw still has it.
+func nextDispatchFramework(rundir string) string {
+	b, err := os.ReadFile(rundir + "/dispatch")
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(l, "  framework") && len(l) > len("  framework") && strings.ContainsRune(" \t\v\f\r", rune(l[len("  framework")])) {
+			if f := strings.Fields(l); len(f) >= 2 {
+				return f[1]
+			}
+			return ""
+		}
+	}
+	return ""
 }

@@ -40,7 +40,7 @@ claim() { CLAIMS=$((CLAIMS + 1)); pass "$1"; }
 # call it with arguments that cannot reach anything real.
 H="$TMP/h"; mkdir -p "$H/bin"
 cp "$ROOT/bin/channel-send" "$ROOT/bin/done-invoker" "$ROOT/bin/ask-invoker" \
-   "$ROOT/bin/invoker-common.sh" "$ROOT/bin/state-witness.sh" "$H/bin/" 2>/dev/null || true
+   "$H/bin/" 2>/dev/null || true
 cp "$TMP/bin/herdr" "$H/bin/herdr"
 cat > "$H/bin/herdr-rpc" <<'STUB'
 #!/usr/bin/env bash

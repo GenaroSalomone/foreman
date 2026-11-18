@@ -1,9 +1,9 @@
 package main
 
-// Area A1 — the run's environment (bin/hw: _hw_env, _export_hw_env, _write_run_env, _trust_dir, _apply_sdd,
+// Area A1 — the run's environment (bin/hw: _hw_env, _export_hw_env, _write_run_env, _trust_dir,
 // _ensure_artifacts_dir, _artifacts_dir_for, claude_session_env_prep from bin/project-spaces.sh), and the private
 // helpers they call that no other file of the port holds: _review_base_ref, _subagent_model_applies and its two
-// receipt words, _opencode_config_content, _export_opencode_overlay, _brain_guard_on, _checks_gate_applies.
+// receipt words, _brain_guard_on, _checks_gate_applies.
 //
 // Every file write goes through l.fs (HW_CORE_READONLY records it); every program is run through l.sh.
 // ~/.claude.json is edited by python3 in bash (json.load / json.dump(indent=2) / os.replace): the Go below carries
@@ -22,9 +22,8 @@ import (
 )
 
 type lenvState struct {
-	sddAppliedDir string // SDD_APPLIED_DIR: the directory the mode was checked for
-	envUnset      map[string]bool
-	envWrapped    bool
+	envUnset   map[string]bool
+	envWrapped bool
 }
 
 // unsetEnv is bash's `unset VAR`: the dispatch's override goes, the process's value goes, and d.env reads "".
@@ -133,53 +132,6 @@ func (l *lch) checksGateApplies() bool {
 	return false
 }
 
-// opencodeConfigContent is `_opencode_config_content`: the --effort overlay and the engram proxy, deep-merged by jq.
-func (l *lch) opencodeConfigContent() (string, int) {
-	c, a, b := "", l.opencodeEffortOverlay, l.vdEngramOver
-	if l.agent == "opencode" {
-		c = l.explorer().opencodeOverlay() // THE CHEAP EXPLORER rides the same layer; merged FIRST, so the primary's effort still wins its key
-	}
-	if c == "" && a == "" && b == "" {
-		return "", 0
-	}
-	if c == "" {
-		c = "null"
-	}
-	if a == "" {
-		a = "null"
-	}
-	if b == "" {
-		b = "null"
-	}
-	out, rc := l.sh(cmdSpec{name: "jq", args: []string{"-nc", "--argjson", "c", c, "--argjson", "a", a, "--argjson", "b", b, "($c // {}) * ($a // {}) * ($b // {})"}})
-	if rc != 0 {
-		return trimNL(out), rc
-	}
-	// jq decoded the explorer's \u0020 back into spaces: spell them again, so the overlay stays ONE word.
-	return strings.ReplaceAll(trimNL(out), " ", `\u0020`), rc
-}
-
-// exportOpencodeOverlay is `_export_opencode_overlay`: the unset is as load-bearing as the export.
-func (l *lch) exportOpencodeOverlay() {
-	l.unsetEnv("OPENCODE_CONFIG_CONTENT", "HW_OPENCODE_EFFORT", "HW_OPENCODE_EFFORT_AGENT")
-	if l.agent != "opencode" {
-		return
-	}
-	content, rc := l.opencodeConfigContent()
-	if rc != 0 {
-		panic(exitNow{rc}) // `OPENCODE_CONFIG_CONTENT="$(…)"` is a plain assignment: set -e ends hw
-	}
-	if content != "" {
-		l.setEnv("OPENCODE_CONFIG_CONTENT", content)
-	} else {
-		l.unsetEnv("OPENCODE_CONFIG_CONTENT")
-	}
-	if l.opencodeEffortOverlay != "" {
-		l.setEnv("HW_OPENCODE_EFFORT", l.effort)
-		l.setEnv("HW_OPENCODE_EFFORT_AGENT", l.opencodePrimaryAgent)
-	}
-}
-
 // reviewBaseRef is `_review_base_ref <workdir>`: the merge-base SHA a Judgment Day target is built against, or
 // nothing — silence is the right answer for a directory that is not a checkout or a base that does not resolve.
 func (l *lch) reviewBaseRef(wd string) string {
@@ -230,25 +182,6 @@ func (l *lch) hwEnvArgs(cwd string) []string {
 	if l.subagentModelApplies() {
 		p(" --env CLAUDE_CODE_SUBAGENT_MODEL=%s", l.subagentModel)
 	}
-	// opencode-auto parity: hw passes --auto in the agent args and this variable here.
-	if l.agent == "opencode" {
-		p(" --env OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true")
-	}
-	if l.agent == "opencode" && l.opencodeExecutorConfig != "" {
-		p(" --env OPENCODE_CONFIG_DIR=%s", l.opencodeExecutorConfig)
-	}
-	if l.agent == "opencode" {
-		if content, _ := l.opencodeConfigContent(); content != "" {
-			content, _ = l.opencodeConfigContent()
-			p(" --env OPENCODE_CONFIG_CONTENT=%s", content)
-		}
-	}
-	if l.agent == "opencode" && l.opencodeEffortOverlay != "" {
-		p(" --env HW_OPENCODE_EFFORT=%s --env HW_OPENCODE_EFFORT_AGENT=%s", l.effort, l.opencodePrimaryAgent)
-	}
-	if l.agent == "opencode" && l.brainGuardOn() {
-		p(" --env OPENCODE_CONFIG=%s", l.brainGuardOpencodeConfig())
-	}
 	p("%s", l.piHwEnvFlags(cwd)) // pi's guard halves and roster fallback; nothing for any other vendor
 	p(" --env ENGRAM_PROJECT=%s", l.engramLabel(l.proj))
 	// The brainer's pane in BOTH modes, resolved and not inherited (a stale HERDR_PANE_ID is an address that is gone).
@@ -276,9 +209,6 @@ func (l *lch) hwEnvArgs(cwd string) []string {
 	}
 	if v := l.env("HW_INVOKER_ENDPOINT"); v != "" {
 		p(" --env HW_INVOKER_ENDPOINT=%s", v)
-	}
-	if v := l.env("HW_AGENT_PORT"); v != "" {
-		p(" --env HW_AGENT_PORT=%s --env HW_AGENT_ENDPOINT=%s", v, l.env("HW_AGENT_ENDPOINT"))
 	}
 	if v := l.env("HW_PORT_WEB"); v != "" {
 		p(" --env HW_PORT_WEB=%s", v)
@@ -308,7 +238,7 @@ func (l *lch) hwEnvArgs(cwd string) []string {
 
 // exportHwEnv is `_export_hw_env "$cwd"`: HW_* into the process, so base_env, the layout documents and the run env
 // file read one definition. THE UNSETS ARE AS LOAD-BEARING AS THE EXPORTS: base_env copies this process, and a
-// brainer's own CLAUDE_CONFIG_DIR / OPENCODE_CONFIG / auto-memory / subagent model must not reach another vendor.
+// brainer's own CLAUDE_CONFIG_DIR / auto-memory / subagent model must not reach another vendor.
 func (l *lch) exportHwEnv(cwd string) {
 	l.invokerPaneInit() // one `herdr pane list` per dispatch, filled in the parent shell
 	l.hwWorkdir = cwd
@@ -320,11 +250,6 @@ func (l *lch) exportHwEnv(cwd string) {
 		l.setEnv("CLAUDE_CONFIG_DIR", l.accountConfigDir)
 	} else {
 		l.unsetEnv("CLAUDE_CONFIG_DIR")
-	}
-	if l.agent == "opencode" && l.brainGuardOn() {
-		l.setEnv("OPENCODE_CONFIG", l.brainGuardOpencodeConfig())
-	} else {
-		l.unsetEnv("OPENCODE_CONFIG")
 	}
 	l.piExportEnv(cwd) // pi's guard halves and roster fallback (the unset for every other vendor is its own)
 	// NO AUTO-MEMORY IN AN EXECUTOR: its contract is its brief and its lane's CLAUDE.md.
@@ -375,22 +300,9 @@ func (l *lch) exportHwEnv(cwd string) {
 	l.setEnv("HW_CHAINING_LEASE_SECONDS", l.keepPaneSeconds)
 	l.setEnv("HW_CHAINING_LEASE_REASON", l.keepPaneWhy)
 	l.setEnv("HW_CHAINING_LEASE_HOLDER", l.invokerPane())
-	if l.agent == "opencode" {
-		l.setEnv("OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS", "true")
-		if l.opencodeExecutorConfig != "" {
-			l.setEnv("OPENCODE_CONFIG_DIR", l.opencodeExecutorConfig)
-			l.setEnv("OPENCODE_EXECUTOR_CONFIG", l.opencodeExecutorConfig)
-		}
-	}
-	l.exportOpencodeOverlay()
 	// BROWSER ISOLATION per run: a task can only see its own sessions. The profile is a PATH, offered not applied.
 	l.setEnv("AGENT_BROWSER_NAMESPACE", "hw-"+orDefaultStr(l.hwRun, "norun"))
 	l.setEnv("HW_BROWSER_PROFILE", l.env("HW_ARTIFACTS")+"/browser-profile")
-	// THE EXECUTOR'S OWN ADDRESS, which hw has known since the agent args were built.
-	if l.agent == "opencode" && l.opencodeAgentPort != "" {
-		l.setEnv("HW_AGENT_PORT", l.opencodeAgentPort)
-		l.setEnv("HW_AGENT_ENDPOINT", "http://127.0.0.1:"+l.opencodeAgentPort)
-	}
 }
 
 // ── _artifacts_dir_for, _ensure_artifacts_dir ────────────────────────────────
@@ -426,22 +338,6 @@ func (l *lch) ensureArtifactsDir(wt string) {
 		}
 	}
 	l.info("artifacts → " + wt + "/.artifacts (excluded, so it never shows in git status)")
-}
-
-// ── _apply_sdd ───────────────────────────────────────────────────────────────
-
-// applySdd is `_apply_sdd <dir> <mode>`: true is bash's status 0.
-func (l *lch) applySdd(dir, mode string) bool {
-	l.sddAppliedDir = dir
-	if mode != "speckit" { // # MUTATION-ANCHOR: 847-A1-14
-		return true
-	}
-	if where, ok := l.rtSpeckitOnDiskDir(dir); ok {
-		l.ok("SDD mode: speckit (skills in " + where + ")")
-		return true
-	}
-	l.warn("--sdd speckit, but no speckit-* skill is on disk under " + dir + "/.claude/skills or " + l.env("HOME") + "/.claude/skills")
-	return false
 }
 
 // ── claude_session_env_prep ──────────────────────────────────────────────────
@@ -652,6 +548,11 @@ func (l *lch) writeRunEnv(workdir, extra, invoker string) {
 	if len(l.pluginsDeclared()) > 0 { // # MUTATION-ANCHOR: 847-P-04
 		l.receiptInto(dir, "plugins", l.pluginsReceiptValue(), l.pluginsReceiptSource())
 	}
+	// THE ACCOUNT THE EXECUTOR RUNS UNDER, for a claude one (the only vendor that reads CLAUDE_CONFIG_DIR): `hw done`'s automatic
+	// review carries it to `hw review --account`, so a build on a chosen account is not reviewed on the lane's default.
+	if l.agent == "claude" && l.accountVerdict != "refused" {
+		l.receiptInto(dir, "account", l.account, "--account or the lane's account at dispatch: "+l.accountLine)
+	}
 	l.reviewReceipt(dir, "")
 	// ONLY WHEN IT RESOLVED: a receipt is a fact on disk and a blank one would be silence dressed as an answer.
 	if ref := l.env("HW_REVIEW_BASE_REF"); ref != "" { // # MUTATION-ANCHOR: 847-A1-24
@@ -715,8 +616,6 @@ func (l *lch) writeRunEnv(workdir, extra, invoker string) {
 		"HW_INVOKER_VENDOR":               env("HW_INVOKER_VENDOR"),
 		"HW_INVOKER_SESSION":              env("HW_INVOKER_SESSION"),
 		"HW_INVOKER_ENDPOINT":             env("HW_INVOKER_ENDPOINT"),
-		"HW_AGENT_PORT":                   env("HW_AGENT_PORT"),
-		"HW_AGENT_ENDPOINT":               env("HW_AGENT_ENDPOINT"),
 		"HW_PORT_WEB":                     env("HW_PORT_WEB"),
 		"HW_PORT_API":                     env("HW_PORT_API"),
 		"AGENT_BROWSER_NAMESPACE":         env("AGENT_BROWSER_NAMESPACE"),
@@ -726,12 +625,7 @@ func (l *lch) writeRunEnv(workdir, extra, invoker string) {
 		"CLAUDE_CONFIG_DIR":               env("CLAUDE_CONFIG_DIR"),
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY": env("CLAUDE_CODE_DISABLE_AUTO_MEMORY"), // # MUTATION-ANCHOR: 847-A1-26
 		"CLAUDE_CODE_SUBAGENT_MODEL":      env("CLAUDE_CODE_SUBAGENT_MODEL"),
-		"OPENCODE_CONFIG_DIR":             env("OPENCODE_EXECUTOR_CONFIG"),
-		"OPENCODE_CONFIG":                 env("OPENCODE_CONFIG"),
 		"HW_NEXT_WAIT_MS":                 orDefaultStr(env("HW_NEXT_WAIT_MS"), "900000"),
-		"OPENCODE_CONFIG_CONTENT":         env("OPENCODE_CONFIG_CONTENT"),
-		"HW_OPENCODE_EFFORT":              env("HW_OPENCODE_EFFORT"),
-		"HW_OPENCODE_EFFORT_AGENT":        env("HW_OPENCODE_EFFORT_AGENT"),
 		// pi's guard halves and roster fallback: `hw revive` replays every key
 		"HW_PI_BRAIN_GUARD":            env("HW_PI_BRAIN_GUARD"),
 		"HW_PI_FALLBACK_MODEL":         env("HW_PI_FALLBACK_MODEL"),

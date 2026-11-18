@@ -219,7 +219,7 @@ func hcWaitBoundary(state func() (string, bool), wait func(secs int64) int, paus
 // every terminal it opens (QA5 G2: HW_INVOKER_PANE, HW_RUN, HW_TASK in a plain app terminal), so a brainer started there
 // would read itself as that executor. A brainer starts without it.
 var hcRunIdentity = []string{"HW_RUN", "HW_TASK", "HW_PROJECT", "HW_WORKDIR", "HW_ARTIFACTS", "HW_EXECUTOR_VENDOR",
-	"HW_PORT_WEB", "HW_PORT_API", "HW_AGENT_ENDPOINT", "HW_AGENT_PORT", "HW_INVOKER_SESSION", "HW_INVOKER_VENDOR", "HW_INVOKER_ENDPOINT"}
+	"HW_PORT_WEB", "HW_PORT_API", "HW_INVOKER_SESSION", "HW_INVOKER_VENDOR", "HW_INVOKER_ENDPOINT"}
 
 // hcPathWord is the `PATH=` word that puts brain/bin first in an hc terminal. The core runs a program with ITS
 // environment, which lacks hw and brain (MEASURED 2026-11-09, herdr-app live-cycle QA: a brainer and an executor
@@ -232,45 +232,13 @@ func hcPathWord(binDir, path string) string {
 	return "PATH=" + binDir + ":" + path
 }
 
-// hcSandboxPathWord puts the sandbox shim's directory first in a `PATH=` word; with no shim the word is returned as it is.
-func hcSandboxPathWord(shimdir, word string) string {
-	if shimdir == "" {
-		return word
+// hcRunCore is the core id a run dir recorded in its hc-core file ("" when it recorded none), and whether that core is not
+// `mine` (both named, and different): the one "whose core is this run" reading, shared by the outbox and the repoint.
+func hcRunCore(runDir, mine string) (core string, other bool) {
+	if c, err := os.ReadFile(runDir + "/hc-core"); err == nil {
+		core = strings.TrimSpace(string(c))
 	}
-	return "PATH=" + shimdir + ":" + strings.TrimPrefix(word, "PATH=") // MUTATION-ANCHOR: hc-sbx-path
-}
-
-// hcBrokerAlive waits (10 s, as agentStartSandboxed) for the sandbox broker's heartbeat in the run's state dir: the proof
-// that the agent an hc terminal started went through the shim, and so runs inside the profile.
-func hcBrokerAlive(state string, sleep func(time.Duration)) bool {
-	for n := 0; n < 20; n++ {
-		if fi, err := os.Stat(state + "/broker.alive"); err == nil && fi.Mode().IsRegular() {
-			return true
-		}
-		sleep(500 * time.Millisecond)
-	}
-	return false
-}
-
-// hcChildPids is `pgrep -P <pid>`: the pids of a process's children; a variable so a test names a tree without spawning one.
-var hcChildPids = func(pid string) []string {
-	out, _ := exec.Command("pgrep", "-P", pid).Output()
-	return strings.Fields(string(out))
-}
-
-// claudeSessionSandboxed is claudeSessionOf for a terminal started through the sandbox shim: the pid `hc get` names is the
-// launch wrapper (`hw-sandbox run`, which holds the broker) and claude is its child under sandbox-exec, so the session file
-// is the child's. Measured 2026-11-12: with the terminal's own pid a sandboxed dispatch recorded "NO SESSION ID".
-func claudeSessionSandboxed(pid, cwd string, dirs ...string) string {
-	if !allDigits(pid) {
-		return ""
-	}
-	for _, child := range hcChildPids(pid) {
-		if sid := claudeSessionOf(child, cwd, dirs...); sid != "" { // MUTATION-ANCHOR: hc-sbx-session
-			return sid
-		}
-	}
-	return ""
+	return core, core != "" && mine != "" && core != mine
 }
 
 // hcCoreID is the id of the herdr-core this process talks to ("" when unreadable): `<state>/herdr-core/default/core.json`, with the

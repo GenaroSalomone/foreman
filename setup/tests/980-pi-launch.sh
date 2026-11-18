@@ -2,7 +2,7 @@
 # pi is an hw vendor: `--agent pi` launches with the opencode-go roster by kind,
 # none-mode only, its extension set explicit, and the account NOT APPLIED.
 # setup/briefs/pi-vendor-v1.md, piece 1. OLD (main before this branch) dies
-# with "--agent must be claude, opencode or codex"; NEW reaches the manifest.
+# with an unknown-agent refusal; NEW reaches the manifest.
 . "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 table_mutant "$TMP/pi-go-roster.json" 't["pi_roster"] = "go"' && export HW_PROJECTS_JSON="$TMP/pi-go-roster.json" # these subjects assert the go (paid) roster; projects.json now selects free
 
@@ -25,10 +25,6 @@ case "$out" in *"-ne -na -e builtin:mcp"*"setup/pi/hw-executor.ts"*) pass "pi la
 case "$out" in *"setup/pi/hw-executor.ts --exclude-tools mcp__engram__* -ns"*) pass "the raw engram server's tools are excluded at launch (--exclude-tools mcp__engram__*), after the extension set and before the skills" ;; *) fail "no --exclude-tools mcp__engram__* in pi's launch: $out" ;; esac
 case "$out" in *"hw_engram"*) pass "the manifest names the engram proxy as the pi extension's hw_engram" ;; *) fail "no hw_engram proxy line: $out" ;; esac
 case "$out" in *"pi has no permission prompts"*) pass "the permissions line says pi has none" ;; *) fail "permissions line wrong for pi: $out" ;; esac
-
-out="$(launch pi-speckit --sdd speckit --no-brief --model opencode-go/deepseek-v4.1-flash)"
-case "$out" in *"pi framework dispatch REFUSED BEFORE BUILDING ANYTHING"*) pass "pi with --sdd speckit is refused before building" ;; *) fail "pi speckit was not refused: $out" ;; esac
-case "$out" in *"agent args:"*) fail "pi speckit reached argument construction: $out" ;; esac
 
 out="$(launch pi-bare --sdd none --no-brief --model deepseek-v4-pro)"
 case "$out" in *"pi needs provider/model"*) pass "a bare pi model id is refused with the provider/model form" ;; *) fail "bare pi model not refused: $out" ;; esac

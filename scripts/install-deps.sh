@@ -49,7 +49,6 @@ deps() {
   row required ripgrep rg ripgrep "hw and the guards search with it" ""
   row required fd fd fd "hw finds files with it" ""
   row required sd sd sd "hw and the lane scripts edit files with it" ""
-  [ "$OS" != Linux ] || row required node node node "the OpenCode guard plugin is an ES module (22.7 or newer)" ""
   row recommended engram engram gentleman-programming/tap/engram "memory across sessions; without it nothing is saved between them" ""
   row recommended fzf fzf fzf "hw's interactive pickers" ""
 }

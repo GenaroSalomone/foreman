@@ -19,7 +19,6 @@ def replace_once(text, old, new):
     assert text.count(old) == 1, ('mutation anchor count', old, text.count(old))
     return text.replace(old, new, 1)
 
-dry = '      info "SDD surface: unchanged — compatibility checked using the effective mode; live surface takes precedence, with the launch record as fallback when no live mode is obtained"'
 mutations = [
     ('alias-rejection', '01-task-names-and-models.sh',
      lambda s: replace_once(s, 'warn "claude model', 'die "MUTANT rejects unknown alias: claude model'),
@@ -30,15 +29,9 @@ mutations = [
     ('unknown-receipt-as-success', '97-recognition-is-not-runtime-readiness.sh',
      lambda s: replace_once(s, 'unknown*|unreadable) warn "UNESTABLISHED  agent: $AGENT ($m)"; unestablished=1 ;;', 'unknown*|unreadable) : ;;'),
      'receipt: every measured value matches'),
-    ('fallback-as-live-measurement', '75-codex-framework-refusal.sh',
-     lambda s: replace_once(s, dry, '      if [ -f "$FM" ]; then\n' + dry + '\n      else\n        info "SDD surface: unchanged — measured the effective live worktree surface"\n      fi'),
-     'next fallback dry run lacks an honest compatibility explanation'),
     ('prefix-bypasses-argv-safety', '01-task-names-and-models.sh',
      lambda s: replace_once(s, '        case "$MODEL" in\n          -*|', '        case "$MODEL" in\n          claude-*) ;;\n          -*|'),
      'model: unknown alias claude-future --resume X cannot expand'),
-    ('help-promises-launch-mode', '75-codex-framework-refusal.sh',
-     lambda s: replace_once(s, '        effective live worktree surface is measured and incompatible vendor/mode', '        executor keeps whatever mode it was launched with'),
-     'next help does not describe the measured live-surface precedence'),
     ('launch-announces-ready', '97-recognition-is-not-runtime-readiness.sh',
      lambda s: replace_once(s, '    info "$AGENT registered in $pane; vendor runtime readiness is unestablished"', '    ok "$AGENT ready in $pane"'),
      'claude ready in pTEST'),

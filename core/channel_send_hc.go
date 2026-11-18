@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -56,9 +55,7 @@ func (c *chanSend) hcSession(t string) string {
 		return ""
 	}
 	home := c.getenv("HOME")
-	dirs := []string{c.getenv("CLAUDE_CONFIG_DIR"), home + "/.claude"}
-	more, _ := filepath.Glob(brEscapeGlob(home) + "/.claude-*")
-	dirs = append(dirs, more...)
+	dirs := claudeAccountDirs(home, c.getenv("CLAUDE_CONFIG_DIR"))
 	fg, _ := m["foreground"].(jmap)
 	for _, pid := range []string{bjRaw(fg["pid"]), bjRaw(m["pid"])} {
 		if sid := claudeSessionOf(pid, hcStr(m, "cwd"), dirs...); sid != "" {
@@ -68,17 +65,21 @@ func (c *chanSend) hcSession(t string) string {
 	return ""
 }
 
-// hcTranscriptMark is the watermark of the receiver's transcript before the send (claude-delivery-receipt.py --mark), "none"
-// when there is no transcript yet.
-func (c *chanSend) hcTranscriptMark(sid string) string {
+// transcriptMark (the hc and claude routes' one rule) is the watermark of the receiver's transcript before the send (claude-delivery-receipt.py --mark): "none"
+// when there is no transcript yet, ok=false when the mark could not be taken (an unreadable watermark is not an empty one:
+// scanning from byte 0 would let an earlier send of the same bytes count).
+func (c *chanSend) transcriptMark(sid string) (string, bool) {
 	cmd := exec.Command("python3", c.binDir+"/claude-delivery-receipt.py", "--mark")
 	cmd.Env = append(os.Environ(), "CHANNEL_TARGET="+sid)
 	var out bytes.Buffer
 	cmd.Stdout = &out
-	if cmd.Run() != nil || bashSub(out.String()) == "" {
-		return "none"
+	if cmd.Run() != nil {
+		return "", false
 	}
-	return bashSub(out.String())
+	if m := bashSub(out.String()); m != "" {
+		return m, true
+	}
+	return "none", true
 }
 
 // hcLanded asks the RECEIVER's own transcript whether the payload is in it: claude writes a prompt that arrives mid-turn as a
@@ -172,7 +173,10 @@ func (c *chanSend) routeHC() {
 	sid := c.hcSession(c.tgt)
 	since := ""
 	if sid != "" {
-		since = c.hcTranscriptMark(sid)
+		var ok bool
+		if since, ok = c.transcriptMark(sid); !ok {
+			sid = "" // no watermark, no transcript proof: the counters decide
+		}
 	}
 	c.setSent(csInflight)
 	r := extRun(extCall{Name: "hc", Args: []string{"send", "--", c.tgt, c.message}, Env: childEnv(), Merge: true})

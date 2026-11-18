@@ -44,7 +44,7 @@ export const cut = (text, max) => {
 };
 
 // The app's own terminal for an executor's pane id, or null. Executors live in the TUI
-// `herdr server` (ids like `w1:p11`) which the app cannot reach (KNOWN-LIMITATIONS L29);
+// `herdr server` (ids like `w1:p11`) which the app cannot reach (docs/internal-limitations.md L29);
 // only an executor started in the app's core (`hc`, id = HC_TERMINAL_ID) matches.
 export const terminalFor = (pane, terminals) => terminals.find((x) => x.address === pane)?.address ?? null;
 

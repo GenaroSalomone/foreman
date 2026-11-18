@@ -69,11 +69,8 @@ OTHER COMMANDS
         hand-written `channel-send`, opens no task: the counter does not move, and
         the executor's next report is refused ("already notified") until it runs
         `done-invoker --retask`, which files the work as a duplicate.
-        Flags may appear before or after the task text. Without --sdd the
-        effective live worktree surface is measured and incompatible vendor/mode
-        pairs are refused before task creation or delivery. The launch record is
-        only a fallback when that measurement yields no mode, not authoritative.
-        --dry-run checks compatibility too, without changing the surface.
+        Flags may appear before or after the task text. --sdd none is accepted
+        and ignored (the only mode).
                                      hand the NEXT task to an executor already alive
     hw wait <pane> [pane ...] [--timeout-ms <ms>] [--dry-run]
                                     launch concurrent witness-backed waits in a separate

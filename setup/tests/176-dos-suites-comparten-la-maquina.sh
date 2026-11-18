@@ -93,8 +93,7 @@ make_repo() { # <dir> <runner-source> [bare — no stamping subjects]
   cp "$ROOT/setup/mutation/mutation-coverage" "$repo/setup/mutation/"; cp "$ROOT/setup/test-hw-snapshot.py" "$ROOT/setup/fast-gate-budget.sh" "$repo/setup/"
   cp "$ROOT/setup/tests/_common.sh" "$repo/setup/tests/"
   chmod +x "$repo/setup/test-hw" "$repo/setup/mutation/mutation-coverage"
-  for g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs \
-           test-opencode-hw-blocked-reason.mjs test-herdr-opencode-background-state.mjs; do
+  for g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs; do
     printf '%s\n' '// stub: this subject is about the pool, not the guards' > "$repo/setup/guards/$g"
   done
   # The mutation arm's stand-in records WHERE it would write its mutants: the

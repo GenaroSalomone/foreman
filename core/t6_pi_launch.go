@@ -371,7 +371,7 @@ func (l *lch) piAdmit(pane, how, nbytes string, base int) bool {
 	if ok {
 		l.receipt("brief_admitted", "yes — pi processed it: the adapter saw a message with the brief's sha256 ("+got+" match; "+how+")",
 			"setup/pi/hw-executor.ts input event -> "+file+" vs brief_sha256")
-		l.receipt("brief_delivery_id", l.dlRunID()+":brief", "the id hw gives the brief's delivery on every vendor; for pi it is matched by hash, pi has no endpoint to key it on")
+		l.receipt("brief_delivery_id", orDefaultStr(l.runID(), "norun")+":brief", "the id hw gives the brief's delivery on every vendor; for pi it is matched by hash, pi has no endpoint to key it on")
 		l.ok("brief IN THE CONVERSATION on " + pane + " (" + nbytes + " bytes, from " + l.brief + ") — pi receipt: processed (" + got + " sha256 match)")
 		return true
 	}
@@ -384,11 +384,11 @@ func (l *lch) piAdmit(pane, how, nbytes string, base int) bool {
 		l.warn("pi received something on " + pane + " that is NOT the brief the way hw sent it (the terminal may have cut or altered the paste)")
 	}
 	l.warn("THE BRIEF IS NOT PROVEN IN " + pane + "'s CONTEXT. Read what it holds: herdr agent read " + pane + " --source recent-unwrapped")
-	l.briefUndelivered(pane, "herdr", pane, "-")
+	l.briefUndelivered(pane)
 	return false
 }
 
-// piDialogBeforeDelivery is the pi block of _deliver_brief: the same second look as codex's, immediately before anything is
+// piDialogBeforeDelivery is the pi block of _deliver_brief: a second look, immediately before anything is
 // typed. A dialog rendered after _agent_start's single read would swallow the brief, and these wait for a person. True
 // when the delivery must stop.
 func (l *lch) piDialogBeforeDelivery(pane string) bool {
@@ -528,7 +528,6 @@ const piOpsOverride = `WHAT CHANGES FOR YOU UNDER pi (these override the procedu
   line). Where it does not, stay local, report it blocked and do not probe the destination. Do not discover or reuse
   an ambient ssh agent, ControlMaster socket or authenticated session.
 - Secrets: a read guard refuses your read, grep and bash any path under ~/.ssh, any .env* file, *.db, *.credentials,
-  *.pem, *.key and secrets/. ` + "`ssh -i ~/.ssh/<key>`" + ` is allowed (the key is used, not read); under --sandbox ~/.ssh is
-  unreadable to the OS, so ssh cannot load its key at all. A refused read is a blocker to report, never a thing to
+  *.pem, *.key and secrets/. ` + "`ssh -i ~/.ssh/<key>`" + ` is allowed (the key is used, not read). A refused read is a blocker to report, never a thing to
   route around: a step that sources an .env file is unavailable to you, say so.
 - Memory: your tools are mcp__hw_engram__mem_search / mem_get_observation / mem_save, not mcp__engram__*.`

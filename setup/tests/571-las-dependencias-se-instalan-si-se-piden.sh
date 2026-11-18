@@ -25,7 +25,7 @@
 #
 # Run alone:  bash setup/tests/571-las-dependencias-se-instalan-si-se-piden.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
-unset HW_BRAIN_ROOT HW_PROJECTS_JSON CLAUDE_CONFIG_DIR OPENCODE_CONFIG_DIR OPENCODE_EXECUTOR_CONFIG
+unset HW_BRAIN_ROOT HW_PROJECTS_JSON CLAUDE_CONFIG_DIR
 SUBJECT="${SUBJECT_ROOT:-$ROOT}"
 export ENGRAM_PORT=9 ENGRAM_DATA_DIR="$TMP/engram"   # never 7437
 

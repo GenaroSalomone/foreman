@@ -4,7 +4,7 @@
 need_invokers   # this subject runs ask-invoker, which is Go since go-060 S2 and has no core/dist beside a copy of bin/
 
 HARNESS="$TMP/harness"; WORK="$TMP/work"; mkdir -p "$HARNESS/bin" "$WORK/.hw/run"
-cp "$ROOT/bin/ask-invoker" "$ROOT/bin/invoker-common.sh" "$ROOT/bin/runenv" "$HARNESS/bin/"
+cp "$ROOT/bin/ask-invoker" "$ROOT/bin/runenv" "$HARNESS/bin/"
 cat > "$HARNESS/bin/herdr-rpc" <<'STUB'
 #!/usr/bin/env bash
 exit 0

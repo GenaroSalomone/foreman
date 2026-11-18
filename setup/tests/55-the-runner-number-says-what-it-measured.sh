@@ -15,7 +15,7 @@
 # All four were fixed. The result was then reported as a single integer produced
 # by `setup/test-hw`, which globs `[0-9][0-9]-*.sh` and never asks git anything.
 # Measured by the second-vendor reviewer: `47-unattended-gate-stall.sh` and
-# `48-plain-opencode-is-not-plain.sh` are UNTRACKED and absent from e8f7d23, and
+# one more subject are UNTRACKED and absent from e8f7d23, and
 # the 1187 everyone quoted — the executor, the brainer and both reviewers —
 # silently included their 20 ok.
 #
@@ -60,8 +60,7 @@ make_repo() { # <name> → sets REPO
   cp "$ROOT/setup/mutation/mutation-coverage" "$repo/setup/mutation/"; cp "$ROOT/setup/test-hw" "$ROOT/setup/test-hw-snapshot.py" "$ROOT/setup/fast-gate-budget.sh" "$repo/setup/"
   cp "$ROOT/setup/tests/_common.sh" "$repo/setup/tests/"
   chmod +x "$repo/setup/test-hw" "$repo/setup/mutation/mutation-coverage"
-  for g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs \
-           test-opencode-hw-blocked-reason.mjs test-herdr-opencode-background-state.mjs; do
+  for g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs; do
     printf '%s\n' '// stub: emits no ok lines, so the arithmetic below is the subject only' \
       > "$repo/setup/guards/$g"
   done

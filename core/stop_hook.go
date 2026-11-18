@@ -1,6 +1,6 @@
 package main
 
-// `hw-core stop-hook stop`: bin/hw-stop-hook.sh in Go. The Stop hook every wired Claude Code and Codex session runs at
+// `hw-core stop-hook stop`: bin/hw-stop-hook.sh in Go. The Stop hook every wired Claude Code session runs at
 // each turn end, with its stdin the Stop payload. bin/hw-stop-hook.sh execs this; since 0.7.0 there is no bash body, and a
 // HW_IMPL_STOP_HOOK=bash (or `stop-hook=bash`) is only said once (bin/impl-retired.sh). The exit status is this one's.
 //
@@ -129,10 +129,11 @@ func (h *stopHook) renewBrainerLease() {
 // executor reads it now and not at a turn end that a long turn may never reach. Same claim as the turn end and
 // done-invoker: each ruling is taken by one rename, so exactly one route delivers it.
 func (h *stopHook) postTool(stateDir string) {
-	if len(t3QueuePending(stateDir)) == 0 { // every tool call of every executor pays this: one readdir when there is nothing
+	t := &t3{app: &app{getenv: h.getenv}, fs: newFsx(h.getenv)}
+	t.retireAnsweredHolds(mkTaskDir(stateDir), h.input) // a prompt that answered a hold started this turn: the first tool call is the first boundary
+	if len(t3QueuePending(stateDir)) == 0 { // every tool call of every executor pays this and the hold check: a stat and a readdir each when there is nothing
 		return
 	}
-	t := &t3{app: &app{getenv: h.getenv}, fs: newFsx(h.getenv)}
 	ruling, ok := t.queueClaimAll(stateDir, "post-tool")
 	if !ok {
 		return
@@ -444,31 +445,17 @@ func operatorTexts(path string) (texts []string, ok bool) {
 		if !isDict || stopTruthy(e["isMeta"]) {
 			continue
 		}
+		if e["type"] != "user" {
+			continue
+		}
 		var content any
-		if e["type"] == "user" { // Claude Code
-			msg := e["message"]
-			if !stopTruthy(msg) {
-				content = nil
-			} else if m, isMap := msg.(map[string]any); isMap {
-				content = m["content"]
-			} else {
-				return nil, false // .get of a non-dict raises: the whole read is None
-			}
+		msg := e["message"]
+		if !stopTruthy(msg) {
+			content = nil
+		} else if m, isMap := msg.(map[string]any); isMap {
+			content = m["content"]
 		} else {
-			payload := e["payload"]
-			var role any
-			var pm map[string]any
-			if stopTruthy(payload) {
-				m, isMap := payload.(map[string]any)
-				if !isMap {
-					return nil, false
-				}
-				pm, role = m, m["role"]
-			}
-			if role != "user" { // Codex
-				continue
-			}
-			content = pm["content"]
+			return nil, false // .get of a non-dict raises: the whole read is None
 		}
 		if parts, isList := content.([]any); isList {
 			var joined []string

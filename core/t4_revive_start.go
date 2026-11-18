@@ -1,13 +1,12 @@
 package main
 
 // Starting the agent in the revived pane: _agent_start and what it calls (bin/hw:1869-2038, and
-// claude_session_env_prep / claude_startup_dialog / claude_dialog_advice, bin/project-spaces.sh), with the
-// sandboxed variant a run launched in the sandbox comes back in. Every herdr call keeps its argv and its place.
+// claude_session_env_prep / claude_startup_dialog / claude_dialog_advice, bin/project-spaces.sh).
+// Every herdr call keeps its argv and its place.
 
 import (
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -194,25 +193,6 @@ func (a *app) revivePiReady(target string) bool {
 	return false
 }
 
-// reviveCodexReady is _codex_startup_ready.
-func (a *app) reviveCodexReady(name string) bool {
-	screen := a.reviveDetection(name)
-	switch {
-	case strings.Contains(screen, "Do you trust the contents of this directory"):
-		if !a.reviveHerdrQuiet("agent", "send-keys", name, "enter") {
-			return false
-		}
-		time.Sleep(2 * time.Second)
-	case strings.Contains(screen, "Hooks need review"):
-		a.err.Write([]byte("codex is waiting for hook trust; review that dialog before delivering a brief\n"))
-		return false
-	case strings.Contains(screen, "Choose how you'd like Codex to proceed"):
-		a.err.Write([]byte("codex is waiting on a model migration dialog; choose a supported model before delivering a brief\n"))
-		return false
-	}
-	return true
-}
-
 // reviveStartFailureScreen is _claude_start_failure_screen: what the pane was showing when hw gave up.
 func (a *app) reviveStartFailureScreen(target string) {
 	screen := a.reviveDetection(target)
@@ -236,76 +216,6 @@ func (a *app) reviveStartFailureScreen(target string) {
 	a.err.Write([]byte(w.String()))
 }
 
-// reviveSandboxArm is _sandbox_arm_pane: write the shim hw-sandbox makes and put it first on the pane's PATH.
-func (a *app) reviveSandboxArm(st *reviveRunState, pane, kind, rundir string) bool {
-	shim, ok := a.reviveSandboxShim(st, kind, rundir)
-	if !ok {
-		return false
-	}
-	if !a.reviveHerdrQuiet("pane", "run", pane, "export PATH="+reviveQuote(shim)+":$PATH; hash -r 2>/dev/null; clear") {
-		a.warn("sandbox: could not put the shim on " + pane + "'s PATH — the agent is NOT started unconfined")
-		return false
-	}
-	a.receiptInto(rundir, "sandbox", filepath.Dir(shim)+"/profile.sb", "hw-sandbox arm ("+kind+"); shim "+shim+" exported in "+pane)
-	return true
-}
-
-// reviveSandboxShim is the half of the arming that needs no pane: `hw-sandbox arm` rebuilds the run's profile and shim and
-// answers the shim's directory. A herdr pane exports it (reviveSandboxArm); an app terminal takes it as the first entry of
-// its PATH word (reviveOnHC).
-func (a *app) reviveSandboxShim(st *reviveRunState, kind, rundir string) (string, bool) {
-	if !strings.HasPrefix(rundir, "/") || !strings.Contains(rundir, "/.hw/") || strings.HasSuffix(rundir, "/.hw/") {
-		a.warn("sandbox: no run directory to arm (" + rundir + ")")
-		return "", false
-	}
-	cmd := exec.Command(a.reviveBinDir()+"/hw-sandbox", "arm", rundir, kind, st.proj, st.task)
-	cmd.Env = append(os.Environ(), "HW_WORKDIR="+st.cwd, "HW_ARTIFACTS="+a.getenv("HW_ARTIFACTS"))
-	// the profile allows the TMPDIR of arm's OWN environment: the revived pane gets the run's recorded TMPDIR (outside the
-	// worktree since rest-limpio-070), as launch does (sandboxArmEnv)
-	if t := recordedRunTmpdir(rundir, filepath.Base(rundir)); t != "" {
-		// the cache may have been cleared since dispatch: the profile and the pane both need it to exist
-		if err := os.MkdirAll(t, 0o700); err != nil {
-			a.warn("sandbox: could not create the run's TMPDIR " + t + ": " + err.Error())
-		}
-		secureRunTmpRoot(t, a.warn)
-		cmd.Env = append(cmd.Env, "TMPDIR="+t)
-	}
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
-	if err != nil {
-		a.warn("sandbox: could not arm " + rundir + " — the agent is NOT started unconfined")
-		return "", false
-	}
-	return bashSub(string(out)), true
-}
-
-// reviveAgentStartSandboxed is _agent_start_sandboxed: arm, start through the ordinary path, then PROVE it.
-func (a *app) reviveAgentStartSandboxed(st *reviveRunState, pane, name, kind string) bool {
-	rundir := st.sandboxRun
-	if !a.reviveSandboxArm(st, pane, kind, rundir) {
-		return false
-	}
-	cmd := exec.Command(a.reviveBinDir()+"/hw-sandbox", "statedir", rundir)
-	cmd.Stderr = os.Stderr
-	out, _ := cmd.Output()
-	state := bashSub(string(out))
-	st.sandboxArmed = pane
-	ok := a.reviveAgentStart(st, pane, name, kind)
-	st.sandboxArmed = ""
-	if !ok {
-		return false
-	}
-	// AN AGENT THAT STARTED IS NOT PROOF IT STARTED IN THE SANDBOX: the broker's heartbeat is.
-	for n := 0; n < 20; n++ {
-		if isFile(state + "/broker.alive") {
-			return true
-		}
-		time.Sleep(500 * time.Millisecond)
-	}
-	a.warn("sandbox: " + kind + " started in " + pane + " but the broker never came up (" + state + "/broker.alive) — it may be running UNCONFINED. Close it: hw done " + st.proj + " " + st.task)
-	return false
-}
-
 // reviveExplorerArm is _explorer_claude_arm for a revived run: the file goes to the run's own directory, and "" (with a
 // warning) when it cannot be written. Called only for claude, and only when the revive decided on the explorer.
 func (a *app) reviveExplorerArm(st *reviveRunState, pane string) string {
@@ -323,9 +233,6 @@ func (a *app) reviveExplorerArm(st *reviveRunState, pane string) string {
 
 // reviveAgentStart is _agent_start: start an agent, retrying while the pane is still coming up.
 func (a *app) reviveAgentStart(st *reviveRunState, pane, name, kind string) bool {
-	if st.sandbox && st.sandboxArmed != pane {
-		return a.reviveAgentStartSandboxed(st, pane, name, kind)
-	}
 	if kind == "pi" && !a.revivePiSkillsPrepare(st.proj) {
 		return false
 	}
@@ -341,9 +248,6 @@ func (a *app) reviveAgentStart(st *reviveRunState, pane, name, kind string) bool
 			probe = bashSub(probe)
 			if !reviveAgentIs(probe, pane, name, kind) {
 				a.err.Write([]byte(probe + "\n"))
-				return false
-			}
-			if kind == "codex" && !a.reviveCodexReady(pane) {
 				return false
 			}
 			if kind == "claude" && !a.reviveClaudeReady(pane) {
@@ -371,9 +275,6 @@ func (a *app) reviveAgentStart(st *reviveRunState, pane, name, kind string) bool
 			return ok && r.kind == vBool && r.b, ok
 		}) {
 			// ready can be reported with a dialog still on screen, and the brief would land in it
-			if kind == "codex" && !a.reviveCodexReady(name) {
-				return false
-			}
 			if kind == "claude" && !a.reviveClaudeReady(pane) {
 				return false
 			}

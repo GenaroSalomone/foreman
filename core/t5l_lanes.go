@@ -145,13 +145,6 @@ func (l *lch) laneWorktreeAdd(main, wt, base string) (added bool) {
 	return true
 }
 
-// laneSpaceTwoPane is steps "_trust_dir … _agent_step" of the plain lanes up to the agent: trust, sdd, the env, the
-// artifacts directory, the repoless layout and its two panes. The caller prints the step headers around it.
-func (l *lch) laneTrustSdd(wt string) {
-	l.trustDir(wt)
-	l.applySdd(wt, l.sdd) // `|| true`
-}
-
 // laneSpaceTwoPane is `_export_hw_env … ok "agent=… shell=…"`: the artifacts directory, repoless.json and the panes.
 func (l *lch) laneSpaceTwoPane(wt string) {
 	l.exportHwEnv(wt)

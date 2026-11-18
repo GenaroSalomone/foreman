@@ -130,8 +130,7 @@ herdr|every brainer and executor is a herdr pane|https://herdr.dev
 claude|the agent runtime|https://claude.com/claude-code
 rg|hw and the guards search with it|apt install ripgrep
 fd|hw finds files with it|apt install fd-find, then link fdfind as fd
-sd|hw edits files with it|apt install sd
-node|the OpenCode guard plugin runs in it (22.7 or newer)|https://nodejs.org/en/download"
+sd|hw edits files with it|apt install sd"
 else
   [ "$OS" = Darwin ] || warn "$OS is not supported — macOS and Linux only"
   ROWS="git|worktrees and branches|xcode-select --install
@@ -350,20 +349,15 @@ fi
 # ── 6. the proof: a dry-run dispatch of that brief ──────────────────────────
 stage 6/7 "a dry-run dispatch of the sample brief"
 HW="$BIN/hw"
-NO_REPORT=""
 if [ "$DRY" = 1 ]; then
   would "run: hw $LANE $SAMPLE_TASK --brief $BRIEF --sdd none --dry-run"
 else
   dispatch() { (cd "$BRAIN/$LANE" && PATH="$BIN:$PATH" "$HW" "$LANE" "$SAMPLE_TASK" --brief "$BRIEF" --sdd none --dry-run "$@" </dev/null 2>&1) | strip_ansi; }
   rc=0; out="$(dispatch)" || rc=$?
-  # From a plain terminal there is no brainer pane to report to (KNOWN-LIMITATIONS L7): the plan is the
-  # same, minus the return channel, which `brain $LANE` supplies for the real dispatch.
-  if [ "$rc" != 0 ]; then
-    case "$out" in *"HW_INVOKER_PANE is UNRESOLVED"*) rc=0; out="$(dispatch --no-report)" || rc=$?; NO_REPORT=1 ;; esac
-  fi
+  # A dry run builds nothing, so it needs no return channel: from a plain terminal the manifest says UNRESOLVED and the plan is the same.
   if [ "$rc" = 0 ] && grep -q 'dry run — nothing created' <<<"$out"; then
     printf '%s\n' "$out" | grep -E '^  dispatch |^    (agent|worktree|base|brief|verify) ' | sed 's/^/  /'
-    ok "dry run: hw $LANE $SAMPLE_TASK${NO_REPORT:+ (--no-report: a plain terminal has no pane to report to; \`brain $LANE\` has)}"
+    ok "dry run: hw $LANE $SAMPLE_TASK"
   else
     printf '%s\n' "$out" | sed 's/^/        /'
     printf '\ninit: the dry-run dispatch failed (exit %s) — the output above says why.\n' "$rc" >&2; exit 1

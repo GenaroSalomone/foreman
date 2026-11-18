@@ -1,7 +1,7 @@
 package main
 
 // The cheap explorer every executor is handed, and the tier table the prompt states: the Go half of
-// lib/hw/explorer.sh (_explorer_role_json, _explorer_claude_args, _explorer_opencode_overlay, _explorer_codex_args,
+// lib/hw/explorer.sh (_explorer_role_json, _explorer_claude_args,
 // _explorer_resolve, _explorer_tier_note), plus _check_top_tier_ceiling and model_is_top_tier. Byte for byte what
 // bash prints: the contract goldens come from bash, and a launch under HW_IMPL=go must hand the same words to the
 // vendor. pi's arm is t6_pi.go's (the pi directory list the explorer rides in), the rest is here.
@@ -13,13 +13,10 @@ import (
 )
 
 const (
-	// explorerSpace is a space spelt the way JSON and TOML read back as a space: the launch words are split on whitespace.
-	explorerSpace          = "\\u0020"
-	explorerName           = "cheap-explorer"
-	explorerModelClaude    = "haiku"
-	explorerModelOpencode  = "openai/gpt-5.6-luna"
-	explorerModelCodex     = "gpt-5.6-luna"
-	explorerEffortOpencode = "low"
+	// explorerSpace is a space spelt the way JSON reads back as a space: the launch words are split on whitespace.
+	explorerSpace       = "\\u0020"
+	explorerName        = "cheap-explorer"
+	explorerModelClaude = "haiku"
 )
 
 // explorerRole is the parsed `_agents/cheap-explorer.md`: its frontmatter and its body.
@@ -37,9 +34,6 @@ func (d *dsp) explorer() explorerSrc {
 }
 
 func (x explorerSrc) roleFile() string { return x.root + "/_agents/" + explorerName + ".md" }
-func (x explorerSrc) codexFile() string {
-	return x.root + "/setup/codex/agents/" + explorerName + ".toml"
-}
 
 var explorerFmKV = regexp.MustCompile(`^([A-Za-z_-]+):\s*(.*)$`)
 
@@ -140,10 +134,6 @@ func (x explorerSrc) model(vendor string) string {
 			return x.haikuPin
 		}
 		return explorerModelClaude
-	case "opencode":
-		return explorerModelOpencode
-	case "codex":
-		return explorerModelCodex
 	case "pi":
 		return orDefaultStr(x.piModel, piExplorerModel)
 	}
@@ -179,38 +169,9 @@ func explorerClaudeFile(rundir string) string { return rundir + "/explorer-agent
 
 // explorerClaudeFunction is _explorer_claude_function: the shell text typed into the pane so the `claude` herdr types
 // carries `--agents "$(cat <file>)"`. herdr single-quotes every word it types, so the substitution has to be the
-// shell's own; `command claude` skips the function, so the sandbox's shim is still what runs.
+// shell's own; `command claude` skips the function and runs the real binary.
 func explorerClaudeFunction(file string) string {
 	return `claude() { command claude --agents "$(cat '` + strings.ReplaceAll(file, `'`, `'\''`) + `')" "$@"; }`
-}
-
-// opencodeOverlay is _explorer_opencode_overlay's JSON, in jq -c's key order, spaces spelt  .
-func (x explorerSrc) opencodeOverlay() string {
-	r, ok := x.roleParse()
-	if !ok {
-		return ""
-	}
-	out := `{"agent":{` + explorerJSONString(r.name) + `:{"mode":"subagent","description":` + explorerJSONString(r.description) +
-		`,"prompt":` + explorerJSONString(r.prompt) + `,"model":` + explorerJSONString(x.model("opencode")) +
-		`,"reasoningEffort":` + explorerJSONString(explorerEffortOpencode) + `,"permission":{"edit":"deny"}}}}`
-	if strings.ContainsAny(out, " \t\n") {
-		return ""
-	}
-	return out
-}
-
-// codexArgs is _explorer_codex_args.
-func (x explorerSrc) codexArgs() string {
-	f := x.codexFile()
-	if !isFile(f) || strings.ContainsAny(f, " \t\n\v\f\r") {
-		return ""
-	}
-	r, ok := x.roleParse()
-	if !ok {
-		return ""
-	}
-	desc := strings.ReplaceAll(r.description, " ", explorerSpace)
-	return " -c agents." + explorerName + `.description="` + desc + `" -c agents.` + explorerName + `.config_file="` + f + `"`
 }
 
 // explorerResolve is _explorer_resolve: what the manifest says, decided AFTER the launch words are built and
@@ -226,20 +187,6 @@ func (d *dsp) explorerResolve() {
 			d.explorerLine = explorerName + " on " + m + " — claude --agents (JSON from _agents/" + explorerName + ".md in the run directory's explorer-agents.json, read by a shell function typed into the pane; nothing written into the repo)"
 		} else {
 			d.explorerLine = "NOT INJECTED — " + x.roleFile() + " is missing or malformed, so no --agents reached the launch"
-		}
-	case "opencode":
-		if x.opencodeOverlay() != "" {
-			d.explorerInjected = true
-			d.explorerLine = explorerName + " on " + m + " (reasoningEffort " + explorerEffortOpencode + ") — OPENCODE_CONFIG_CONTENT agent overlay, this session only"
-		} else {
-			d.explorerLine = "NOT INJECTED — " + x.roleFile() + " is missing or malformed, so the overlay carries no agent"
-		}
-	case "codex":
-		if strings.Contains(" "+d.agentArgs+" ", " -c agents."+explorerName+".config_file=") {
-			d.explorerInjected = true
-			d.explorerLine = explorerName + " on " + m + " — codex -c agents." + explorerName + " (config_file setup/codex/agents/" + explorerName + ".toml)"
-		} else {
-			d.explorerLine = "NOT INJECTED — setup/codex/agents/" + explorerName + ".toml or the role file is missing, so no -c agents.* reached the launch"
 		}
 	case "pi":
 		d.piExplorerResolve(m) // t6_pi.go
@@ -261,18 +208,6 @@ func (x explorerSrc) tier(vendor string) (t explorerTier, ok bool) {
 		}
 		t.call = `the Agent tool with subagent_type "` + explorerName + `"`
 		t.implement = `a sonnet subagent (the Agent tool, model "sonnet")`
-	case "opencode":
-		if x.opencodeOverlay() == "" {
-			return t, false
-		}
-		t.call = `the task tool with subagent_type "` + explorerName + `"`
-		t.implement = "a mid-tier subagent (general-terra)"
-	case "codex":
-		if x.codexArgs() == "" {
-			return t, false
-		}
-		t.call = `the spawn_agent tool with agent_type "` + explorerName + `"`
-		t.implement = "a mid-tier agent (terra)"
 	case "pi":
 		if x.piAgentDirOK() == "" || !x.piSubagentsReady() {
 			return t, false

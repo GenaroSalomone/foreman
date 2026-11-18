@@ -50,7 +50,8 @@ var (
 var laneFields = []string{"product_repo", "hw_aliases", "brain_aliases", "space", "engram", "vendor", "model", "account", "artifacts", "repoless",
 	"checkout", "checkout_var", "base", "base_ref_prefix", "branch", "worktree_root", "worktree", "ports",
 	"hint_aliases", "build", "agents_from", "deps", "db", "devserver", "reap", "sweep", "brain_guard", "brief_note", "qa_target",
-	"model_floor", "model_pins", "subagent_model", "pi_subagent_models", "requested_by", "opencode_config_dir", "suite_lock", "org"}
+	"model_floor", "model_pins", "subagent_model", "pi_subagent_models", "requested_by", "suite_lock", "org",
+	"opencode_config_dir"} // opencode_config_dir: RETIRED (OpenCode left hw), accepted and ignored for one release; bin/project-spaces.sh agrees
 
 var laneSub = map[string][]string{
 	"model_floor": {"tier", "accepts"},
@@ -413,7 +414,7 @@ func loadTable(file, home string) (*table, []string) {
 	t.operator = orDefault(field(root, "operator"), "the operator")
 	if v := field(root, "pi_roster"); v != nil {
 		if v.kind != vStr || !has([]string{"go", "free"}, v.s) {
-			return bad("pi_roster is go (the paid opencode-go roster) or free (opencode's free models)")
+			return bad("pi_roster is go (the paid opencode-go roster) or free (the free models)")
 		}
 		t.piRosterName = v.s
 	}

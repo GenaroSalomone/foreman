@@ -5,8 +5,7 @@
 
 A stdio JSON-RPC proxy between an agent and `engram mcp`. `hw` and `brain`
 launch it as the agent's `engram` MCP server for every vendor, so the rule
-lives in one process instead of one hook per vendor (Codex hooks see only Bash;
-whether OpenCode's plugin sees MCP calls was never established). Design:
+lives in one process instead of one hook per vendor. Design:
 brain/setup/briefs/refs/memoria-engram-design.md, with the three amendments of
 memoria-engram-judgment.md, which win where they collide.
 

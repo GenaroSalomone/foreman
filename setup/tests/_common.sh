@@ -145,7 +145,7 @@ unset _v 2>/dev/null || true
 # be worse than the bug.
 # HW_IMPL and HW_CORE (the binary hw routes to) ARE INPUTS THIS DIRECTORY OWNS: `HW_IMPL=go bash setup/test-hw` runs the whole suite through hw-core
 # (the answer is Go's, which is the default). HW_IMPL no longer chooses for hw, brain, channel-send, ask-invoker or done-invoker (go-060 S3: bash/shadow
-# print one warning per state and Go runs); it still chooses for the small tools (stop hook, hw-secret, hw-sandbox, ...) until their own cut.
+# print one warning per state and Go runs); it still chooses for the small tools (stop hook, hw-secret, ...) until their own cut.
 _HW_TEST_INPUTS=" HW_UNSTICK_BIN HW_SOURCE HW_CHECK_LIVE_REVIEW_DRIFT HW_CHECK_LIVE_REVIEW_BINDING HW_IMPL HW_CORE HW_TEST_TMPROOT "  # MUTATION-ANCHOR: 54-M02
 for _v in ${!HW_@}; do  # MUTATION-ANCHOR: 54-M01
   case "$_HW_TEST_INPUTS" in *" $_v "*) continue ;; esac
@@ -217,8 +217,7 @@ export FOREMAN_NO_CORE=1
 # found by $PATH. Every caller that matters invokes herdr-rpc by ABSOLUTE PATH —
 # `$HW_BIN_DIR/herdr-rpc` (bin/hw), `$INVOKER_BIN_DIR/herdr-rpc`
 # (bin/invoker-common.sh), `$BIN_DIR/herdr-rpc` (bin/channel-send,
-# bin/hw-reconcile), `$SCRIPT_DIR/herdr-rpc` (bin/codex-channel-session-hook.sh)
-# — because herdr-rpc is deliberately NOT on $PATH in production and must be
+# bin/hw-reconcile) — because herdr-rpc is deliberately NOT on $PATH in production and must be
 # found beside its caller. A $PATH entry cannot shadow a path that is already
 # written out, and those files are not this directory's to edit.
 #
@@ -255,6 +254,9 @@ unset _v _HERDR_TEST_INPUTS 2>/dev/null || true
 
 # One directory deeper than the old single file, so two levels up, not one.
 ROOT="$(cd -P "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# AROOT: the agents root as hw derives it, `~/<dir>` from projects.json "root", spelled relative to HOME. A fixture that
+# hardcodes the old root directory in its fake tree went stale when the root moved to ~/agents (dac277a66): derive, never hardcode.
+AROOT="$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["root"].replace("~/","",1))' "$ROOT/projects.json" 2>/dev/null || true)"   # a fixture that copies this file bare has no projects.json: empty, and it uses none of it
 # $ROOT IS NOT ALWAYS THE CHECKOUT. setup/test-hw re-execs itself against a
 # private byte-for-byte SNAPSHOT (test-hw-snapshot.py), and a snapshot has no
 # .git — so `git -C "$ROOT" …` there fails with "not a git repository", and any
@@ -274,7 +276,6 @@ export HW_LIB_DIR="$ROOT/lib"
 # back-date their files on purpose (`touch -t 2020…`, the runs of 2026-10-05), so a run that crossed 03:35 lost them under its
 # feet: measured 2026-10-09, two full runs of 870 red in the same window with the build output's old file gone from every
 # world after it, and a probe file dated 2020 in $TMPDIR deleted by one run of /usr/libexec/dirhelper. setup/tests/961.
-# NOT /private/tmp: 320's kernel arms need a TMP the sandbox profile does not already open (it skips under /private/tmp and /tmp).
 _tmp_root="${TMPDIR:-/tmp}"
 if [ "$(uname -s)" = Darwin ]; then
   case "$(cd -P "$_tmp_root" 2>/dev/null && pwd)" in
@@ -365,7 +366,7 @@ need_invokers() {
 }
 # copy_tracked_tree <src> <dst> — a release ships the TRACKED tree, so a fixture that stands for a
 # release (or for a published repository) copies that and nothing else. The checkout's untracked
-# load (lane evidence, snapshots, .claude/.opencode caches, build output) was ~440 MB in the main
+# load (lane evidence, snapshots, .claude caches, build output) was ~440 MB in the main
 # checkout against ~73 MB in a task worktree, copied again by every subject that took the whole
 # root: 680 ran 323s there against a 281s ceiling (setup/tests/680, 480, 481).
 # The bytes are the working tree's, so a tracked-but-modified file is kept as it stands and a
@@ -431,7 +432,7 @@ export LC_ALL=en_US.UTF-8
 # 2026-09-21: a `--help` opened and migrated the real one).
 #
 # ENGRAM_PORT IS PINNED, NOT UNSET. Unset means 7437, and 7437 is the port the
-# person's serve lives on. Measured 2026-09-28: an OpenCode run under a sandbox
+# person's serve lives on. Measured 2026-09-28: an agent run under a sandbox
 # HOME found no serve there (the real one was down), its engram plugin spawned
 # `engram serve` with that HOME, and the sandbox store held the real port for an
 # hour (core/engram_serve.go). A subject that starts an agent with an engram
@@ -456,8 +457,8 @@ export HW_AGENT_TOOLS=off
 # ── A HOME THAT IS NOT THIS MACHINE'S ──────────────────────────────────────
 #
 # THE SUITE READ THE MACHINE, AND A CONFIG CHANGE BROKE IT. Until 2026-09-22 a
-# subject that wanted ~/.config/opencode/opencode.json, the installed herdr
-# plugin, ~/.codex/hooks.json or a product repo's .claude/agents simply read the
+# subject that wanted the installed herdr
+# plugin or a product repo's .claude/agents simply read the
 # live one. So a change of CONFIGURATION, not of code, turned the suite red —
 # measured that day with 70 and 74 — and the same tree answered differently on
 # two machines, which is the one thing a suite may not do.
@@ -471,16 +472,14 @@ export HW_AGENT_TOOLS=off
 #
 # XDG_CONFIG_HOME is pinned inside it, and the per-vendor config pointers are
 # removed, because each is a second road to the same live state: an exported
-# CLAUDE_CONFIG_DIR or CODEX_HOME points at the real ~/.claude-personal or
-# ~/.codex regardless of what HOME says.
+# CLAUDE_CONFIG_DIR points at the real ~/.claude-personal regardless of what HOME says.
 # The suite's safe root is named BEFORE HOME is faked: contract_world_root (contract-hw/world.sh) reads
 # ${HW_TEST_TMPROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/hw-test-<uid>}, and with the fake HOME the worlds landed under the fake HOME's cache dir.
 export HW_TEST_TMPROOT="${HW_TEST_TMPROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/hw-test-$(id -u)}"
 export HOME="$TMP/home"
 mkdir -p "$HOME"
 export XDG_CONFIG_HOME="$HOME/.config"
-unset XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME CLAUDE_CONFIG_DIR CODEX_HOME \
-      OPENCODE_CONFIG OPENCODE_CONFIG_DIR 2>/dev/null || true
+unset XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME CLAUDE_CONFIG_DIR 2>/dev/null || true
 # AND NO BYTECODE CACHE UNDER IT. Apple's /usr/bin/python3 cannot write
 # __pycache__ beside its own stdlib, so it writes to
 # $HOME/Library/Caches/com.apple.python instead — which is now $TMP. A subject
@@ -591,15 +590,6 @@ home_repo() {
   mkdir -p "$dir"
   ( cd "$dir" && git init -q -b "$branch" && git config user.email t@t \
     && git config user.name t && git commit -q --allow-empty -m base )
-}
-
-# home_opencode_config [<fixture>] — the global OpenCode config, from a fixture.
-# Default: setup/fixtures/opencode.json, a snapshot of the agent section
-# of the live file taken on 2026-09-22 (the date 70 and 74 went red on it).
-home_opencode_config() {
-  local src="${1:-$FIXTURES/opencode.json}"
-  mkdir -p "$XDG_CONFIG_HOME/opencode"
-  cp "$src" "$XDG_CONFIG_HOME/opencode/opencode.json"
 }
 
 # The runner sums the `ok -` lines across every subject file, so no file keeps

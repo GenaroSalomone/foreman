@@ -52,9 +52,6 @@
 #      PATH, which a login shell always has set by the time ~/.zshrc runs, but it
 #      does not protect DYLD_INSERT_LIBRARIES or LD_PRELOAD, which are normally
 #      unset and would therefore have been applied.
-#      ONE DERIVED EXCEPTION, 2026-09-28: an opencode executor's --effort. Its
-#      OPENCODE_CONFIG_CONTENT is never read from the file; it is REBUILT from
-#      two HW_* fields, each validated — see _hw_restore_opencode_effort.
 #   2. IT DOES NOT SOURCE THE FILE. It parses it, with no eval and no `.`, which
 #      is why the writer (`_write_run_env` in brain/bin/hw) pins the grammar to
 #      one `KEY='value'` per line with inner `'` as `'\''`. That grammar is also
@@ -72,7 +69,7 @@
 #      a broken ~/.zshrc breaks every new terminal.
 #
 # The invokers do the same lookup in python (`invoker_adopt_env_file` in
-# brain/bin/invoker-common.sh) because they cannot source a zsh function. The two
+# core/invokers/envfile.go) because they cannot source a zsh function. The two
 # now agree on the roots; they still differ in scope, and deliberately — the
 # invokers read six named keys, this reads any `HW_*`/`ENGRAM_*`, so a new HW_
 # variable reaches a restored shell without editing this file. Change the grammar
@@ -125,24 +122,7 @@ _hw_restore_env_file() {
     typeset -gx -- "$key=$val"
   done < $f
 
-  _hw_restore_opencode_effort
   return 0
-}
-
-# THE ONE NON-IDENTITY VARIABLE, AND IT IS BUILT, NEVER READ. hw carries an
-# opencode executor's --effort as OPENCODE_CONFIG_CONTENT, a whole config layer
-# (MCP commands, plugins) — exactly what rule 7 keeps out of every shell. So the
-# file's own OPENCODE_CONFIG_CONTENT line is ignored, and the one shape hw
-# writes, {"agent":{<name>:{"reasoningEffort":<effort>}}}, is rebuilt here from
-# HW_OPENCODE_EFFORT (an enum) and HW_OPENCODE_EFFORT_AGENT ([A-Za-z0-9._-]).
-# Anything else in either field builds nothing. Rule 4 still holds: a pane that
-# kept its own OPENCODE_CONFIG_CONTENT wins.
-_hw_restore_opencode_effort() {
-  emulate -L zsh
-  [[ -n ${OPENCODE_CONFIG_CONTENT+x} ]] && return 0
-  [[ ${HW_OPENCODE_EFFORT-} == (low|medium|high|xhigh|max) ]] || return 0
-  [[ -n ${HW_OPENCODE_EFFORT_AGENT-} && -z ${HW_OPENCODE_EFFORT_AGENT//[A-Za-z0-9._-]/} ]] || return 0
-  typeset -gx OPENCODE_CONFIG_CONTENT="{\"agent\":{\"$HW_OPENCODE_EFFORT_AGENT\":{\"reasoningEffort\":\"$HW_OPENCODE_EFFORT\"}}}"
 }
 
 # Walk up from $PWD inside the whitelisted root and apply the newest env file

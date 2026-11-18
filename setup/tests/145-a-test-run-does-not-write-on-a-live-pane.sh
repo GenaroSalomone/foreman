@@ -26,8 +26,7 @@
 # on $PATH, which is why this looked hermetic. Every caller that matters invokes
 # herdr-rpc by ABSOLUTE PATH -- `$HW_BIN_DIR/herdr-rpc` (bin/hw),
 # `$INVOKER_BIN_DIR/herdr-rpc` (bin/invoker-common.sh), `$BIN_DIR/herdr-rpc`
-# (bin/channel-send, bin/hw-reconcile), `$SCRIPT_DIR/herdr-rpc`
-# (bin/codex-channel-session-hook.sh) -- because herdr-rpc is deliberately not on
+# (bin/channel-send, bin/hw-reconcile) -- because herdr-rpc is deliberately not on
 # $PATH in production. A $PATH entry cannot shadow a path already written out,
 # and those files are not this directory's to edit. So the interception is at the
 # ADDRESS: the identity is swept, and $HERDR_SOCKET_PATH is re-pointed into the

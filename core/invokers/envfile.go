@@ -30,7 +30,7 @@ func (c *Ctx) brainRoot() string {
 	return filepath.Dir(c.BinDir)
 }
 
-// loadRoots is the top of invoker-common.sh: INVOKER_ENV_ROOTS and the operator's name, read from the lane table (lanetable.go),
+// loadRoots reads INVOKER_ENV_ROOTS and the operator's name from the lane table (lanetable.go),
 // else (a table that does not parse, or has no lanes or no work) from rootsFromTable, which says why on stderr.
 func (c *Ctx) loadRoots() {
 	c.envRoots = ""

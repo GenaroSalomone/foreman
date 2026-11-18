@@ -21,8 +21,7 @@ installs into a fixture and runs the installed hook with no sibling present.
 **`pre-commit`** refuses a commit that mixes shared tooling (`bin/`, `shell/`,
 `layouts/`, `setup/plans/`, `setup/hooks/`, `CLAUDE.shared.md`, the root `CLAUDE.md`, `README.md`,
 `docs/BRIEF-TEMPLATE.md`) with one project lane's files (`<project>/decisions*`,
-`<project>/briefs/`, `<project>/CLAUDE.md`, `<project>/.claude/`,
-`<project>/opencode.json`).
+`<project>/briefs/`, `<project>/CLAUDE.md`, `<project>/.claude/`).
 
 That combination is the signature of `git add -A` in a repo several agents write
 to at once. A brainer finishing one lane's work swept another agent's

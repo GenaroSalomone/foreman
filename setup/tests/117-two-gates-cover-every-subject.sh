@@ -163,8 +163,7 @@ esac
 # UNCHANGED — every file runs, and the guard block still runs too. ─────────
 d="$(mk_gate_repo)"
 mkdir -p "$d/setup/guards"
-for _g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs \
-          test-opencode-hw-blocked-reason.mjs test-herdr-opencode-background-state.mjs; do
+for _g in test-deny-repo-writes.mjs test-deny-repo-writes-filesystem.mjs; do
   printf 'console.log("ok - stub %s ran");\n' "$_g" > "$d/setup/guards/$_g"
 done
 cat > "$d/setup/guards/mutate-deny-repo-writes.sh" <<'STUB'

@@ -3,7 +3,7 @@ package main
 // Train T5b: the dispatch's LAUNCH — everything bin/hw does after `_dispatch_manifest` when the dispatch is not a
 // dry run: the worktree and its branch, the database and ports, the tab or pane, `herdr agent start`, the brief
 // delivered, the run's receipt. One state, `lch`, embeds the dispatch (`dsp`, t5_state.go) and one struct per area,
-// each in the file of the area that owns it (lenvState, lspState, lagState, ldlState, llnState, lrcState).
+// each in the file of the area that owns it (lenvState, lspState, llnState, lrcState).
 // Fields two areas read are declared HERE, named after the bash global (WS → ws, HW_TAB → hwTab).
 //
 // Conventions are t5_state.go's (a bash `_foo_bar` is the method `fooBar`; text byte for byte; d.env, never
@@ -12,12 +12,10 @@ package main
 
 type lch struct {
 	*dsp
-	tuiSessionID string // bash global HW_TUI_SESSION_ID: assigned by the delivery, never exported
+	hcLiveRun    string // hcLive: the hw_run label of the live executor terminal it found, "" when none
 	lenvState           // t5l_env.go     the run's environment, trust, sdd, artifacts
 	lrcState            // t5l_receipt.go the receipt, the ledger, the engram session, stale-hook refusal
 	lspState            // t5l_space.go   workspace/tab/layout, --here
-	lagState            // t5l_agent.go   agent start, sandbox, the agent step
-	ldlState            // t5l_deliver.go the brief as the executor receives it, and its delivery
 	llnState            // t5l_lanes.go   the lane builders (worktree, ports, database, dependencies)
 
 	fs *fsx // every file write of the launch goes through it
@@ -33,7 +31,6 @@ type lch struct {
 	pAgent, pShell, pDev string // P_AGENT, P_SHELL, P_DEV
 	wt                   string // WT  the work directory the lane built
 	hcDevAddrs           []string // herdr-core: the dev-server terminals this launch started or found (hcDevStart)
-	hcLaunchMs           int64    // herdr-core: when the executor's `hc run` was asked (unix ms): a session older than it is not this launch's
 
 	// the rollback record (bin/hw "LAUNCH_WT=… LAUNCH_BRANCH_CREATED=…")
 	launchWT, launchBranch               string

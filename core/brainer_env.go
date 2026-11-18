@@ -53,18 +53,12 @@ func (b *brainRun) planBrainer(proj string) (brainerLaunch, bool) {
 	if p.mcpBin == "" {
 		p.mcpBin = "engram"
 	}
-	if b.kind == "opencode" {
-		p.pairs = append(p.pairs, "OPENCODE_CONFIG_CONTENT="+jqCompact(map[string]any{}, p.engramProxy, b.engramLabel, p.mcpBin)) // # MUTATION-ANCHOR: go-422-M03
-	}
 	if accountFlag != "" {
 		p.pairs = append(p.pairs, accountFlag) // # MUTATION-ANCHOR: go-122-M02
 	}
 	// THE COCKPIT MOD FINDS ITS STATE FILE FROM THE PANE'S OWN ENVIRONMENT.
 	if b.kind == "claude" && b.work != "" { // # MUTATION-ANCHOR: go-803-M08
 		p.pairs = append(p.pairs, "HW_COCKPIT_WORK="+b.work)
-	}
-	if b.kind == "opencode" {
-		p.pairs = append(p.pairs, "OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true")
 	}
 	return p, true
 }
@@ -74,7 +68,7 @@ func (b *brainRun) planBrainer(proj string) (brainerLaunch, bool) {
 func (b *brainRun) withEngramSession(p brainerLaunch) brainerLaunch {
 	b.engramRegister()
 	if b.engramSession != "" {
-		// right after ENGRAM_PROJECT (before OPENCODE_CONFIG_CONTENT, which an opencode lane carries: env order has no effect)
+		// right after ENGRAM_PROJECT
 		p.pairs = append(p.pairs[:1], append([]string{"BRAIN_ENGRAM_SESSION=" + b.engramSession}, p.pairs[1:]...)...)
 	}
 	return p
@@ -93,14 +87,6 @@ func (b *brainRun) brainerAgentArgs(p brainerLaunch, pane, tab string, hc bool) 
 		b.setenv("CLAUDE_CODE_BASH_EDIT_DIFF", "0")            // # MUTATION-ANCHOR: go-892-M05
 	case b.kind == "claude" && !hc:
 		b.sessionEnvPrep(pane) // # MUTATION-ANCHOR: go-810-M01
-	}
-	if b.kind == "opencode" {
-		port := freePort()
-		agentArgs = []string{"--", "--port", port}
-		if b.permissions == "skip" {
-			agentArgs = []string{"--", "--auto", "--port", port} // # MUTATION-ANCHOR: go-803-M05
-		}
-		return agentArgs, 0
 	}
 	// THE FOLDER-TRUST QUESTION, ANSWERED THE WAY `hw` ANSWERS IT FOR EXECUTORS.
 	b.trustDir(b.dir, p.acctDir) // # MUTATION-ANCHOR: go-122-M03

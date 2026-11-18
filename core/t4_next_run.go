@@ -1,10 +1,9 @@
 package main
 
 // The two ends of `hw next`: the dry run (everything except the send and the counter) and the delivery (the
-// task directory, the SDD surface, the lease, channel-send, the receipts, the counter, the ledger) — and the
+// task directory, the lease, channel-send, the receipts, the counter, the ledger) — and the
 // refusals and readings on the way there that live outside next.sh: the missing pane's diagnosis
-// (_next_missing_pane_message, _next_autoclosed_run_for_pane), stale hooks (_refuse_if_stale_hooks), the SDD
-// gates (_validate_sdd_vendor_pair, _validate_sdd_model_pair, _apply_sdd), the context line
+// (_next_missing_pane_message, _next_autoclosed_run_for_pane), stale hooks (_refuse_if_stale_hooks), the context line
 // (_report_pane_context), the report evidence and the ledger (_ledger_next). Dispatch helpers (T5), copied.
 
 import (
@@ -32,74 +31,42 @@ func (a *app) nextDryRun(s *nextState, nextSeq string, waitMS int64) int {
 		ep = " (endpoint " + s.endpoint + ")"
 	}
 	a.info("route " + s.route + " -> " + s.target + ep)
-	msg := bashSub(a.nextMessage(s, nextSeq, ""))
-	a.info("would create " + s.rundir + "/t" + nextSeq + " and deliver " + nextWc(msg) + " bytes as task " + nextSeq + " (" + nextWc(s.text) + " of them the task text; the rest is the preamble hw prepends, minus any framework entry line)")
+	msg := bashSub(a.nextMessage(s, nextSeq))
+	a.info("would create " + s.rundir + "/t" + nextSeq + " and deliver " + nextWc(msg) + " bytes as task " + nextSeq + " (" + nextWc(s.text) + " of them the task text; the rest is the preamble hw prepends)")
 	if s.reopened {
 		a.info("run was revived (reopened): hw revive is the authority for this re-task, so its spent chaining lease is not consulted; task " + nextSeq + " gets its own done-invoker with no --retask")
 	}
 	if seconds != "" && !s.reopened {
 		a.info("this one use would be consumed only after successful delivery; dry-run lease state is volatile and was not touched")
 	}
-	budget := strconv.FormatInt(waitMS, 10)
-	if nextFinishedStaleStuck(s.info) {
+	switch {
+	case nextFinishedStaleStuck(s.info):
 		a.ok("the delivery gate WOULD OPEN: " + s.pane + " has authoritative delivered completion tokens; its blocked/stuck lifecycle token is stale (budget " + s.waitMS + "ms, unspent)")
-	} else {
-		switch s.status {
-		case "idle", "done":
-			a.ok("the delivery gate WOULD OPEN: herdr reports " + s.pane + " " + s.status + ", so a prompt would be read now (budget " + s.waitMS + "ms, unspent)")
+	case s.status == "idle" || s.status == "done":
+		a.ok("the delivery gate WOULD OPEN: herdr reports " + s.pane + " " + s.status + ", so a prompt would be read now (budget " + s.waitMS + "ms, unspent)")
+	default:
+		a.info("herdr reports " + s.pane + " " + s.status + ", so the gate would wait (budget " + s.waitMS + "ms). Cross-checking whether that state can still change — this does not send, dismiss or wait:")
+		var w nextWitness
+		if a.nextHC(s.pane) { // the screen witness reads herdr; an app terminal has only `hc get`
+			w.detail = "an app terminal has no screen witness; `hc get` is the only reading."
+		} else {
+			a.nextWitnessState(s.pane, &w)
+		}
+		switch w.verdict {
+		case "live":
+			a.info("gate verdict: WOULD WAIT, and correctly. " + w.detail)
 		default:
-			a.info("herdr reports " + s.pane + " " + s.status + ", so the gate would wait (budget " + s.waitMS + "ms). Cross-checking whether that state can still change — this does not send, dismiss or wait:")
-			var w nextWitness
-			if a.nextHC(s.pane) { // the endpoint and screen witness read herdr; an app terminal has only `hc get`
-				w.detail = "an app terminal has no endpoint or screen witness; `hc get` is the only reading."
-			} else {
-				a.nextWitnessState(s.pane, &w)
-			}
-			switch w.verdict {
-			case "live":
-				a.info("gate verdict: WOULD WAIT, and correctly. " + w.detail)
-			case "awaiting-human":
-				a.warn("gate verdict: WOULD NOT OPEN. " + w.detail)
-			case "settled":
-				a.warn("gate verdict: WOULD NOT OPEN, and no budget would help. " + w.detail)
-				a.warn("a real run would refuse here after confirming that twice, instead of spending " + s.waitMS + "ms on it")
-			default:
-				a.info("gate verdict: UNDETERMINED. " + w.detail)
-			}
+			a.info("gate verdict: UNDETERMINED. " + w.detail)
 		}
-	}
-	_ = budget
-	if s.nextSDD != "" {
-		e := nextFrameworkEntry(s.nextSDD)
-		if e == "" {
-			e = "<none for this mode>"
-		}
-		a.info("would set SDD mode " + s.nextSDD + " on the worktree, entry " + e)
-	} else {
-		a.info("SDD surface: unchanged — compatibility checked using the effective mode; live surface takes precedence, with the launch record as fallback when no live mode is obtained")
 	}
 	return 0
-}
-
-// nextFrameworkEntry is _framework_entry.
-func nextFrameworkEntry(mode string) string {
-	if mode == "speckit" {
-		return "/speckit-specify"
-	}
-	return ""
 }
 
 // ── the delivery ────────────────────────────────────────────────────────────
 
 func (a *app) nextDeliver(s *nextState, nextSeq string) int {
 	tdir := s.rundir + "/t" + nextSeq
-	if os.MkdirAll(tdir, 0o777) != nil {
-		a.die("cannot create " + tdir)
-	}
-	if s.nextSDD != "" && !a.nextApplySDD(s.wtdir, s.nextSDD) {
-		a.die("--sdd " + s.nextSDD + " has no speckit-* skill on disk for " + s.wtdir + ", so nothing was sent and the task counter did not move. Install Spec Kit where it is used, or re-task with --sdd none.")
-	}
-	msg := bashSub(a.nextMessage(s, nextSeq, s.nextSDD))
+	msg := bashSub(a.nextMessage(s, nextSeq))
 
 	// The lease: held under the run's lock across delivery, consumption and the counter.
 	seconds, _ := a.nextRunEnv(s.rundir, "HW_CHAINING_LEASE_SECONDS", true)
@@ -126,21 +93,15 @@ func (a *app) nextDeliver(s *nextState, nextSeq string) int {
 		}
 	}
 
-	bin := a.nextBinDir()
-	var args []string
-	if s.route == "opencode" {
-		args = []string{"--require", "processed", "--id", nextBasename(s.rundir) + ":t" + nextSeq, s.route, s.target, s.endpoint, msg}
-	} else {
-		args = []string{s.route, s.target, s.endpoint, msg}
+	if os.MkdirAll(tdir, 0o777) != nil { // after the lease gate: a refusal leaves the run directory untouched
+		release()
+		a.die("cannot create " + tdir)
 	}
-	cmd := exec.Command(bin+"/channel-send", args...)
+	bin := a.nextBinDir()
+	cmd := exec.Command(bin+"/channel-send", s.route, s.target, s.endpoint, msg)
 	cmd.Stderr = a.err
-	sendRC := exitStatus(cmd.Run())           // stdout to /dev/null, as bash sends it
-	if sendRC == 4 && s.route == "opencode" { // # MUTATION-ANCHOR: 862-G22
-		a.warn(s.pane + " ACCEPTED task " + nextSeq + " — it is in its session — but the turn it started did not complete (see the message above).")
-		a.warn("that is a turn failure, not a delivery failure, so the counter advances: rolling it back would leave the executor holding a task its invokers do not know about.")
-		a.info("check what it did with: herdr agent read " + s.pane + " --source recent-unwrapped")
-	} else if sendRC != 0 {
+	sendRC := exitStatus(cmd.Run()) // stdout to /dev/null, as bash sends it
+	if sendRC != 0 {
 		os.Remove(tdir) // rmdir: only an empty directory goes
 		release()
 		a.die("delivery to " + s.pane + " failed via " + s.route + " (exit " + itoa(sendRC) + "). The task counter was NOT advanced, so the executor is still on task " + s.seq + " and its next done-invoker still refers to the task it actually ran. The pane is untouched and still usable — a failed delivery is not a reason to close an executor; fix the transport and retry.")
@@ -172,7 +133,6 @@ func (a *app) nextDeliver(s *nextState, nextSeq string) int {
 			"kind build (declared or undeclared) at hw next — done-invoker requires $HW_ARTIFACTS/checks.md")
 	}
 	if s.brief != "" {
-		a.nextPluginsReceipt(s.rundir, s.brief, s.vendor)
 		a.nextPluginReviewReceipt(s.rundir, "plugin_review_t"+nextSeq, s.brief, s.vendor)
 		a.nextJdAgentsReceipt(s.rundir, "jd_agents_t"+nextSeq, s.brief, s.vendor, s.wtdir)
 	}
@@ -196,93 +156,6 @@ func (a *app) nextDeliver(s *nextState, nextSeq string) int {
 	a.ok("task " + nextSeq + " dispatched to " + s.pane + " via " + s.route + " (" + v + " executor, " + nextWc(msg) + " bytes)")
 	a.info("state for it: " + tdir + " — fresh ask budget, no done marker")
 	return 0
-}
-
-// nextApplySDD is _apply_sdd for the two modes `hw next` can apply.
-func (a *app) nextApplySDD(dir, mode string) bool {
-	if mode != "speckit" {
-		return true
-	}
-	if where, ok := nextSpeckitOnDisk(dir, a.c.home); ok {
-		a.ok("SDD mode: speckit (skills in " + where + ")")
-		return true
-	}
-	a.warn("--sdd speckit, but no speckit-* skill is on disk under " + dir + "/.claude/skills or " + a.c.home + "/.claude/skills")
-	return false
-}
-
-// nextSpeckitIn is _speckit_skills_in: <dir>/.claude/skills when a speckit-* entry is in it.
-func nextSpeckitIn(dir string) (string, bool) {
-	d := dir + "/.claude/skills"
-	if !isDir(d) {
-		return "", false
-	}
-	ents, err := os.ReadDir(d)
-	if err != nil {
-		return "", false
-	}
-	for _, e := range ents {
-		if strings.HasPrefix(e.Name(), "speckit-") {
-			if _, err := os.Stat(d + "/" + e.Name()); err == nil { // [ -e ]: a dangling link does not count
-				return d, true
-			}
-		}
-	}
-	return "", false
-}
-
-func nextSpeckitOnDisk(dir, home string) (string, bool) {
-	if w, ok := nextSpeckitIn(dir); ok {
-		return w, true
-	}
-	return nextSpeckitIn(home)
-}
-
-// nextValidateSDDVendor is _validate_sdd_vendor_pair (with _resolve_effective_sdd_mode): the effective mode.
-func (a *app) nextValidateSDDVendor(vendor, requested, surface, inherited string) string {
-	mode := requested
-	if mode == "" {
-		if _, ok := nextSpeckitIn(surface); ok {
-			mode = "speckit"
-		}
-		if mode == "" {
-			mode = inherited
-		}
-	}
-	switch vendor + ":" + mode {
-	case "codex:speckit":
-		a.die("Codex framework dispatch REFUSED BEFORE BUILDING ANYTHING: --sdd " + mode + " requires a demonstrated native entry and completed flow, but that capability is unverified. Nothing was built. Use --sdd none for direct delivery, or validate Codex framework execution before re-dispatching.")
-	case "opencode:speckit": // # MUTATION-ANCHOR: 862-G26
-		a.die("OpenCode framework dispatch REFUSED BEFORE BUILDING ANYTHING: --sdd " + mode + " is Spec Kit, but this machine exposes Spec Kit only as Claude Code skills. Nothing was built. Use --agent claude for Spec Kit, or --sdd none for direct delivery.")
-	}
-	return mode
-}
-
-// nextValidateSDDModel is _validate_sdd_model_pair: a sonnet or haiku session cannot orchestrate Spec Kit.
-func (a *app) nextValidateSDDModel(model, mode, where string) {
-	if mode != "speckit" || model == "" {
-		return
-	}
-	last := model
-	if i := strings.LastIndexByte(last, '/'); i >= 0 {
-		last = last[i+1:]
-	}
-	if !strings.Contains(last, "sonnet") && !strings.Contains(last, "haiku") { // # MUTATION-ANCHOR: 862-G27
-		return
-	}
-	declared := ""
-	if b := a.getenv("BRIEF"); b != "" { // the shell's BRIEF: `hw next` never sets it on this route
-		declared = nextDecl(nextBriefDeclares(b), "sdd")
-	}
-	exits := "Relaunch with --model opus --effort medium, or dispatch outside the flow with --sdd none."
-	if declared == "none" {
-		exits = "The brief already declared `sdd: none`, and this dispatch did not carry it: relaunch with --sdd none, which is what the brief asked for. Only if the brief is what is wrong, relaunch with --model opus --effort medium instead."
-	}
-	w := ""
-	if where != "" {
-		w = " (" + where + ")"
-	}
-	a.die("SDD orchestrator model REFUSED BEFORE BUILDING ANYTHING: --model " + model + " with --sdd " + mode + w + ". Under " + mode + " this session is the ORCHESTRATOR -- it decides what the change is, partitions it and sequences the phases, and the phase agents pin their own models regardless of --model. A sonnet or haiku orchestrator over opus phase agents is inverted. Nothing was built. " + exits)
 }
 
 // ── readings on the way ─────────────────────────────────────────────────────
@@ -545,7 +418,7 @@ for path in sys.argv[2:]:
 // --allow-stale-hooks lets it through; it dies otherwise.
 func (a *app) nextRefuseIfStaleHooks(wt string, allow bool) string {
 	var files []string
-	for _, f := range []string{wt + "/.claude/settings.json", wt + "/.claude/settings.local.json", wt + "/.codex/hooks.json", wt + "/opencode.json"} {
+	for _, f := range []string{wt + "/.claude/settings.json", wt + "/.claude/settings.local.json"} {
 		if isFile(f) {
 			files = append(files, f)
 		}

@@ -30,7 +30,7 @@
 # so a commit that touches ONLY it would otherwise run no gate at all (Judgment
 # Day, tests/361 S08). setup/suite-data/retired-subjects.txt and setup/go-test-core.sh since 2026-10-15: they decide which
 # subjects run and what runs in their place (Judgment Day, tests/1013).
-SUITE_TRIGGER_PATTERN='^(bin/|lib/|setup/test-hw|setup/gate-select|setup/suite-data/retired-subjects\.txt|setup/go-test-core\.sh|setup/tests/|setup/guards/|([^/]+/)?\.claude/hooks/deny-repo-writes\.py|([^/]+/)?\.opencode/plugin/deny-repo-writes\.js)'
+SUITE_TRIGGER_PATTERN='^(bin/|lib/|setup/test-hw|setup/gate-select|setup/suite-data/retired-subjects\.txt|setup/go-test-core\.sh|setup/tests/|setup/guards/|([^/]+/)?\.claude/hooks/deny-repo-writes\.py)'
 
 # LANE DOCUMENTATION THE SUITE DOES NOT READ — the ONE copy, shared by
 # setup/hooks/pre-push (a push) and bin/hw (`hw done`'s cached verification).

@@ -20,10 +20,10 @@ nothing else, so a hold with an extra key, a repeated key or a stray row was
         route, target and, when the sender has one, the logical id).
 
 As a module: `read_facts(path)` and `problem(facts, run, pane, vendor)`.
-A reader that cannot know the live pane or vendor (the reconciler reads runs
-that are no longer live) passes the hold's own recorded pane, and its own route
-as the vendor: those two comparisons then say nothing, and every other rule
-still applies.
+A reader that cannot know the live pane (the reconciler reads runs that are no
+longer live) passes the hold's own recorded pane: that comparison then says
+nothing, and every other rule still applies. `vendor` is accepted for the
+callers that still pass it and is not compared: the herdr and hc routes name no vendor.
 """
 import os
 import re
@@ -75,9 +75,6 @@ def problem(facts, run, pane, vendor):
     if route in ("herdr", "hc"):
         if target != pane:
             return "%s route targets another pane" % route
-    elif route in ("opencode", "codex"):
-        if route != vendor or not target:
-            return "route does not match the executor vendor, or has no target"
     else:
         return "unknown route"
     return None

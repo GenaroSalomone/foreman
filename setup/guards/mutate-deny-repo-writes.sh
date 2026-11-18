@@ -2,13 +2,13 @@
 # Mutate copies only under $HW_ARTIFACTS, then exercise the real hook APIs.
 #
 # BEFORE 2026-09-06 every arm below named one of four Python or four JavaScript
-# lane copies, because that is what existed. There is one of each now, plus
-# eight shims, so every arm names a shared file — and that is a strictly better
+# lane copies (the JavaScript port is gone, 2026-11-17: pi asks the Python), because that is what existed. There is one of each now, plus
+# the lane shims, so every arm names a shared file — and that is a strictly better
 # mutation target: a surviving mutant is now a hole in ALL FOUR LANES at once,
 # which is exactly the blast radius the unification created and the thing worth
 # proving the suite can see.
 #
-# Two arms still name a lane file on purpose (`shim-lane-name`, `shim-import`):
+# One arm still names a lane file on purpose (`shim-lane-name`):
 # the shims are the only per-lane code left, and an unexercised shim is how a
 # lane silently stops being guarded while the shared module stays perfect.
 set -euo pipefail
@@ -22,53 +22,47 @@ rm -rf "$BASE"
 mkdir -p "$BASE"
 trap '[ "$OWN_ART" -eq 0 ] || rm -rf "$ART"' EXIT
 
-# lanes_of_guard <js expression of the module>: what the guard's own table says,
-# printed by node. The module path goes through the environment and
-# pathToFileURL, never spliced into `import('…')`: a path interpolated into a JS
-# string literal is one quoting rule away from importing something else.
+# lanes_of_guard <python expression of the lane table `LANES`>: what the guard's own table says, printed by python
+# (the module path goes through argv, never spliced into the program text).
 lanes_of_guard() {
-  GUARD_JS="$ROOT/setup/guards/deny-repo-writes.js" EXPR="$1" node --input-type=module -e '
-import { pathToFileURL } from "node:url";
-const m = await import(pathToFileURL(process.env.GUARD_JS).href);
-console.log((0, eval)(process.env.EXPR)(m));'
+  python3 -I -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+from deny_repo_writes import LANES
+print(eval(sys.argv[2])(LANES))' "$ROOT/setup/guards" "$1"
 }
 copy_tree() {
   local dst="$1" lane
   mkdir -p "$dst/brain/setup/guards"
   cp "$ROOT/setup/guards/deny_repo_writes.py" "$dst/brain/setup/guards/"
-  cp "$ROOT/setup/guards/deny-repo-writes.js" "$dst/brain/setup/guards/"
-  # The third driver of the vectors: Codex resolves its own lane, and the
-  # decision suite runs every vector through it.
-  cp "$ROOT/setup/guards/deny-repo-writes-codex.py" "$dst/brain/setup/guards/"
+  cp "$ROOT/setup/guards/deny_repo_writes_ask.py" "$dst/brain/setup/guards/"
   cp "$ROOT/setup/guards/deny-repo-writes-vectors.json" "$dst/brain/setup/guards/"
-  # The batch entry that answers the decision driver's Python and Codex vectors
+  # The batch entry that answers the decision driver's Python vectors
   # in one process; the mutant below breaks only its wiring.
   cp "$ROOT/setup/guards/hook-batch.py" "$dst/brain/setup/guards/"
   # THE POLICY THE MODULES READ, from `<root>/guards.json` beside `setup/`. A
   # copy without it would not load at all, and every arm would read VACUOUS.
   cp "$ROOT/guards.json" "$dst/brain/"
+  cp "$ROOT/projects.json" "$dst/brain/"   # `{brain}`/`{work}` in the policy resolve from its `root`
   # DERIVED FROM THE GUARD'S OWN LANE TABLE, NOT A SECOND HARDCODED LIST. This
   # used to be a fixed list of four lanes, and it drifted: a fifth lane was
-  # registered in deny-repo-writes.js's LANES table (7a014e1) without this
-  # list ever being touched, so every mutation arm crashed on
-  # `Cannot find module '.../<lane>/.opencode/plugin/deny-repo-writes.js'` before
-  # reaching the mutated line — every arm reported VACUOUS, not killed. Measured
+  # registered in deny_repo_writes.py's LANES table (7a014e1) without this
+  # list ever being touched, so every mutation arm crashed on a missing shim
+  # before reaching the mutated line — every arm reported VACUOUS, not killed. Measured
   # 2026-09-09, chasing a mandatory pre-push gate that could never turn green.
   # `brain` (the root) is excluded because it is handled as the fifth lane
   # below, at a different path shape.
-  for lane in $(lanes_of_guard "m => Object.keys(m.LANES).filter(l => l !== 'brain').join(' ')"); do
-    mkdir -p "$dst/brain/$lane/.claude/hooks" "$dst/brain/$lane/.opencode/plugin"
+  for lane in $(lanes_of_guard "lambda L: ' '.join(l for l in L if l != 'brain')"); do
+    mkdir -p "$dst/brain/$lane/.claude/hooks"
     cp "$ROOT/$lane/.claude/hooks/deny-repo-writes.py" "$dst/brain/$lane/.claude/hooks/"
-    cp "$ROOT/$lane/.opencode/plugin/deny-repo-writes.js" "$dst/brain/$lane/.opencode/plugin/"
   done
   # THE ROOT IS THE FIFTH LANE and its shims live one directory up — see the
   # lane table's `brain` entry. Omitting them here does not make the mutation
   # run weaker, it makes it VACUOUS: the decision driver iterates every lane in
-  # the table, so a missing shim crashes node before any mutation is exercised
+  # the table, so a missing shim crashes the driver before any mutation is exercised
   # and every arm after it reports "the mutated line may never have run".
-  mkdir -p "$dst/brain/.claude/hooks" "$dst/brain/.opencode/plugin"
+  mkdir -p "$dst/brain/.claude/hooks"
   cp "$ROOT/.claude/hooks/deny-repo-writes.py" "$dst/brain/.claude/hooks/"
-  cp "$ROOT/.opencode/plugin/deny-repo-writes.js" "$dst/brain/.opencode/plugin/"
 }
 
 _mutate_one() {
@@ -91,7 +85,7 @@ PY
   # that driver's exit, nothing else. The decision driver was ~5500 python3
   # spawns (~70s of CPU); run in full for all 77 mutants, including the three
   # judged by the filesystem driver, it made this arm ~1949s (2026-09-30). Since
-  # 2026-10-20 its Python and Codex vectors go through one `hook-batch.py`
+  # 2026-10-20 its Python vectors go through one `hook-batch.py`
   # process and a fixed sample keeps the real spawn (see the driver's header).
   if [ "$expected" = decision ]; then
     DENY_GUARD_FAIL_FAST=1 DENY_GUARD_ROOT="$dir/brain" node "$ROOT/setup/guards/test-deny-repo-writes.mjs" >"$dir/decision.txt" 2>&1 || decision_rc=$?
@@ -147,7 +141,6 @@ _mutate_report() {
 }
 
 GUARD_PY="setup/guards/deny_repo_writes.py"
-GUARD_JS="setup/guards/deny-repo-writes.js"
 
 # THE ARMS KILLED BY THE LAST VECTORS COME FIRST. A mutant stops at the first
 # failing assertion, so one killed by a vector near the END of the decision
@@ -159,11 +152,9 @@ GUARD_JS="setup/guards/deny-repo-writes.js"
 # ── A payload of the wrong shape refuses (2026-09-29, audit F12) ────────────
 mutate python-malformed-tool-input "$GUARD_PY" \
   "    if not isinstance(tool_input, dict):" "    if False:"
-mutate codex-malformed-payload "setup/guards/deny-repo-writes-codex.py" \
-  "    if not isinstance(payload, dict):" "    if False:"
 
 # ── The batch entry's wiring (2026-10-20) ───────────────────────────────────
-# The decision driver answers every Python and Codex vector through
+# The decision driver answers every Python vector through
 # `hook-batch.py`, one process for all of them, and keeps a fixed sample on the
 # real `python3 <hook>` spawn whose answer must equal the batch's. A batch that
 # answers "allow" for everything breaks nothing in the guard and everything in
@@ -181,25 +172,21 @@ mutate batch-answers-allow "setup/guards/hook-batch.py" \
 # and still swaps one real shim for another. The fallback is not hypothetical:
 # the exported table carries only `brain` and `setup`, and until 2026-09-29 this
 # demanded two lanes besides both, so the export's suite aborted here before
-# any mutant ran. `setup` is no longer excluded — the shim-import arm below
-# mutates its JS shim in a separate copy, so the two arms do not collide.
-read -r SHIM_LANE SHIM_OTHER <<<"$(lanes_of_guard "m => { const own = Object.keys(m.LANES).filter(l => l !== 'brain'); return [own[0] ?? '', own[1] ?? (own[0] ? 'brain' : '')].join(' '); }")"
+# any mutant ran.
+read -r SHIM_LANE SHIM_OTHER <<<"$(lanes_of_guard "lambda L: (lambda own: ' '.join([own[0] if own else '', own[1] if len(own) > 1 else ('brain' if own else '')]))([l for l in L if l != 'brain'])")"
 [ -n "$SHIM_OTHER" ] || { echo "shim-lane-name: the lane table has no lane besides brain" >&2; exit 1; }
 mutate shim-lane-name "$SHIM_LANE/.claude/hooks/deny-repo-writes.py" \
   "LANE = \"$SHIM_LANE\"" "LANE = \"$SHIM_OTHER\""
-mutate shim-import "setup/.opencode/plugin/deny-repo-writes.js" \
-  '../../../setup/guards/deny-repo-writes.js' '../../../setup/guards/absent.js'
 
 
-# ── The write-detection tables, one runtime each ────────────────────────────
-mutate copy-write-detection "$GUARD_JS" "rm|mv|cp|rsync|tee" "rm|mv|rsync|tee" filesystem
-mutate copy-destination-selection "$GUARD_JS" 'const dest = operands[operands.length - 1];' 'const dest = operands[0];' filesystem
-mutate mv-both-ways "$GUARD_JS" "rm|mv|cp|rsync|tee" "rm|cp|rsync|tee" filesystem
+# ── The write-detection tables, judged by the filesystem driver (which asks the guard as pi does) or the decision driver ──
+mutate copy-write-detection "$GUARD_PY" "rm|mv|cp|rsync|tee" "rm|mv|rsync|tee" filesystem
+mutate copy-destination-selection "$GUARD_PY" '    dest = operands[-1]' '    dest = operands[0]' filesystem
+mutate mv-both-ways "$GUARD_PY" "rm|mv|cp|rsync|tee" "rm|cp|rsync|tee" filesystem
 mutate install-destination "$GUARD_PY" "install|patch|sponge" "patch|sponge"
 mutate rsync-destination "$GUARD_PY" "rm|mv|cp|rsync|tee" "rm|mv|cp|tee"
 
 # ── The cwd axis ───────────────────────────────────────────────────────────
-mutate bash-workdir "$GUARD_JS" "workdir ?? sessionDir" "sessionDir"
 mutate python-cwd-boundary "$GUARD_PY" \
   "if cand == root or cand.startswith(root + \"/\"):" "if False:"
 # The trigger text became "the command names a protected root (<path>)" on
@@ -211,7 +198,6 @@ mutate fired-reason "$GUARD_PY" \
 
 # ── Code-vs-data, the escape hatches that keep masking safe ────────────────
 mutate shell-c-code "$GUARD_PY" "(?:bash|sh|zsh|dash|ksh|ash)" "(?:sh|zsh|dash|ksh|ash)"
-mutate heredoc-code "$GUARD_JS" '"(?:bash|sh|zsh|dash|ksh|ash)"' '"(?:zsh|dash|ksh|ash)"'
 
 # ── Resolve-then-compare: the gate, both runtimes ──────────────────────────
 # These are the arms for the holes measured on 2026-09-06 (a symlink or a `..`
@@ -233,26 +219,8 @@ mutate python-resolution-gate "$GUARD_PY" \
   "        resolved_token = None
     resolved_path = None
     if False:"
-mutate js-resolution-gate "$GUARD_JS" \
-  "const resolvedToken = namesProtected ? null : resolvesProtected(cfg, noHeredoc);
-  // And of every word as the shell will see it — see \`shellSegments\`.
-  const segHit = (namesProtected || resolvedToken) ? null : segmentsResolveProtected(cfg, segs);" \
-  "const resolvedToken = null;
-  const segHit = null;"
 mutate python-realpath "$GUARD_PY" \
   "        real = _real(path)" "        real = path"
-mutate js-realpath "$GUARD_JS" \
-  "  const real = realPath(p);" "  const real = normPath(p);"
-# 2026-09-29: a DANGLING link into a protected root (`<link> -> <repo>/absent`)
-# was walked past by the JS realpath and resolved to the link's own name, so a
-# write that CREATES the target in the repo was allowed. Not following it again
-# must be visible.
-mutate js-dangling-link "$GUARD_JS" \
-  "    if (!lstatSync(head).isSymbolicLink()) return null;" "    return null;"
-# And a RELATIVE dangling target counts its `..` from the link's real parent:
-# counting from the lexical one reopens the hole through a symlinked directory.
-mutate js-dangling-real-parent "$GUARD_JS" \
-  'realPath(dirname(head), n) + "/" + target' 'dirname(head) + "/" + target'
 
 # ── Redirect targets go through the fail-closed predicate ──────────────────
 #
@@ -260,7 +228,7 @@ mutate js-dangling-real-parent "$GUARD_JS" \
 # (`_word_lands` from each command's own directory) resolves every target the
 # first pass does, so turning off only the first changed no verdict and the arm
 # survived. What must be visible is "no redirect target is resolved any more";
-# the per-command pass alone has its own arm (python/js-segment-redirect).
+# the per-command pass alone has its own arm (python-segment-redirect).
 mutate python-redirect-target "$GUARD_PY" \
   '        if not _lands_outside_protected(cfg, t, cwd):
             resolved = t if _is_abs(t) else _norm(_join(cwd or ".", t))
@@ -274,22 +242,6 @@ mutate python-redirect-target "$GUARD_PY" \
   '        if False:
             return t, t
     for seg in ():'
-mutate js-redirect-target "$GUARD_JS" \
-  '    if (!landsOutsideProtected(cfg, t, cwd)) {
-      let resolved = isAbs(t) ? t
-        : (WINPATHS ? joinPath(cwd || ".", t) : normPath((cwd || ".").replace(/\/+$/, "") + "/" + t));
-      if (isAbs(resolved)) resolved = realPath(resolved);
-      return { raw: t, resolved };
-    }
-  }
-  // And again from where each command really runs, with its variables
-  // expanded — see the Python twin. Only adds targets.
-  for (const seg of segs) {' \
-  '    if (false) {
-      return { raw: t, resolved: t };
-    }
-  }
-  for (const seg of []) {'
 
 
 # ── The masker must honour bash's escapes ──────────────────────────────────
@@ -298,15 +250,11 @@ mutate js-redirect-target "$GUARD_JS" \
 # every deny regex reads, and three of four lanes went DENY -> ALLOW.
 mutate python-escaped-quote "$GUARD_PY" \
   "        if c == \"\\\\\" and i + 1 < n:" "        if False:"
-mutate js-escaped-quote "$GUARD_JS" \
-  "    if (c === \"\\\\\" && i + 1 < n) {" "    if (false) {"
 
 # An unterminated quote must refuse the masking, not blank the rest of the
 # command out of the text every deny regex reads.
 mutate python-unbalanced-quote "$GUARD_PY" \
   "    return masked if balanced else text" "    return masked"
-mutate js-unbalanced-quote "$GUARD_JS" \
-  "  return quoted.balanced ? quoted.masked : text;" "  return quoted.masked;"
 
 # ── The lane-scoped exemption stays scoped ─────────────────────────────────
 # Granting the spent-worktree teardown to every lane is the levelling-down this
@@ -334,10 +282,6 @@ mutate python-heredoc-gate "$GUARD_PY" \
   'if root in no_heredoc or root in unescaped
                        or root in no_heredoc_c or root in unescaped_c), None)' \
   'if root in probe or root in re.sub(r"\\(.)", r"\1", probe)), None)'
-mutate js-heredoc-gate "$GUARD_JS" \
-  'const namedRoot = roots.find((root) => noHeredoc.includes(root) || unescaped.includes(root)
-    || noHeredocC.includes(root) || unescapedC.includes(root)) ?? null;' \
-  'const namedRoot = roots.find((root) => probe.includes(root) || probe.replace(/\\(.)/g, "$1").includes(root)) ?? null;'
 
 # ── A content-only match must say so ────────────────────────────────────────
 # When the only signal is a protected path sitting inside a quoted argument,
@@ -347,9 +291,6 @@ mutate js-heredoc-gate "$GUARD_JS" \
 mutate python-content-only-honesty "$GUARD_PY" \
   "        and ((named_root is not None and named_root not in masked" \
   "        and False and ((named_root is not None and named_root not in masked"
-mutate js-content-only-honesty "$GUARD_JS" \
-  "const contentOnly = !standsIn && !cdsInto && (" \
-  "const contentOnly = false && !standsIn && !cdsInto && ("
 
 # ── Not every heredoc body is data: xargs/patch/ed/ex/interpreters ─────────
 # Found adversarially while reviewing the heredoc-gate fix, before it shipped:
@@ -360,9 +301,6 @@ mutate js-content-only-honesty "$GUARD_JS" \
 mutate python-heredoc-body-is-live "$GUARD_PY" \
   '    r"(?:bash|sh|zsh|dash|ksh|ash|xargs|patch|ed|ex|"' \
   '    r"(?:bash|sh|zsh|dash|ksh|ash|"'
-mutate js-heredoc-body-is-live "$GUARD_JS" \
-  '  "(?:bash|sh|zsh|dash|ksh|ash|xargs|patch|ed|ex|" +' \
-  '  "(?:bash|sh|zsh|dash|ksh|ash|" +'
 
 # ── The message must name the destination it detected, not just the trigger ─
 # Flagged by the brainer's own probe: a $HOME-resolved redirect target was
@@ -372,9 +310,6 @@ mutate js-heredoc-body-is-live "$GUARD_JS" \
 mutate python-redirect-states-destination "$GUARD_PY" \
   '                    "redirect'"'"'s destination resolves to %s (written as "' \
   '                    "redirect target is protected: %s (spelled as "'
-mutate js-redirect-states-destination "$GUARD_JS" \
-  '        `redirect'"'"'s destination resolves to ${redirectHit.resolved} ` +' \
-  '        `redirect target is protected ` +'
 
 # ── The content-only fallback must point at the mechanism that works ───────
 # A preservation copy through an interpreter cannot be told apart from a real
@@ -384,9 +319,6 @@ mutate js-redirect-states-destination "$GUARD_JS" \
 mutate python-content-only-preservation-pointer "$GUARD_PY" \
   '                    "as this trigger. If you are instead trying to PRESERVE "' \
   '                    "as this trigger. If you are instead trying to sleep "'
-mutate js-content-only-preservation-pointer "$GUARD_JS" \
-  '        `this trigger. If you are instead trying to PRESERVE data by ` +' \
-  '        `this trigger. If you are instead trying to sleep ` +'
 
 # ── A spelling is not an identity ──────────────────────────────────────────
 # The filesystem answer to "is this path the protected tree?" — same inode,
@@ -401,11 +333,8 @@ if [ -e "$BASE/CASE-PROBE" ]; then
   mutate python-same-tree-identity "$GUARD_PY" \
       '    return any(_same_tree(cfg, cand) for cand in cands)' \
       '    return False'
-  mutate js-same-tree-identity "$GUARD_JS" \
-      '  return cands.some((cand) => sameTree(cfg, cand));' \
-      '  return false;'
 else
-  printf 'skip - mutants python-same-tree-identity, js-same-tree-identity: this filesystem is case-sensitive, so no case-variant spelling names the protected tree\n'
+  printf 'skip - mutant python-same-tree-identity: this filesystem is case-sensitive, so no case-variant spelling names the protected tree\n'
 fi
 
 # ── Where a word really lands (2026-09-29, audit F5-F9) ─────────────────────
@@ -414,90 +343,51 @@ fi
 # a cd that lands inside, local assignments, braces, globs and find/fd.
 mutate python-segment-gate "$GUARD_PY" \
   "        seg_hit = _segments_resolve_protected(cfg, segs)" "        seg_hit = None"
-mutate js-segment-gate "$GUARD_JS" \
-  "const segHit = (namesProtected || resolvedToken) ? null : segmentsResolveProtected(cfg, segs);" \
-  "const segHit = null;"
 mutate python-segment-redirect "$GUARD_PY" \
   '            landed = _word_lands(cfg, value, seg["cwd"], bare=True)' "            landed = None"
-mutate js-segment-redirect "$GUARD_JS" \
-  "      const landed = wordLands(cfg, value, seg.cwd, true);" "      const landed = null;"
 mutate python-segment-cd "$GUARD_PY" \
   "        cds_into_protected = any(" "        cds_into_protected = False and any("
-mutate js-segment-cd "$GUARD_JS" \
-  "    cdsInto = segs.some(" "    cdsInto = false && segs.some("
 mutate python-local-assignment "$GUARD_PY" \
   "                self.local[name] = rhs" "                pass"
-mutate js-local-assignment "$GUARD_JS" \
-  "        this.local[value.slice(0, eq)] = value.slice(eq + 1);" "        void eq;"
 mutate python-brace "$GUARD_PY" "    for v in _brace(value):" "    for v in [value]:"
-mutate js-brace "$GUARD_JS" "  for (let v of brace(value)) {" "  for (let v of [value]) {"
 mutate python-glob "$GUARD_PY" \
   " or (_GLOB_CHARS.search(v) and _glob_lands(cfg, _norm(p))):" ":"
-mutate js-glob "$GUARD_JS" \
-  " || (GLOB_CHARS.test(v) && globLands(cfg, normOf(p)))) return normOf(p);" ") return normOf(p);"
 mutate python-find-writes "$GUARD_PY" \
   "        for m in FIND_WRITES.finditer(masked)" "        for m in FIND_WRITES.finditer(\"\")"
-mutate js-find-writes "$GUARD_JS" \
-  "    for (const f of masked.matchAll(FIND_WRITES)) {" "    for (const f of \"\".matchAll(FIND_WRITES)) {"
 # Judgment Day, 2026-09-29: cd behind a reserved word or wrapper, `sh -c` and
 # `eval` bodies, bare names as arguments, and a redirect only the quoted body has.
 mutate python-keyword-skip "$GUARD_PY" \
   "                              or words[k][0] in skip):" \
   "                              or False):"
-mutate js-keyword-skip "$GUARD_JS" \
-  "|| skip.has(words[k][0]))) k += 1;" "|| false)) k += 1;"
 mutate python-dash-c-nesting "$GUARD_PY" "        if name in _SHELLS:" "        if False:"
-mutate js-dash-c-nesting "$GUARD_JS" "    if (SHELLS.has(name)) {" "    if (false) {"
 mutate python-eval-nesting "$GUARD_PY" '        elif name == "eval":' "        elif False:"
-mutate js-eval-nesting "$GUARD_JS" '    } else if (name === "eval") {' "    } else if (false) {"
 # ── A backslash-newline joins, an eval's quoted words are code ─────────────
 # (2026-09-30, Judgment Day of guard-gate-relative-paths)
 mutate python-line-continuation "$GUARD_PY" \
   "    copies = _join_continuations(no_heredoc)" "    copies = [no_heredoc]"
-mutate js-line-continuation "$GUARD_JS" \
-  "  const copies = joinContinuations(noHeredoc);" "  const copies = [noHeredoc];"
 mutate python-comment-ends-continuation "$GUARD_PY" \
   '        elif quote is None and c == "#" and (not out or out[-1][-1] in _WORD_START):' "        elif False:"
-mutate js-comment-ends-continuation "$GUARD_JS" \
-  '    } else if (quote === null && c === "#" && (!out.length || WORD_START.includes(out[out.length - 1].slice(-1)))) {' "    } else if (false) {"
 mutate python-blind-join-too "$GUARD_PY" \
   '    return [aware] if blind == aware else [aware, blind]' "    return [aware]"
-mutate js-blind-join-too "$GUARD_JS" \
-  '  return aware === blind ? [aware] : [aware, blind];' "  return [aware];"
 # Masking both copies as ONE text lets a comment's quote pair across them
 # (Judgment Day round 2 of guarda-eval-y-find-multilinea).
 mutate python-mask-each-copy "$GUARD_PY" \
   "    masked = _COPY_BOUNDARY.join(_mask_copy(c) for c in copies)" \
   "    masked = _mask_copy(_COPY_BOUNDARY.join(copies))"
-mutate js-mask-each-copy "$GUARD_JS" \
-  "  const masked = copies.map(maskCopy).join(COPY_BOUNDARY);" \
-  "  const masked = maskCopy(copies.join(COPY_BOUNDARY));"
 mutate python-eval-body-unmasked "$GUARD_PY" \
   "or (has_eval and _EVAL_ARGS.search(text[:quote_start]))" "or False"
-mutate js-eval-body-unmasked "$GUARD_JS" \
-  "(hasEval && EVAL_ARGS.test(before))" "false"
 mutate python-bare-word "$GUARD_PY" \
   '                    landed = v and _word_lands(cfg, v, d, bare=True)' \
   '                    landed = v and _word_lands(cfg, v, d)'
-mutate js-bare-word "$GUARD_JS" \
-  "          const landed = v && wordLands(cfg, v, d, true);" \
-  "          const landed = v && wordLands(cfg, v, d);"
 mutate python-nested-redirect-gate "$GUARD_PY" \
   '    if REDIRECT.search(masked) or any(seg["redirects"] for seg in segs):' \
   "    if REDIRECT.search(masked):"
-mutate js-nested-redirect-gate "$GUARD_JS" \
-  "  if (REDIRECT.test(masked) || segs.some((seg) => seg.redirects.length)) {" \
-  "  if (REDIRECT.test(masked)) {"
 
 # ── env/nohup/exec do not move the shell's cwd; the start cwd is asked too ──
 # (2026-09-29, Judgment Day re-judgment)
 mutate python-env-cd-moves-cwd "$GUARD_PY" \
   "        ck = _head_index(words)" "        ck = _head_index(words, _SKIP_WORDS)"
-mutate js-env-cd-moves-cwd "$GUARD_JS" \
-  "    const ck = headIndex(words);" "    const ck = headIndex(words, SKIP_WORDS);"
 mutate python-start-cwd-ask "$GUARD_PY" \
   '        if seg.get("start") and seg["start"] != seg["cwd"]:' "        if False:"
-mutate js-start-cwd-ask "$GUARD_JS" \
-  "    if (seg.start && seg.start !== seg.cwd) dirs.push(seg.start);" "    if (false) dirs.push(seg.start);"
 
 _mutate_report

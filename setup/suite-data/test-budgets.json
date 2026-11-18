@@ -105,37 +105,13 @@
       "exit": 0,
       "seconds": 34.17
     },
-    "20-opencode-question-modal.sh": {
-      "exit": 0,
-      "seconds": 0.44
-    },
     "21-agent-vs-container.sh": {
       "exit": 0,
       "seconds": 0.81
     },
-    "22-hw-unstick.sh": {
-      "exit": 0,
-      "seconds": 52.88
-    },
-    "23-invoker-env-file.sh": {
-      "exit": 0,
-      "seconds": 0.29
-    },
     "24-done-closes-delivered.sh": {
       "exit": 0,
       "seconds": 13.4
-    },
-    "26-receiver-preflight.sh": {
-      "exit": 0,
-      "seconds": 6.57
-    },
-    "28-opencode-background-state-drift.sh": {
-      "exit": 0,
-      "seconds": 0.14
-    },
-    "30-state-witness.sh": {
-      "exit": 0,
-      "seconds": 24.49
     },
     "34-wait-witness.sh": {
       "exit": 0,
@@ -169,10 +145,6 @@
       "exit": 0,
       "seconds": 4.44
     },
-    "48-plain-opencode-is-not-plain.sh": {
-      "exit": 0,
-      "seconds": 1.12
-    },
     "50-hw-reconcile.sh": {
       "exit": 0,
       "seconds": 3.46
@@ -193,14 +165,6 @@
       "exit": 0,
       "seconds": 6.63
     },
-    "60-opencode-subagent-model.sh": {
-      "exit": 0,
-      "seconds": 0.46
-    },
-    "61-blocked-pane-delivery.sh": {
-      "exit": 0,
-      "seconds": 1.45
-    },
     "650-la-suite-toca-herdr-real.sh": {
       "exit": 0,
       "seconds": 32.27
@@ -217,21 +181,9 @@
       "exit": 0,
       "seconds": 56.18
     },
-    "70-opencode-subagent-effort.sh": {
-      "exit": 0,
-      "seconds": 0.08
-    },
     "72-blocked-with-no-reason.sh": {
       "exit": 0,
       "seconds": 3.36
-    },
-    "74-sol-primary-orchestrates.sh": {
-      "exit": 0,
-      "seconds": 0.14
-    },
-    "75-codex-framework-refusal.sh": {
-      "exit": 0,
-      "seconds": 8.53
     },
     "76-close-guard-holes.sh": {
       "exit": 0,
@@ -273,17 +225,9 @@
       "exit": 0,
       "seconds": 40
     },
-    "81-codex-reply-command.sh": {
-      "exit": 0,
-      "seconds": 0.94
-    },
     "824-foreman-init-lleva-de-cero-al-primer-dry-run.sh": {
       "exit": 0,
       "seconds": 124.72
-    },
-    "85-codex-report-route.sh": {
-      "exit": 0,
-      "seconds": 0.04
     },
     "92-a-clean-bill-covers-only-what-was-read.sh": {
       "exit": 0,
@@ -331,11 +275,7 @@
     },
     "983-pi-write-guard.sh": {
       "exit": 0,
-      "seconds": 0.38
-    },
-    "99-publish-requires-readable-tokens.sh": {
-      "exit": 0,
-      "seconds": 0.54
+      "seconds": 5.17
     },
     "99-unverified-publication-through-callers.sh": {
       "exit": 0,
@@ -346,6 +286,6 @@
       "seconds": 44.17
     }
   },
-  "measured_at": "2026-11-16T12:38:22Z",
+  "measured_at": "2026-11-17T17:37:45Z",
   "touched_budget_seconds": 90
 }

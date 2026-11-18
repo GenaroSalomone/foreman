@@ -573,12 +573,12 @@ cp "$ROOT/setup/hooks/attribution-pattern.sh" "$repo/setup/hooks/attribution-pat
 # Claims: `gh pr create|edit` whose body (--body, -b, --body=, --body-file/-F, a `$(cat <<EOF)` heredoc, `-F -`) has a line
 # matching THIS file's pattern is refused and the reason names the line; a clean body, a human Co-Authored-By, a quoted
 # (indented) trailer, `gh pr view`, and a mention in an echo or a commit message are data and pass; it is judged behind
-# wrappers; the pattern is the one setup/hooks/attribution-pattern.sh holds; the OpenCode adapter judges with the same Python;
+# wrappers; the pattern is the one setup/hooks/attribution-pattern.sh holds;
 # the installer registers it once. P01..P06: one mutant per branch, each anchored on the guard.
 GUARD="$ROOT/setup/guards/deny-pr-attribution.py"
 PRWORK="$TMP/prcwd"; mkdir -p "$PRWORK"
 # the guard loads its tokenizer from beside itself, so every copy of it travels with one
-mkdir -p "$TMP/prg"; cp "$GUARD" "$ROOT/setup/guards/deny-pr-attribution.opencode.js" "$ROOT/setup/guards/deny-sd-shell-var.py" "$TMP/prg/"
+mkdir -p "$TMP/prg"; cp "$GUARD" "$ROOT/setup/guards/deny-sd-shell-var.py" "$TMP/prg/"
 GUARD="$TMP/prg/deny-pr-attribution.py"
 
 judge() {  # <command> [guard] — prints the exit code, stderr to $TMP/err
@@ -651,21 +651,6 @@ import importlib.util,sys
 s=importlib.util.spec_from_file_location('g',sys.argv[1]); m=importlib.util.module_from_spec(s); s.loader.exec_module(m); print(m.ATTRIBUTION_PATTERN)" "$GUARD")"
 [ -n "$prwant" ] && [ "$prwant" = "$prgot" ] || fail "the guard's pattern drifted from setup/hooks/attribution-pattern.sh: [$prwant] vs [$prgot]"
 pass "the guard's pattern is attribution-pattern.sh's"
-
-# ── the OpenCode adapter judges with the same Python ───────────────────────
-out="$(node --input-type=module -e '
-  const { pathToFileURL } = await import("node:url");
-  const { DenyPrAttribution } = await import(pathToFileURL(process.argv[1]).href);
-  const p = await DenyPrAttribution();
-  const run = async (command) => {
-    try { await p["tool.execute.before"]({ tool: "bash" }, { args: { command } }); return "allowed"; }
-    catch (e) { return e.message.startsWith("BLOCKED (deny-pr-attribution)") ? "refused" : "error:" + e.message; }
-  };
-  console.log(await run("gh pr create --body \"x\n" + process.argv[2] + "\""));
-  console.log(await run("gh pr create --body clean"));
-' "$TMP/prg/deny-pr-attribution.opencode.js" "$FOOTER" 2>&1)" || true
-[ "$out" = "$(printf 'refused\nallowed')" ] || fail "the OpenCode adapter did not judge like the hook: $out"
-pass "the OpenCode adapter refuses the footer and allows a clean body"
 
 # ── the installer registers the hook once, in a HOME of its own ────────────
 PRH="$TMP/prhome"; mkdir -p "$PRH/.claude" "$PRH/.claude-personal"

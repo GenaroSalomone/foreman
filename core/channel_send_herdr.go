@@ -103,7 +103,7 @@ func (c *chanSend) awaitingChildRefusal(target, pane, warning string, fullMS int
 	}
 	c.printf("channel-send: REFUSED AFTER A BOUNDED PROBE, and NOTHING was sent: %s did not reach idle in %ds, and it had already said why it might not. Its own herdr tokens say turn_state=%s, children_running=%s, turn_ended_at=%s — its turn is over, and what has to finish before it can be idle is a background child, which runs for minutes. So this call spent %ds on the question rather than the %ds it was allowed: the receiver named the reason a long wait would be spent for nothing, and the wait was cut to a probe instead of to your caller timeout.\n",
 		target, c.probeMS/1000, f[0], f[1], f[2], c.probeMS/1000, fullMS/1000)
-	c.printf("channel-send: DO NOT raise HW_INVOKER_WAIT_MS and do not lengthen the probe. No number is both longer than a background child and shorter than the caller timeout you have — every raise so far moved the ceiling without removing it, and the advice it printed (\"a caller timeout of at least 555000 ms\") is written for a caller that can raise one. Measured 2026-09-09: an OpenCode caller may pass at most 600000, so that advice is followable there only just, and would stop being followable at the next raise.\n")
+	c.printf("channel-send: DO NOT raise HW_INVOKER_WAIT_MS and do not lengthen the probe. No number is both longer than a background child and shorter than the caller timeout you have — every raise so far moved the ceiling without removing it, and the advice it printed (\"a caller timeout of at least 555000 ms\") is written for a caller that can raise one. Measured 2026-09-09: a caller's tool call may last at most 600000 ms, so that advice is followable there only just, and would stop being followable at the next raise.\n")
 	c.printf("channel-send: THE ORDERED ROUTE, and it is affordable now: re-run this identical command. Each attempt costs the probe, not your budget, so re-checking is a bounded poll — and a pane awaiting a child oscillates, so an attempt that lands while it is briefly idle simply delivers. To look without sending at all: `herdr agent get %s | jq -r \".result.agent.tokens | {turn_state, children_running, turn_ended_at}\"`; the reason above is gone once that pane publishes a turn end with no child running.\n", pane)
 	c.printf("channel-send: WHAT THIS DOES NOT BUY, said plainly rather than left to be discovered: waiting for the child does not guarantee your redirect lands before the receiver acts on that child. The child finishing opens a turn of its own. This gate only ever promised a turn BOUNDARY, never priority over work the receiver is about to do — if you need that, the receiver has to be stopped, not messaged.\n")
 	c.printf("channel-send: %s\n", escape)
@@ -181,7 +181,7 @@ func (c *chanSend) rulingGate(pane, desc string) {
 
 // ── the witness wait (witness_wait of the bash state witness) ────────────────────
 
-// witnessWait: 0 idle,done; 2 budget spent; 5 proved unable to change; 6 a person is waited on; 3/4 herdr-rpc's.
+// witnessWait: 0 idle,done; 2 budget spent; 6 a person is waited on; 3/4 herdr-rpc's.
 // c.witnessDetail carries what the cross-check read.
 func (c *chanSend) witnessWait(pane string, totalMS int64, valid bool) int {
 	c.witnessDetail = ""
@@ -189,15 +189,10 @@ func (c *chanSend) witnessWait(pane string, totalMS int64, valid bool) int {
 	if n, ok := csMS(c.env("WITNESS_SLICE_MS", "20000")); ok {
 		slice = n
 	}
-	confirm := 2
-	if n, ok := csMS(c.env("WITNESS_CONFIRMATIONS", "2")); ok {
-		confirm = int(n)
-	}
 	if valid && totalMS <= slice {
 		return c.csRPCWait(pane, totalMS)
 	}
 	deadline := nextEpoch() + totalMS/1000
-	settled, human := 0, 0
 	for {
 		remaining := (deadline - nextEpoch()) * 1000
 		if remaining <= 0 {
@@ -220,22 +215,6 @@ func (c *chanSend) witnessWait(pane string, totalMS int64, valid bool) int {
 		var w nextWitness
 		c.a.nextWitnessState(pane, &w)
 		c.witnessDetail = w.detail
-		switch w.verdict {
-		case "settled":
-			settled++
-			human = 0
-			if settled >= confirm {
-				return 5
-			}
-		case "awaiting-human":
-			human++
-			settled = 0
-			if human >= confirm {
-				return 6
-			}
-		default:
-			settled, human = 0, 0
-		}
 	}
 }
 
@@ -430,8 +409,6 @@ func (c *chanSend) routeHerdr() {
 		switch waitRC {
 		case 6:
 			c.die(fmt.Sprintf("%s is WAITING FOR A PERSON: %s NOTHING was sent, so nothing was lost — and there is no sender-side move here. Do not retry with a larger HW_INVOKER_WAIT_MS, do not reach for --allow-turn-ended, and do not fall back to raw keystrokes: none of them answer a prompt. Answer it on that pane (or have %s answer it), then re-run this identical command.", c.tgt, c.witnessDetail, c.operator()))
-		case 5:
-			c.die(fmt.Sprintf("%s is NOT going to become idle: %s NOTHING was sent, so nothing was lost — but do not retry with a larger HW_INVOKER_WAIT_MS, because no budget reaches idle from that state. This is the failure that used to look like an ordinary timeout while two `herdr agent wait` budgets burned on it (measured 2026-08-27, w41:p6H).%s", c.tgt, c.witnessDetail, c.lastResort(c.tgt)))
 		}
 		if waitRC != 2 {
 			c.die(fmt.Sprintf("could not wait on %s (herdr-rpc exit %d — see its message above). Nothing was sent.", c.tgt, waitRC))
@@ -461,16 +438,14 @@ func (c *chanSend) routeHerdr() {
 					c.printf("channel-send: herdr agent prompt rejected the proved held ask answer with agent_blocked (exit %d): %s\n", promptRC, promptOut)
 				}
 				c.printf("channel-send: falling back ONLY for this receiver-owned reply hold to raw pane input; generic reports, rulings and redirects cannot use this proof.\n")
-			case c.isReport && c.reportProven: // # MUTATION-ANCHOR: 42-G08
+			case c.isReport && c.reportProven:
 				var w nextWitness
-				c.a.nextWitnessState(c.tgt, &w) // # MUTATION-ANCHOR: 42-G09
+				c.a.nextWitnessState(c.tgt, &w)
 				switch w.verdict {
-				case "awaiting-human":
-					c.die(fmt.Sprintf("herdr agent prompt rejected this proved run report because %s is blocked, and state-witness confirms it is WAITING FOR A PERSON: %s NOTHING was sent; raw pane input would overwrite a real human prompt. Answer that prompt, then retry the identical report.", c.tgt, w.detail))
-				case "live", "settled":
+				case "live":
 					fallback = "report"
 					c.printf("channel-send: herdr agent prompt rejected a report for a proved dispatched, still-unreported run with agent_blocked (exit %d): %s\n", promptRC, promptOut)
-					c.printf("channel-send: state-witness classified %s as %s rather than awaiting-human: %s\n", c.tgt, w.verdict, w.detail)
+					c.printf("channel-send: state-witness classified %s as %s rather than waiting for a person: %s\n", c.tgt, w.verdict, w.detail)
 					c.printf("channel-send: falling back ONLY for this dispatch-bound unreported run to raw pane input; an unproved --report cannot use this path.\n")
 				default:
 					c.die(fmt.Sprintf("herdr agent prompt rejected this proved run report because %s is blocked, but state-witness could not prove whether raw input is safe: %s NOTHING was sent; retry only after the receiver state is readable.", c.tgt, w.detail))
@@ -479,24 +454,9 @@ func (c *chanSend) routeHerdr() {
 				// A ruling without its proven hold, or a report without its proven dispatch record, gets no
 				// generic fallback, ever.
 			default:
-				// A PLAIN MESSAGE: it asserts nothing about the receiver waiting for it, so it is gated on the
-				// receiver's own endpoint instead of a disk-backed proof.
-				ep := c.a.nextWitnessEndpoint(c.tgt)
-				qn, pn, havePrompts := "", "", false
-				if ep != "" {
-					qn, pn, havePrompts = c.a.nextWitnessPrompts(ep)
-				}
-				if ep != "" && havePrompts {
-					if qn == "0" && pn == "0" {
-						fallback = "message"
-						c.printf("channel-send: herdr agent prompt rejected delivery to %s with agent_blocked (exit %d: %s), but its own endpoint %s confirms nothing is pending (/question 0, /permission 0) — no human is actually being waited on.\n", c.tgt, promptRC, promptOut, ep)
-						c.printf("channel-send: falling back to raw pane input for this message. This BYPASSES the gate entirely: no receipt, no ordering guarantee — read the pane afterward instead of assuming it landed.\n")
-					} else {
-						c.printf("channel-send: herdr agent prompt rejected delivery to %s with agent_blocked (exit %d), and its own endpoint %s CONFIRMS a real prompt is outstanding (/question %s, /permission %s). NOTHING was sent; raw pane input would overwrite a real human prompt. Answer that prompt, then retry the identical command.\n", c.tgt, promptRC, ep, qn, pn)
-					}
-				} else {
-					c.printf("channel-send: herdr agent prompt rejected delivery to %s with agent_blocked (exit %d), and its endpoint could not be read to confirm whether a prompt is pending (not opencode, no --port, or an unreachable/unparseable response). An authority that cannot be asked is not an authority that said no, so this refuses rather than guessing: NOTHING was sent; retry only after the receiver state is readable.\n", c.tgt, promptRC)
-				}
+				// A PLAIN MESSAGE: it asserts nothing about the receiver waiting for it, and no authority can say whether a
+				// prompt is outstanding, so it refuses rather than guessing.
+				c.printf("channel-send: herdr agent prompt rejected delivery to %s with agent_blocked (exit %d), and nothing can read whether a prompt is pending there. An authority that cannot be asked is not an authority that said no, so this refuses rather than guessing: NOTHING was sent; retry only after the receiver state is readable.\n", c.tgt, promptRC)
 			}
 		}
 		if fallback != "" {
@@ -515,11 +475,7 @@ func (c *chanSend) routeHerdr() {
 				c.exit(5)
 			}
 			c.setSent(csSent)
-			if fallback == "report" {
-				c.printf("channel-send: proved run report submitted to %s through the blocked-pane fallback after agent_blocked.\n", c.tgt)
-			} else {
-				c.printf("channel-send: message submitted to %s through the blocked-pane fallback after agent_blocked (its own endpoint confirmed nothing pending).\n", c.tgt)
-			}
+			c.printf("channel-send: proved run report submitted to %s through the blocked-pane fallback after agent_blocked.\n", c.tgt)
 		} else {
 			if promptOut != "" {
 				c.printf("channel-send: herdr agent prompt rejected delivery to %s (exit %d): %s\n", c.tgt, promptRC, promptOut) // # MUTATION-ANCHOR: 42-G07

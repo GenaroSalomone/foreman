@@ -38,6 +38,12 @@ func (d *dsp) needVal(rest []string) {
 	}
 }
 
+// supportedVendor is the one predicate of what `--agent` (and a lane's vendor) may be; unsupportedVendorWords is what
+// both the dispatch refusal and `hw help launch` say about anything else.
+func supportedVendor(v string) bool { return v == "claude" || v == "pi" }
+
+const unsupportedVendorWords = "Codex and OpenCode are no longer supported; foreman runs Claude Code and pi only."
+
 func (d *dsp) run(argv []string) {
 	defer func() {
 		if d.fsShared != nil {
@@ -145,20 +151,20 @@ func (d *dsp) run(argv []string) {
 	if d.here {
 		d.tab = false
 	}
-	switch d.agent {
-	case "claude", "opencode", "codex", "pi": // # MUTATION-ANCHOR: 844-M06
-	default:
-		d.die("--agent must be claude, opencode, codex or pi (got: " + d.agent + ")")
+	if !supportedVendor(d.agent) {
+		d.die("--agent must be claude or pi (got: " + d.agent + "). " + unsupportedVendorWords)
 	}
 	switch d.sdd {
-	case "": // none is the default (sdd-legado-070, setup/decisions.md 2026-11-01); speckit is opt-in where it is on disk
-		d.sdd, d.sddDefaulted = "none", true
-	case "speckit", "none":
+	case "": // none is the default and the only mode (sdd-legado-070; Spec Kit left hw, setup/decisions.md 2026-11-16)
+		d.sdd = "none"
+	case "none":
+	case "speckit": // REMOVED: the Spec Kit flow left hw
+		d.die(speckitRemoved("--sdd speckit was given", "Dispatch without --sdd (or --sdd none, which is the default). NOTHING was built."))
 	case "gentle": // RETIRED SPELLING: gentle-ai left hw (setup/decisions.md, 2026-10-16). Warn, run none.
 		d.warn("--sdd gentle is retired: gentle-ai is no longer part of hw. Running --sdd none.")
 		d.sdd = "none"
 	default:
-		d.die("--sdd must be speckit or none (got: " + d.sdd + ")")
+		d.die("--sdd must be none (got: " + d.sdd + ")")
 	}
 	d.checkReusableExecutor(d.proj)
 	d.routeNow = "fresh"
@@ -173,14 +179,10 @@ func (d *dsp) run(argv []string) {
 			d.routeForecastCheck(d.proj, d.task, d.routeNow, d.reuseLine)
 		}
 	}
-	if d.reusePane == "" {
-		d.validateSddVendorPair(d.agent, d.sdd, d.codexValidationSurface())
-		d.validateSddModelPair(d.model)
-	}
 	d.setEnv("HW_EXECUTOR_VENDOR", d.agent)
 	d.resolveInvokerContext()
 	if d.agentExplicit && d.modelSrc != "chosen" && d.agent != orDefaultStr(d.c.t.get(d.proj, "vendor"), "claude") {
-		d.model, d.modelSrc = "", "default" // # MUTATION-ANCHOR: 844-M09
+		d.model, d.modelSrc = "", "default"
 	}
 	d.applyModelDefault()
 	// A reasoning level has ONE door, --effort, on every vendor (t5_vendor_agent.go modelEffortSuffixRefusal). This is
@@ -206,7 +208,6 @@ func (d *dsp) run(argv []string) {
 	d.writeEngramMcp()
 	d.artifactsArgs()
 	d.checkBriefContract()
-	d.checkSandbox()
 	d.checkRequested()
 	d.checkAuthorizes()
 	d.checkRelease()
@@ -317,8 +318,7 @@ func (d *dsp) parseFlags(rest []string) {
 			d.dispatchDry = true
 			rest = rest[1:]
 		case "--sandbox":
-			d.sandbox, d.sandboxSrc = true, "--sandbox"
-			rest = rest[1:]
+			d.die(sandboxRemoved("--sandbox"))
 		case "--no-db":
 			d.wantDB, d.dbSrc = false, "chosen"
 			rest = rest[1:]

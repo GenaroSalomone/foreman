@@ -533,6 +533,10 @@ func (r *trainRun) advance(h, c, tool string) {
 			dirtySet[f] = true
 		}
 	}
+	// a STAGED path is not carried (the checkout below would drop its staged change from the index): it stays git's refusal
+	for _, f := range strings.Split(nameZ("diff", "--cached", "--name-only", "-z"), "\x00") {
+		delete(dirtySet, f)
+	}
 	var both []string
 	for _, f := range strings.Split(changed, "\x00") {
 		if f != "" && dirtySet[f] {
@@ -546,16 +550,45 @@ func (r *trainRun) advance(h, c, tool string) {
 		}
 	}
 	bak := r.state + "/advance-bak-" + strconv.Itoa(os.Getpid())
+	// every edit is copied out BEFORE the first one is touched: a copy that fails refuses with the checkout as it was
 	for _, f := range F {
-		os.MkdirAll(filepath.Dir(bak+"/"+f), 0o777)
-		trainCopyP(r.co+"/"+f, bak+"/"+f+".orig")
+		err := os.MkdirAll(filepath.Dir(bak+"/"+f), 0o777)
+		if err == nil {
+			err = trainCopyP(r.co+"/"+f, bak+"/"+f+".orig")
+		}
+		if err != nil {
+			r.refuse("cannot back up the uncommitted edit to %s (%v) — nothing moved", f, err)
+		}
+	}
+	// put every edit back from its .orig; the files that could not be put back (named, never claimed)
+	restoreAll := func() (failed []string) {
+		for _, f := range F {
+			if trainCopyP(bak+"/"+f+".orig", r.co+"/"+f) != nil {
+				failed = append(failed, f)
+			}
+		}
+		return failed
+	}
+	// the train's hunks go on top of every edit and each result is copied out FIRST; only then is the checkout touched, once,
+	// so a copy that fails leaves every edit where it was (a file the train deletes has no merged copy: its deletion is the result)
+	deleted := map[string]bool{}
+	for _, f := range F {
 		r.applyDiff(h, c, f, false)
-		trainCopyP(r.co+"/"+f, bak+"/"+f+".merged")
-		r.gx("checkout", h, "--", f)
+		if _, err := os.Lstat(r.co + "/" + f); err != nil && os.IsNotExist(err) {
+			deleted[f] = true
+		} else if err := trainCopyP(r.co+"/"+f, bak+"/"+f+".merged"); err != nil {
+			if failed := restoreAll(); len(failed) > 0 {
+				r.refuse("cannot back up the merged edit to %s (%v) and could not put %s back — the edits are in %s/<file>.orig", f, err, strings.Join(failed, " "), bak)
+			}
+			r.refuse("cannot back up the merged edit to %s (%v); every edit is back as it was — copies in %s", f, err, bak)
+		}
+	}
+	if len(F) > 0 {
+		r.gx(append([]string{"checkout", h, "--"}, F...)...)
 	}
 	// THE GUARDED UPDATE IS setup/merge-task's, not a second copy of it: `--base <b> --advance <h> <c>` has git move the
 	// checked-out base with `merge --ff-only --no-overwrite-ignore` (the pins and the guards are there; it is not an exact
-	// compare-and-swap on <h>: a base moved to an ancestor of C is advanced over, losing nothing, see L35), then MEASURES the end state — the ref, HEAD, the index and the disk over the touched paths, added ones included —
+	// compare-and-swap on <h>: a base moved to an ancestor of C is advanced over, losing nothing, see docs/internal-limitations.md L35), then MEASURES the end state — the ref, HEAD, the index and the disk over the touched paths, added ones included —
 	// and exits 0 (the base is at C and the checkout is C's), 1 (nothing was written) or 3 (NOT CONSISTENT, with the one
 	// `git read-tree` that reconciles it). It attempts no recovery and neither does this: a rollback that cannot be proven to
 	// finish only adds a third state (the merge-task review's rounds 2 to 6). The tool is the VERIFIED tree's copy, the one
@@ -582,18 +615,32 @@ func (r *trainRun) advance(h, c, tool string) {
 				r.errf("%s\n", ln)
 			}
 		}
+		var back, lost []string
 		for _, f := range F {
-			trainCopyP(bak+"/"+f+".merged", r.co+"/"+f)
+			if deleted[f] {
+				continue
+			}
+			if err := trainCopyP(bak+"/"+f+".merged", r.co+"/"+f); err != nil {
+				r.errf("hw train: the carried edit to %s was not written back (%v); it stays in %s/%s.merged\n", f, err, bak, f)
+				lost = append(lost, f)
+			} else {
+				back = append(back, f)
+			}
 		}
-		os.RemoveAll(bak)
-		if len(F) > 0 {
-			r.say("uncommitted edits carried across: %s", strings.Join(F, " ")+" ") // printf '%s ' $F
+		if len(lost) == 0 {
+			os.RemoveAll(bak)
+		}
+		if len(back) > 0 {
+			r.say("uncommitted edits carried across: %s", strings.Join(back, " ")+" ") // printf '%s ' $F
+		}
+		if len(lost) > 0 {
+			r.refuse("main advanced, but the uncommitted edits to %s were NOT written back: copies are in %s (<file>.merged)", strings.Join(lost, " "), bak)
 		}
 	case 3: // NOT CONSISTENT, measured: the message above names the state and the one command that reconciles it
 		r.refuse("ADVANCE FAILED: setup/merge-task exited 3 — %s and the checkout were not left consistent; the measured state and the command that reconciles it are above.%s", r.base, carried())
 	case 1: // measured: nothing was written and the base did not move, so the checkout is H's and the edits go back
-		for _, f := range F {
-			trainCopyP(bak+"/"+f+".orig", r.co+"/"+f)
+		if failed := restoreAll(); len(failed) > 0 {
+			r.refuse("ADVANCE FAILED: setup/merge-task refused and measured that nothing was written (the reason is above); the edits to %s could NOT be put back: copies in %s (<file>.orig)", strings.Join(failed, " "), bak)
 		}
 		r.refuse("ADVANCE FAILED: setup/merge-task refused and measured that nothing was written (the reason is above); local edits restored (copies in %s)", bak)
 	default: // 2 (usage), 126/127 (the tool vanished or lost its exec bit), a signal: setup/merge-task did not run to its end
@@ -603,20 +650,21 @@ func (r *trainRun) advance(h, c, tool string) {
 }
 
 // trainCopyP is `cp -p src dst`: contents, mode and times.
-func trainCopyP(src, dst string) {
+func trainCopyP(src, dst string) error {
 	data, err := os.ReadFile(src)
 	if err != nil {
-		return
+		return err
 	}
 	st, err := os.Stat(src)
 	if err != nil {
-		return
+		return err
 	}
-	if os.WriteFile(dst, data, st.Mode().Perm()) != nil {
-		return
+	if err := os.WriteFile(dst, data, st.Mode().Perm()); err != nil {
+		return err
 	}
-	os.Chmod(dst, st.Mode().Perm())
-	os.Chtimes(dst, time.Now(), st.ModTime())
+	err = os.Chmod(dst, st.Mode().Perm())
+	os.Chtimes(dst, time.Now(), st.ModTime()) // the times are a courtesy: a copy whose contents landed is a copy
+	return err
 }
 
 func (r *trainRun) cmdPush() {

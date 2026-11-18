@@ -1,7 +1,7 @@
 package main
 
 // The manifest of the dispatch (bin/hw `_dispatch_manifest`) and the helpers only it reads: `_deps_line`,
-// `_deps_contending_others`, `_surface_dir`, `_intended_workdir`, `_task_base`. The text is bash's, byte for byte;
+// `_deps_contending_others`, `_intended_workdir`, `_task_base`. The text is bash's, byte for byte;
 // it is the contract the suite and the brainers read (CLAUDE.md: "the manifest text never changes").
 
 import (
@@ -60,14 +60,6 @@ func (d *dsp) intendedWorkdir() string {
 		return wt
 	}
 	return d.c.work + "/" + d.proj + "/" + d.task
-}
-
-// surfaceDir is `_surface_dir`.
-func (d *dsp) surfaceDir() string {
-	if d.c.t.get(d.proj, "product_repo") == "1" {
-		return d.c.checkout(d.proj)
-	}
-	return d.intendedWorkdir()
 }
 
 // depsContendingOthers is `_deps_contending_others`: the live, unreported executors of the lane, one line each;
@@ -134,7 +126,7 @@ func (d *dsp) depsContendingOthers(proj string) (string, bool) {
 		if cwd == "" {
 			continue
 		}
-		rundir := d.nextRunDir(cwd)
+		rundir, _ := nextRunDir(cwd)
 		if rundir == "" {
 			continue
 		}
@@ -220,32 +212,6 @@ func (d *dsp) cutChars(s string, n int) string { return brCutChars(s, n, d.vdUTF
 // dispatchManifest is `_dispatch_manifest`: builds the text, prints it, then runs every gate a launch would run
 // before anything is built, and on a dry run says so and ends.
 func (d *dsp) dispatchManifest(dir string) {
-	live, sddSrc := "", "inherited"
-	surface := d.surfaceDir()
-	if d.dispatchRoute == "reuse" && d.c.t.get(d.proj, "product_repo") != "1" {
-		surface = dir
-	}
-	// A re-task that typed no --sdd keeps the pane's mode, as before none became the default (sdd-legado-070).
-	reqSdd := d.sdd
-	if d.dispatchRoute == "reuse" {
-		reqSdd = d.sddRequested()
-	}
-	if reqSdd != "" {
-		live = d.sdd
-		switch d.sdd {
-		case "none":
-			sddSrc = "chosen (--sdd none) — the directory keeps its own mode, hw forces no entry"
-			if d.sddDefaulted {
-				sddSrc = "default — no framework flow; --sdd speckit opts in where its skills are on disk"
-			}
-		default:
-			sddSrc = "chosen (--sdd " + d.sdd + "), checked on disk below"
-		}
-	} else {
-		live = d.sddLiveMode(surface)
-		sddSrc = "inherited"
-	}
-
 	// what will be run at close
 	d.verifyFullSuite = false
 	verifyCmds := d.briefVerifyCmds(d.brief)
@@ -276,16 +242,6 @@ func (d *dsp) dispatchManifest(dir string) {
 		verifyLine = "none — the brief has no runnable command in its Testing/Verification section"
 	}
 
-	// is the framework in play for this task?
-	inPlay := !(live == "" || strings.HasSuffix(live, "(global)")) // # MUTATION-ANCHOR: 844-M23
-	if reqSdd == "none" {
-		inPlay = false
-	} else if reqSdd != "" {
-		inPlay = true
-	}
-	d.dispatchFramework = strings.SplitN(live, " ", 2)[0]
-	d.dispatchInPlay = inPlay
-
 	mark := "inherited"
 	if d.model != "" {
 		mark = d.modelSrc
@@ -303,13 +259,6 @@ func (d *dsp) dispatchManifest(dir string) {
 	}
 	effortShown, effortMark := d.effortShownAndMark()
 	effortLine := "effort=" + effortShown + "  (" + effortMark + ")"
-	if d.agent == "opencode" && d.effort != "" {
-		pa := d.opencodePrimaryAgent
-		if pa == "" {
-			pa = "?"
-		}
-		effortLine += "\n  carried      via OPENCODE_CONFIG_CONTENT in the pane env (tab, --here, .hw/<run>/env) → agent \"" + pa + "\".reasoningEffort\n  verified     UNVERIFIED at dispatch — read back from the live executor's GET /config after start (receipt: effort_applied)\n  overlay      " + d.opencodeEffortOverlay
-	}
 	// A pi model CLAMPS a level it does not expose, so the level asked for is a request: the dry run says which one the
 	// session will really run at, and warns when that is not what was asked, or when it is above what the lane's ruling
 	// decided (2026-11-04: a dispatch asked --effort high for a requested "max" and nothing said what pi would do).
@@ -331,15 +280,7 @@ func (d *dsp) dispatchManifest(dir string) {
 		}
 	}
 
-	var placement, dbLine, entryLine, chainingLine, devserverLine string
-	if inPlay {
-		entryLine = d.frameworkEntry(strings.SplitN(live, " ", 2)[0])
-		if entryLine == "" {
-			entryLine = "<none: '" + live + "' has no single entry>"
-		}
-	} else {
-		entryLine = "none (no framework flow for this task)"
-	}
+	var placement, dbLine, chainingLine, devserverLine string
 	switch {
 	case d.here:
 		placement = "here (splits the brainer pane)"
@@ -397,13 +338,6 @@ func (d *dsp) dispatchManifest(dir string) {
 	d.resolveAccount()
 	d.resolveSubagentModel()
 	agentLine := d.agent + "  (" + d.agentSrc + ")"
-	if d.agent == "opencode" {
-		if d.opencodePrimaryAgent != "" {
-			agentLine += "\n  primary     " + d.opencodePrimaryAgent + "  (explicit --agent passed by hw)"
-		} else {
-			agentLine += "\n  primary     <none passed — opencode default_agent applies>"
-		}
-	}
 	if d.keepPane { // # MUTATION-ANCHOR: go-67-M06
 		kf := d.keepPaneFor
 		if kf == "" {
@@ -457,45 +391,12 @@ func (d *dsp) dispatchManifest(dir string) {
 	switch d.agent + ":" + d.permissions {
 	case "claude:skip":
 		permissionsLine = "skip  (" + d.permissionsSrc + ") — --dangerously-skip-permissions" // # MUTATION-ANCHOR: 844-M38
-	case "opencode:skip":
-		permissionsLine = "skip  (" + d.permissionsSrc + ") — --auto (identical to `opencode-auto`)"
-	case "codex:skip":
-		permissionsLine = "skip  (" + d.permissionsSrc + ") — codex's own approval_policy applies; hw sets none"
 	case "claude:ask":
 		permissionsLine = "ask  (" + d.permissionsSrc + ") — no skip flag; the executor WAITS on every permission dialog, and nothing answers it in an unattended pane"
-	case "opencode:ask":
-		permissionsLine = "ask  (" + d.permissionsSrc + ") — no --auto; a prompt is reported blocked reason=permission, and a person has to answer it"
-	case "codex:ask":
-		permissionsLine = "ask  (" + d.permissionsSrc + ") — -a on-request; the executor WAITS on an approval nobody answers in an unattended pane"
 	case "pi:skip":
 		permissionsLine = "skip  (" + d.permissionsSrc + ") — pi has no permission prompts; hw's write guard is the tool_call veto in setup/pi/hw-executor.ts"
 	}
-	var providerLine string
-	if d.agent == "opencode" {
-		if d.model != "" {
-			prov := d.model
-			if i := strings.Index(prov, "/"); i >= 0 {
-				prov = prov[:i]
-			}
-			if d.modelSrc == "" || d.modelSrc == "chosen" {
-				providerLine = prov + "  (direct, from --model)"
-			} else {
-				providerLine = prov + "  (direct, " + d.modelSrc + ")"
-			}
-		} else {
-			providerLine = "<opencode default — no --model given>"
-		}
-		endpoint := "<not allocated>"
-		if d.opencodeAgentPort != "" {
-			endpoint = "http://127.0.0.1:" + d.opencodeAgentPort
-		}
-		providerLine += "\n  background  OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true (as `opencode-auto` sets it)\n  endpoint    " + endpoint + "  (this executor's own; $HW_AGENT_ENDPOINT in its env)"
-		if d.opencodeExecutorConfig != "" {
-			providerLine += "\n  guard       " + d.opencodeExecutorConfig + "/plugin/deny-repo-writes.js  (OPENCODE_CONFIG_DIR, lane table: refuses writes into " + d.proj + "'s checkout)"
-		}
-	} else {
-		providerLine = "n/a (" + d.agent + " resolves its own)"
-	}
+	providerLine := "n/a (" + d.agent + " resolves its own)"
 
 	d.invokerPaneInit()
 	var invokerLine string
@@ -558,8 +459,6 @@ func (d *dsp) dispatchManifest(dir string) {
 		switch d.agent {
 		case "claude":
 			gl = "--plugin-dir " + d.brainGuardClaudePlugin() + "  " + why
-		case "opencode":
-			gl = "OPENCODE_CONFIG=" + d.brainGuardOpencodeConfig() + "  " + why
 		case "pi":
 			gl = "HW_PI_BRAIN_GUARD=1 (setup/pi/hw-executor.ts asks " + d.brainGuardDir() + "/deny_brain_writes.py in tool_call)  " + why // # MUTATION-ANCHOR: 844-M51
 		default:
@@ -576,14 +475,9 @@ func (d *dsp) dispatchManifest(dir string) {
 	if contract == "" {
 		contract = "none"
 	}
-	liveShown := live
-	if liveShown == "" {
-		liveShown = "<undetermined>"
-	}
 	var sb strings.Builder
 	sb.WriteString("dispatch " + d.proj + ":" + d.task + "  run=" + runLabel + "\n")
 	sb.WriteString("  route       " + routeLine + "\n")
-	sb.WriteString("  framework   " + liveShown + "  (" + sddSrc + ", from " + surface + ")\n")
 	sb.WriteString("  " + modelLine)
 	if d.modelFloorLine != "" {
 		sb.WriteString("\n  floor       " + d.modelFloorLine)
@@ -630,12 +524,8 @@ func (d *dsp) dispatchManifest(dir string) {
 	}
 	sb.WriteString("\n")
 	sb.WriteString("  verify      " + verifyLine + "\n")
-	sb.WriteString("  entry       " + entryLine + "\n")
 	sb.WriteString("  workdir     " + dir + "\n")
 	sb.WriteString("  invoker     " + invokerLine)
-	if d.sandboxLine != "" {
-		sb.WriteString("\n  sandbox     " + d.sandboxLine)
-	}
 	sb.WriteString("\n")
 	ep := d.engramProxyLine
 	if ep == "" {
@@ -659,28 +549,15 @@ func (d *dsp) dispatchManifest(dir string) {
 		d.warn("hw runs it itself at close, bounded at " + brVerifyTimeout() + "s; the full suite is ~1000s, so it will exit 124 and read as a FAILED verification, not a slow one")
 		d.warn("full-suite coverage is already mandatory at push (setup/hooks/pre-push). Fix the brief now — it is free until this launches: HW_TEST_GATE=fast bash setup/test-hw")
 	}
-	if d.dispatchRoute == "reuse" && d.sandbox {
-		d.die("--sandbox is a property of a LAUNCH, and this dispatch would re-task the executor that is already running for " + d.proj + ":" + d.task + " — whatever it was launched with. Add --fresh to launch a sandboxed one. NOTHING was built.")
-	}
 	if d.dispatchRoute == "reuse" {
 		return
-	}
-	if d.agent == "opencode" && d.model == "" { // # MUTATION-ANCHOR: 844-M46
-		d.warn("no --model given and " + d.proj + " pins no provider, so this opencode executor gets whatever opencode defaults to")
-		d.warn("pin it if the work depends on which model runs: --model <provider>/<model>")
 	}
 	if d.spaceExplicit { // # MUTATION-ANCHOR: 844-M44
 		d.warn("--space selects the LEGACY placement model")
 		d.warn("this task consumes a whole workspace instead of a tab in the project's " + d.c.t.get(d.proj, "space") + " space")
 		d.warn("prefer --tab unless this task specifically requires a separate workspace")
 	}
-	if d.sdd == "speckit" && !d.speckitOnDisk(surface) {
-		d.die("--sdd speckit REFUSED BEFORE BUILDING ANYTHING: no speckit-* skill is on disk under " + surface + "/.claude/skills or " + d.c.home + "/.claude/skills. Nothing was built. Install Spec Kit where it is used, or dispatch with --sdd none.")
-	}
-	if d.accountVerdict == "refused" {
-		d.warn(d.accountRefusal)
-		d.die("account '" + d.account + "' was selected (" + d.accountSrc + ") and hw could not establish it. Nothing was built. Fix what the line above names, or dispatch under the default account with --account default.")
-	}
+	d.refuseUnestablishedAccount()
 	if d.account != "default" && !d.accountApplies && d.agent != "claude" {
 		d.warn("account '" + d.account + "' does NOT apply to a " + d.agent + " executor — only Claude Code reads CLAUDE_CONFIG_DIR")
 		d.warn("this executor runs under whatever account " + d.agent + " is signed into. If the account matters, launch it with --agent claude.")
@@ -690,26 +567,6 @@ func (d *dsp) dispatchManifest(dir string) {
 			d.warn("Claude Code's first run is not finished in this account (" + strings.Join(pend, " ") + ") — this executor will stop on it, and finishing it is yours:")
 			d.warn("  run once in a terminal: " + d.claudeFirstRunCommand(d.accountConfigDir) + "  — finish the welcome and login, accept the Bypass Permissions warning, /exit")
 		}
-	}
-	if inPlay && d.model == "" {
-		switch strings.SplitN(live, " ", 2)[0] {
-		case "speckit":
-			if d.model != "opus" {
-				d.warn("framework is speckit — this session is the ORCHESTRATOR, not the worker")
-				d.warn("the phase agents pin their own models; --model only sets the judgment that")
-				d.warn("sequences them. opus is suggested here: --model opus --effort medium")
-			} else if d.effort == "" || d.effort == "low" {
-				e := d.effort
-				if e == "" {
-					e = "<default>"
-				}
-				d.warn("opus with effort=" + e + " for an orchestrating run — medium is suggested")
-			}
-		}
-	}
-	if d.model == "" && d.agent == "claude" && d.reusePane == "" && d.sddEffectiveMode == "speckit" {
-		d.warn("no --model under --sdd speckit: this inherits claude's account default,")
-		d.warn("not sonnet — an orchestrator may not be sonnet. --model opus --effort medium names it.")
 	}
 	if !d.keepPane && d.wantReport && !d.here { // # MUTATION-ANCHOR: 844-67-M01
 		d.warn("no --keep-pane: this executor's pane CLOSES on its proved report, and that is IRREVERSIBLE")
@@ -726,7 +583,7 @@ func (d *dsp) dispatchManifest(dir string) {
 		}
 	}
 	d.refuseUnrunnableVerification(verifyCmds)
-	if verifyCmds == "" && d.brief != "" { // # MUTATION-ANCHOR: 844-M48
+	if verifyCmds == "" && d.brief != "" {
 		d.warn("nothing in this brief can be RUN to verify the work: hw will measure nothing at close")
 		d.warn("put the command in a fenced block under Testing/Verification and hw runs it in hw done")
 	}

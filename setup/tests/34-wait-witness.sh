@@ -12,19 +12,19 @@
 #
 # What a fixture CAN pin down, and what nothing else in this suite does, is the
 # exit-code contract. `hw` documents ONE failure code — 1, every refusal — and
-# this command adds four verdict codes on top of it. That distinction is the
+# this command adds verdict codes on top of it. That distinction is the
 # whole interface: a caller that cannot tell "hw refused" from "the executor is
-# settled" is back to reading prose, which is exactly what the raw herdr call
+# stranded" is back to reading prose, which is exactly what the raw herdr call
 # left everyone doing.
 # suite-timing: retry-once — its verdict reads wall-clock waits; measured 2026-09-30:
 #   red under load 11-13 from other lanes, green alone 3 of 3.
 . "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
 
 # ── a bin dir hw resolves as its own ─────────────────────────────────────────
-# hw derives HW_BIN_DIR from its own path and loads state-witness.sh, herdr-rpc
-# and the rest from beside itself. Copying the real bin/ and replacing ONLY
-# herdr-rpc gives the real hw, the real cmd_wait and the real witness against
-# stubbed readers — rather than a re-implementation that can drift from both.
+# hw derives HW_BIN_DIR from its own path and loads herdr-rpc and the rest from
+# beside itself. Copying the real bin/ and replacing ONLY herdr-rpc gives the
+# real hw, the real wait and the real witness against stubbed readers — rather
+# than a re-implementation that can drift from both.
 BIN="$TMP/bin2"
 cp -R "$ROOT/bin" "$BIN"
 [ -x "$BIN/hw" ] || fail "hw wait: the copied bin/ has no executable hw"
@@ -62,28 +62,12 @@ case "$1 ${2:-}" in
   "agent get")
     if [ "${W_NOAGENT:-0}" = 1 ]; then printf '{"result":{}}\n'; exit 0; fi
     _t="${W_TOKENS:-}"; [ -n "$_t" ] || _t='{}'
-    printf '{"result":{"agent":{"agent":"opencode","agent_status":"%s","tokens":%s}}}\n' \
+    printf '{"result":{"agent":{"agent":"claude","agent_status":"%s","tokens":%s}}}\n' \
       "${W_STATUS:-blocked}" "$_t" ;;
-  "pane process-info")
-    case "${W_PROCINFO:-port}" in
-      none) printf '{"result":{"process_info":{"foreground_processes":[]}}}\n' ;;
-      *) printf '{"result":{"process_info":{"foreground_processes":[{"argv":["opencode","--port","%s"]}]}}}\n' "${W_PORT:-49999}" ;;
-    esac ;;
   *) printf '{"result":{}}\n' ;;
 esac
 STUB
 chmod +x "$TMP/bin/herdr"
-
-cat > "$TMP/bin/curl" <<'STUB'
-#!/usr/bin/env bash
-url="${!#}"
-case "${W_PROMPTS:-none}" in
-  unreadable) printf 'not json' ;;
-  question) case "$url" in *"/question") printf '[{"id":"q1"}]' ;; *) printf '[]' ;; esac ;;
-  *) printf '[]' ;;
-esac
-STUB
-chmod +x "$TMP/bin/curl"
 
 export W_TICK="$TMP/tick" W_WAITS="$TMP/waits"
 # Small slices: the assertions are about WHICH verdict ends a wait, never about
@@ -140,7 +124,7 @@ w="$(cat "$W_WAITS" 2>/dev/null || echo 0)"
 [ "${w:-0}" = 0 ] \
   && pass "hw wait: NO wait was started against a stranded pane — the check is before the budget, not after it" \
   || fail "hw wait: a stranded pane still spent $w wait-agent call(s); the pair check ran too late to be the fix"
-expect_says "hw wait: it forbids the two moves that cannot help here" "hw unstick" "$out"
+expect_says "hw wait: it forbids the move that cannot help here" "Do NOT reach for a larger budget" "$out"
 
 # EITHER HALF ALONE IS ORDINARY, and calling it stranded would be a false alarm
 # on a healthy executor. Measured 2026-08-27: w30:p54 published
@@ -154,24 +138,15 @@ out="$(W_TOKENS='{"done_state":"undelivered","done_status":"done"}' W_SCREEN=mov
 expect_rc   "hw wait: done_state alone is NOT the stranded pair — a delivery may still be in flight" 0
 expect_silent "hw wait: an in-flight delivery is not reported as abandoned" "ENDED AND NEVER REPORTED" "$out"
 
-# ── THE FOUR VERDICTS ────────────────────────────────────────────────────────
+# ── THE VERDICTS ─────────────────────────────────────────────────────────────
 #
-# settled: every reader answered and every one said no.
-out="$(W_STATUS=working W_SCREEN=static W_PROMPTS=none hw_wait wX:p1 --timeout-ms $((4000 * HW_TEST_SLOW)))"
-expect_rc   "hw wait: a state proved unable to change ends the wait, exit 5" 5
-expect_says "hw wait: a settled verdict says a bigger budget is not the answer" "larger budget is never the answer" "$out"
-
-# awaiting-human: the pane's own endpoint CONFIRMED an outstanding prompt. A
-# distinct code because the advice is not the same — 5 says look at the pane,
-# 6 says only a person can move this.
-out="$(W_STATUS=working W_SCREEN=static W_PROMPTS=question hw_wait wX:p1 --timeout-ms $((4000 * HW_TEST_SLOW)))"
-expect_rc   "hw wait: an outstanding prompt is its own verdict, exit 6" 6
-expect_says "hw wait: it says a PERSON is being waited on, not time" "waiting for a PERSON" "$out"
-
+# Only two verdicts are left: live and unknown. (A pane "proved unable to change" needed an endpoint
+# that read outstanding prompts; with no such reader a static screen proves nothing.)
+#
 # live: the screen moved, so this is a real wait and it keeps every millisecond.
-# THE MUTANT: treating `live` like `settled` would cut a working executor short —
+# THE MUTANT: treating `live` like a settled pane would cut a working executor short —
 # the mirror of the bug, and the more expensive direction.
-out="$(W_STATUS=blocked W_SCREEN=moving W_PROMPTS=none hw_wait wX:p1 --timeout-ms $((1200 * HW_TEST_SLOW)))"
+out="$(W_STATUS=blocked W_SCREEN=moving hw_wait wX:p1 --timeout-ms $((1200 * HW_TEST_SLOW)))"
 expect_rc   "hw wait: a moving pane is never cut short — the budget runs out instead" 2
 expect_says "hw wait: and it SAYS it is still live, so a long wait is not mistaken for a hang" "still LIVE after" "$out"
 
@@ -218,29 +193,6 @@ if grep -qE 'agent prompt|pane send-text|pane send-keys|agent start' "$STUB_LOG"
 else
   pass "hw wait: nothing is ever sent to the target pane, on any path"
 fi
-
-# ── THE PROGRESS CALLBACK IS OPT-IN ──────────────────────────────────────────
-#
-# witness_wait's other callers are gates with fixed output contracts, and
-# channel-send's is read inside `$(...)` — a stray progress line there is not a
-# report, it is a corrupted return value. So the hook defaults to nothing.
-# THE MUTANT: an unconditional printf inside witness_wait. Every assertion above
-# still passes, and channel-send's captured output silently grows lines.
-cat > "$TMP/optin.sh" <<'PROBE'
-set -u
-WITNESS_RPC="$BIN/herdr-rpc"
-. "$BIN/state-witness.sh"
-# STDOUT IS THE SUBJECT — do not redirect it. This line read
-# `>/dev/null 2>&1` first, which made the assertion below unfalsifiable: an
-# unconditional printf inside witness_wait survived the mutant untouched.
-witness_wait wX:p1 1200 2>/dev/null || true
-PROBE
-noise="$(WITNESS_SLICE_MS=200 WITNESS_INTERVAL_S=0 WITNESS_SAMPLES=2 \
-         W_STATUS=working W_SCREEN=static BIN="$BIN" \
-         bash "$TMP/optin.sh" 2>/dev/null || true)"
-[ -z "$noise" ] \
-  && pass "state-witness: witness_wait prints nothing when no caller asked for progress" \
-  || fail "state-witness: witness_wait emitted output with WITNESS_ON_VERDICT unset: $noise"
 
 # ── hw status names the same pair ────────────────────────────────────────────
 # `hw status` calls an ended turn whose delivery had already failed done-STRANDED, not

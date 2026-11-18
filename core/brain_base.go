@@ -8,7 +8,6 @@ package main
 import (
 	"bytes"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -73,6 +72,7 @@ type brainRun struct {
 	verdict, paneCwd                 string
 	permissions, permissionsSrc      string
 	permissionsErr                   string
+	permsNoted                       bool // the `permissions: ask` notice was printed
 }
 
 func (b *brainRun) errf(f string, a ...any) { b.a.errf(f, a...) }
@@ -271,14 +271,4 @@ func brFileExists(p string) bool {
 func dirExists(p string) bool {
 	st, err := os.Stat(p)
 	return err == nil && st.IsDir()
-}
-
-// listenLoopback is _free_port: a port the kernel just handed out on 127.0.0.1.
-func listenLoopback() (string, error) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", err
-	}
-	defer ln.Close()
-	return strconv.Itoa(ln.Addr().(*net.TCPAddr).Port), nil
 }

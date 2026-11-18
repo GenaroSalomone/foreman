@@ -1,15 +1,15 @@
 # impl-retired.sh — the retired HW_IMPL switch (go-060 S3, completed in 0.7.0). SOURCED by bin/hw, bin/brain, bin/channel-send,
-# bin/ask-invoker, bin/done-invoker and the eight small tools on their first lines, never executed: no shebang, not executable.
+# bin/ask-invoker, bin/done-invoker and the six small tools on their first lines, never executed: no shebang, not executable.
 #
 # Until 0.5.x `HW_IMPL=bash`, `HW_IMPL_<VERB>=bash`, `shadow`, and the same words in the switch file
 # (${HW_IMPL_FILE:-~/.config/hw/impl}: a bare line, `default=` or `<verb>=`) chose the bash twin of these tools. 0.6.0 removed the bash
-# of hw and its invokers; 0.7.0 removed the bash of the eight small tools. A word is read for ONE thing, to say so, and Go runs.
+# of hw and its invokers; 0.7.0 removed the bash of the six small tools. A word is read for ONE thing, to say so, and Go runs.
 # NEVER a refusal: a hook calls `hw` every turn, and a dying `hw` would stop every pane. One line per state, keyed in
 # ${XDG_STATE_HOME:-~/.local/state}/hw/warned (shared with hw's other warn-once lines), so a profile that still says HW_IMPL=bash
 # is told once on the machine, not once per tool or per turn.
 #
-# The eight small tools are read here too since 0.7.0: HW_IMPL_STOP_HOOK, HW_IMPL_HW_SECRET, HW_IMPL_HW_SANDBOX, HW_IMPL_BROWSER_CLOSE,
-# HW_IMPL_BRAIN_ARCHIVE, HW_IMPL_SECRET_UNLOCK, HW_IMPL_OPENCODE_AUTO, HW_IMPL_CODEX_CHANNEL_SESSION_HOOK and their `<tool>=` lines
+# The six small tools are read here too since 0.7.0: HW_IMPL_STOP_HOOK, HW_IMPL_HW_SECRET, HW_IMPL_HW_SANDBOX (the tool itself is gone, 2026-11-17), HW_IMPL_BROWSER_CLOSE,
+# HW_IMPL_BRAIN_ARCHIVE, HW_IMPL_SECRET_UNLOCK and their `<tool>=` lines
 # name a bash that no longer exists. The way back is `foreman-setup upgrade --to 0.6.3`. HW_BASH_BODY=1, the seam that ran a bash body,
 # is gone too, so it does nothing.
 #

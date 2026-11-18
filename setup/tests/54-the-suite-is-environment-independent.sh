@@ -200,7 +200,7 @@ cs_norm() {
 }
 CS_RUNNER="$ROOT/setup/test-channel-send"
 need_invokers   # test-channel-send runs ask-invoker from a copy of bin/ with no core/dist beside it; the Go invokers are not built by anything else here (go-060 S2)
-for _s in 24-done-closes-delivered.sh 23-invoker-env-file.sh; do
+for _s in 24-done-closes-delivered.sh; do
   bg_run "${_s%%-*}-clean"   tmp_norm clean   bash "$TESTS_DIR/$_s"
   bg_run "${_s%%-*}-polluted" tmp_norm pollute bash "$TESTS_DIR/$_s"
 done
@@ -211,13 +211,13 @@ fi
 
 # ── C03/C04. real subjects give the SAME answer either way ──────────────────
 #
-# The claim is identity, not success. Two subjects are driven: the one the
-# incident was found in, and the one whose header documents the previous
-# instance of it. Output is compared byte for byte after stripping the one thing
+# The claim is identity, not success. One subject is driven: the one the
+# incident was found in (the one that documented the previous instance, 23, went
+# with bin/invoker-common.sh). Output is compared byte for byte after stripping the one thing
 # that legitimately differs between two runs — the mktemp path each run gets.
 #
 # WHY NOT THE WHOLE SUITE: it takes minutes and would make this subject the
-# slowest thing in the run. These two carry the two documented instances, and
+# slowest thing in the run. This one carries the documented instance, and
 # C01 above is what generalises to the family.
 same_both_ways() { # <subject file> <label>
   local subj="$1" label="$2" a b
@@ -230,7 +230,6 @@ same_both_ways() { # <subject file> <label>
   fail "C0x $label DIFFERS by environment — clean vs polluted: $(diff <(printf '%s\n' "$a") <(printf '%s\n' "$b") | head -6 | tr '\n' ' ')"
 }
 same_both_ways 24-done-closes-delivered.sh "24 (where the lease leak was found)"
-same_both_ways 23-invoker-env-file.sh       "23 (where the previous instance was found)"
 
 # ── C05. AND THE OTHER RUNNER, because the family is not one directory ──────
 #

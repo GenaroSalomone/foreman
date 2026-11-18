@@ -69,7 +69,7 @@ def classes():
     w.executor(task="asked", status="idle", holds=[dict(kind="ask", n=2)], tokens={"ask_seq": "2/3"})
     w.executor(task="asked-undelivered", status="working", holds=[dict(kind="ask", n=1, state="undelivered")])
     w.executor(task="hc-ask", status="idle", holds=[dict(kind="ask", n=1, route="hc")])
-    w.executor(task="opencode-ask", vendor="opencode", status="idle", holds=[dict(kind="ask", n=1, route="opencode", target="sess-1")])
+    w.executor(task="other-ask", vendor="gemini", status="idle", holds=[dict(kind="ask", n=1, route="other", target="sess-1")])
     w.executor(task="blocked", status="idle", done=True, blocked_waiting=True,
                tokens=dict(done_tokens, done_status="blocked"))
     w.executor(task="reported", status="idle", done=True, tokens=done_tokens)
@@ -103,9 +103,9 @@ def classes():
     hc = row(s, "hc-ask")
     assert isinstance(hc["ask"]["pending_reply"], str) and hc["ask"]["route"] == "hc", "an hc-route hold gets its reply button: %s" % hc["ask"]    # 797-M08
     assert a["ask"]["route"] == "herdr" and u["ask"]["route"] is None, "route is the hold's, and null with pending_reply: %s %s" % (a["ask"], u["ask"])
-    o = row(s, "opencode-ask")
+    o = row(s, "other-ask")
     assert o["ask"]["pending_reply"] is None, "pending_reply set on a hold on another route, which the herdr verbs would refuse"  # 797-M08
-    assert o["vendor"] == "opencode"
+    assert o["vendor"] == "gemini"
     b = row(s, "blocked")
     assert b["attention"] == "blocked" and b["report"]["status"] == "blocked", b["report"]
     r = row(s, "reported")
@@ -774,7 +774,7 @@ def ctx_live():
     with open(os.path.join(lost["rundir"], "receipt.jsonl"), "a") as fh:
         fh.write(json.dumps({"key": "session_id", "value": "11111111-aaaa-bbbb-cccc-0000000000ff"}) + "\n")
     nosid = w.executor(task="nosid", status="working")
-    ocode = w.executor(task="ocode", vendor="opencode", status="working")
+    ocode = w.executor(task="ocode", vendor="gemini", status="working")
     session(ocode, "11111111-aaaa-bbbb-cccc-000000000005", 70000)
     idle = w.executor(task="idle", status="idle")
     session(idle, "11111111-aaaa-bbbb-cccc-000000000006", 70000)

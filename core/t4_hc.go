@@ -94,16 +94,6 @@ func hcOwnedIn(dir string) (addrs []string, observed bool, why string) {
 	return addrs, true, ""
 }
 
-// hcOccupants is hcOwnedIn as occupantsIn's lines.
-func hcOccupants(dir string) (list string, observed bool, why string) {
-	addrs, observed, why := hcOwnedIn(dir)
-	lines := make([]string, len(addrs))
-	for i, addr := range addrs {
-		lines[i] = hcLiveLine(addr)
-	}
-	return strings.Join(lines, "\n"), observed, why
-}
-
 // hcCwdOccupants is the addresses of the live terminals of the app's core whose cwd is dir or under it (the caller renders them
 // with hcLiveLine). answered is false when `hc ls` could not say. unplaced are the listed terminals that name no cwd: where
 // they stand is unknown, so they are neither in dir nor outside it.

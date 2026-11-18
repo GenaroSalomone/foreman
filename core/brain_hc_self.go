@@ -35,10 +35,7 @@ func (b *brainRun) hcArmSelfReset(addr string) int {
 	tmp := brOrStr(b.getenv("TMPDIR"), "/tmp")
 	selfLog := tmp + "/brain-self-reset-" + sanitizePane(addr) + ".log"
 	args := []string{proj}
-	switch b.kind {
-	case "opencode":
-		args = append(args, "--opencode")
-	case "claude":
+	if b.kind == "claude" {
 		args = append(args, "--claude")
 	}
 	args = append(args, "--reset", "--await-idle", addr)

@@ -1,4 +1,4 @@
-// Real-filesystem effects for all four OpenCode guard LANES. The shared module
+// Real-filesystem effects of the guard as the pi executor asks it (deny_repo_writes_ask.py), one assertion set per lane. The shared module
 // is copied and has only ONE lane's protected roots repointed into a disposable
 // sandbox; no command below can name a real protected tree.
 //
@@ -7,7 +7,7 @@
 // lane table, so the rewrite targets that lane's entry — and still fails loudly
 // if it cannot find it, since a repoint that silently no-ops would run every
 // assertion below against the REAL trees.
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -18,7 +18,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 // fileURLToPath, not `.pathname`: on Windows that is `/D:/...`, which no fs call opens.
 const root = process.env.DENY_GUARD_ROOT ?? fileURLToPath(new URL("../..", import.meta.url));
@@ -50,7 +50,7 @@ function check(name, condition, detail = "") {
 
 // Repoint one lane's `repo` and `worktrees` in a COPY of guards.json, beside a
 // copy of the shared module laid out the way the module finds its policy
-// (`<root>/setup/guards/deny-repo-writes.js` reads `<root>/guards.json`).
+// (`<root>/setup/guards/deny_repo_writes.py` reads `<root>/guards.json`).
 // Until 2026-09-23 the table was a literal inside the module and this rewrote
 // its source; the values moved to guards.json, so the rewrite moved with them.
 // It still fails loudly when the lane is missing, since a repoint that silently
@@ -70,24 +70,19 @@ function repointGuard(lane, repo, worktrees) {
   writeFileSync(`${tree}/guards.json`, JSON.stringify(policy, null, 2));
   // {brain}/{work} in the policy resolve from projects.json's `root`, beside it.
   writeFileSync(`${tree}/projects.json`, readFileSync(`${root}/projects.json`, "utf8"));
-  const path = `${tree}/setup/guards/deny-repo-writes.js`;
-  writeFileSync(path, readFileSync(`${root}/setup/guards/deny-repo-writes.js`, "utf8"));
-  return path;
+  for (const f of ["deny_repo_writes.py", "deny_repo_writes_ask.py"]) {
+    writeFileSync(`${tree}/setup/guards/${f}`, readFileSync(`${root}/setup/guards/${f}`, "utf8"));
+  }
+  return `${tree}/setup/guards/deny_repo_writes_ask.py`;
 }
 
-async function loadGuard(path, lane, sessionDir) {
-  const mod = await import(`${pathToFileURL(path).href}?v=${Math.random()}`);
-  const hooks = await mod.makeDenyRepoWrites(lane)({ directory: sessionDir, worktree: sessionDir });
-  const before = hooks["tool.execute.before"];
+// The pi adapter's question: a guard that does not exit 0 with a JSON object reached no verdict, and the adapter refuses.
+function loadGuard(ask, lane, sessionDir) {
   return async (command, workdir) => {
-    const args = { command };
-    if (workdir !== undefined && workdir !== null) args.workdir = workdir;
-    try {
-      await before({ tool: "bash", sessionID: "test", callID: "test" }, { args });
-      return { allowed: true, reason: "" };
-    } catch (error) {
-      return { allowed: false, reason: String(error.message ?? error) };
-    }
+    const r = spawnSync("python3", [ask], { input: JSON.stringify({ lane, op: "decide", command, cwd: workdir ?? sessionDir }), encoding: "utf8" });
+    if (r.status !== 0) return { allowed: false, reason: `no verdict (exit ${r.status}): ${r.stderr}` };
+    const reason = JSON.parse(r.stdout).reason;
+    return reason ? { allowed: false, reason } : { allowed: true, reason: "" };
   };
 }
 
@@ -108,7 +103,7 @@ try {
     const worktrees = `${sandbox}/worktrees`;
     const outside = `${sandbox}/outside`;
     const source = `${repo}/artifacts/raw.bin`;
-    const guard = await loadGuard(repointGuard(lane, repo, worktrees), lane, sandbox);
+    const guard = loadGuard(repointGuard(lane, repo, worktrees), lane, sandbox);
 
     const reset = () => {
       rmSync(sandbox, { recursive: true, force: true });

@@ -1,7 +1,7 @@
 package main
 
 // wait, wait-one and wait-monitor (train T2): the witness-backed way to wait for an executor, with the exit
-// contract of bin/hw:11066 — 0 reached idle/done, 2 the budget was spent, 5 settled, 6 a person is waited on,
+// contract of bin/hw:11066 — 0 reached idle/done, 2 the budget was spent, 6 a person is waited on,
 // 7 ended without delivering its report, 8 handback refused, and herdr-rpc's own 3 and 4 passed through.
 //
 // Ports of cmd_wait_one, cmd_wait_monitor, cmd_wait (bin/hw:10932-11120) and of the bash state witness (the cross-check:
@@ -9,8 +9,7 @@ package main
 // (the monitor), which is the only thing hw-core does to herdr in T2.
 //
 // Two programs are still run as the bash runs them, because they ARE the contract and not code to port: herdr-rpc
-// (`wait-agent`, which opens one events.wait per status, and `call pane.read`) and curl (the pane's own OpenCode
-// endpoint). They are found beside the hw that started hw-core (HW_CORE_BIN_DIR), exactly where the bash state witness finds
+// (`wait-agent`, which opens one events.wait per status, and `call pane.read`). It is found beside the hw that started hw-core (HW_CORE_BIN_DIR), exactly where the bash state witness finds
 // them. Their exit codes are the ones the verbs report.
 
 import (
@@ -32,8 +31,7 @@ import (
 // (could not connect / rpc error) and pass through unchanged.
 const (
 	rcTimeout  = 2 // # MUTATION-ANCHOR: 871-G24
-	rcSettled  = 5 // # MUTATION-ANCHOR: 871-G22
-	rcHuman    = 6 // # MUTATION-ANCHOR: 871-G23
+	rcHuman    = 6
 	rcStranded = 7 // # MUTATION-ANCHOR: 871-G21
 	rcRefused  = 8 // # MUTATION-ANCHOR: 871-G20
 )
@@ -115,19 +113,6 @@ func waitFalsePair(info string) string {
 		at = " at " + turnAt
 	}
 	return "it published done_status=" + doneStatus + " with done_state=undelivered — so the report exists and did NOT reach the brainer — and its turn-end adapter published turn_state=ended_unreported" + at + ", so the turn that would have retried the delivery is over"
-}
-
-// settledAlreadyReportedNote is _settled_already_reported_note.
-func (a *app) settledAlreadyReportedNote(info string) {
-	doneStatus := tokenOf(info, "done_status")
-	if doneStatus != "done" && doneStatus != "blocked" {
-		return
-	}
-	doneState := tokenOf(info, "done_state")
-	if doneState == "" {
-		doneState = "unknown"
-	}
-	a.warn("it already reported (done_status=" + doneStatus + ", done_state=" + doneState + ") — whatever blocked/stuck token herdr is still showing is stale, published on a pane that has finished. Do not `hw unstick` it. `hw next` to reuse it, or `hw done` to close it.")
 }
 
 // ── the witness (the bash state witness) ──────────────────────────────────────
@@ -235,91 +220,6 @@ func (w *witness) screen(pane string) (string, string, bool) {
 	return "static", first, true
 }
 
-// endpoint is witness_endpoint: the pane's own OpenCode HTTP address, from its argv; false when there is none to ask.
-func (w *witness) endpoint(pane string) (string, bool) {
-	if w.a.nextHC(pane) { // an app terminal exposes no process-info: whether a prompt is outstanding stays unestablished
-		return "", false
-	}
-	out, _ := herdrOut(0, "pane", "process-info", "--pane", pane)
-	info := bashSub(out)
-	if info == "" {
-		return "", false
-	}
-	vals, err := parseStream([]byte(info))
-	if err != nil {
-		return "", false
-	}
-	port := ""
-	for _, doc := range vals {
-		cur := doc
-		ok := true
-		for _, p := range []string{"result", "process_info", "foreground_processes"} {
-			if cur, ok = cur.get(p); !ok {
-				break
-			}
-		}
-		if !ok || cur.kind != vArr {
-			continue
-		}
-		for _, fp := range cur.arr {
-			argv, ok := fp.get("argv")
-			if !ok || argv.kind != vArr {
-				continue
-			}
-			isOpencode := false
-			for _, e := range argv.arr {
-				if e.kind == vStr && (e.s == "opencode" || strings.HasSuffix(e.s, "/opencode")) {
-					isOpencode = true
-				}
-			}
-			if !isOpencode {
-				continue
-			}
-			for i, e := range argv.arr { // index("--port"), then the element after it
-				if e.kind == vStr && e.s == "--port" {
-					if i+1 < len(argv.arr) && argv.arr[i+1].truthy() {
-						port = argv.arr[i+1].raw()
-					}
-					break
-				}
-			}
-			break // first(...): only the first opencode process answers
-		}
-		if port != "" {
-			break
-		}
-	}
-	if !allDigits(port) {
-		return "", false
-	}
-	return "http://127.0.0.1:" + port, true
-}
-
-// prompts is witness_prompts: "<question_count> <permission_count>"; false unless BOTH answered and BOTH parsed as arrays.
-func (w *witness) prompts(endpoint string) (int, int, bool) {
-	timeout := orStr(w.a.getenv("WITNESS_CURL_TIMEOUT_S"), "5")
-	count := func(url string) (int, bool) {
-		out, err := exec.Command("curl", "-s", "-m", timeout, url).Output()
-		if err != nil {
-			return 0, false
-		}
-		vals, perr := parseStream([]byte(bashSub(string(out))))
-		if perr != nil || len(vals) != 1 || vals[0].kind != vArr {
-			return 0, false
-		}
-		return len(vals[0].arr), true
-	}
-	q, ok := count(endpoint + "/question")
-	if !ok {
-		return 0, 0, false
-	}
-	p, ok := count(endpoint + "/permission")
-	if !ok {
-		return 0, 0, false
-	}
-	return q, p, true
-}
-
 // state is witness_state: sets verdict and detail. It never fails.
 func (w *witness) state(pane string) {
 	a := w.a
@@ -335,44 +235,23 @@ func (w *witness) state(pane string) {
 		}
 	}
 	samples, interval := itoa(int(a.envInt("WITNESS_SAMPLES", 3))), orStr(a.getenv("WITNESS_INTERVAL_S"), "2")
-	// the endpoint first, because an outstanding prompt outranks everything else
-	endpoint, haveEndpoint := w.endpoint(pane)
-	qn, pn, havePrompts := 0, 0, false
-	if haveEndpoint {
-		qn, pn, havePrompts = w.prompts(endpoint)
-	}
-	if havePrompts && (qn > 0 || pn > 0) {
-		w.verdict = "awaiting-human"
-		w.detail = pane + " says " + claim + ", and its own endpoint " + endpoint + " CONFIRMS a real prompt is outstanding (/question " + itoa(qn) + ", /permission " + itoa(pn) + "). A person has to answer that; no budget reaches idle without one."
-		return
-	}
-	screenState, screenHash, ok := w.screen(pane)
+	screenState, _, ok := w.screen(pane)
 	if !ok {
-		screenState, screenHash = "unreadable", ""
+		screenState = "unreadable"
 	}
-	if screenState == "moved" {
-		w.verdict = "live"
-		w.detail = pane + " says " + claim + ", but its own visible screen CHANGED between samples " + interval + "s apart (pane.read source=visible), so that pane is doing work whatever the status field says. This is a real wait and it keeps its full budget."
-		return
+	w.verdict, w.detail = witnessVerdict(pane, claim, screenState, samples, interval)
+}
+
+// witnessVerdict is the one rule both witnesses (hw wait here, the next gate in t4_next_gate.go) apply to a screen
+// reading: a screen that moved is live; static or unreadable is unknown, because neither proves the pane stale.
+func witnessVerdict(pane, claim, screenState, samples, interval string) (verdict, detail string) {
+	switch screenState {
+	case "moved":
+		return "live", pane + " says " + claim + ", but its own visible screen CHANGED between samples " + interval + "s apart (pane.read source=visible), so that pane is doing work whatever the status field says. This is a real wait and it keeps its full budget."
+	case "unreadable":
+		return "unknown", pane + " says " + claim + ", and the cross-check could NOT be made: its visible screen could not be read (pane.read source=visible failed or returned no text field). That is not evidence the pane is live and not evidence it is stale, so the gate keeps its normal budget."
 	}
-	// From here the screen is static or unreadable, and no prompt was positively read.
-	if screenState == "unreadable" {
-		w.verdict = "unknown"
-		w.detail = pane + " says " + claim + ", and the cross-check could NOT be made: its visible screen could not be read (pane.read source=visible failed or returned no text field). That is not evidence the pane is live and not evidence it is stale, so the gate keeps its normal budget."
-		return
-	}
-	if !haveEndpoint {
-		w.verdict = "unknown"
-		w.detail = pane + " says " + claim + " and its visible screen was STATIC across " + samples + " samples " + interval + "s apart (hash " + screenHash + ") — but it exposes no OpenCode HTTP endpoint (not opencode, or no --port in its argv), so whether a prompt is outstanding could not be established. A static screen alone does not distinguish a stale state from a pane holding a modal this check cannot see, so the gate keeps its normal budget."
-		return
-	}
-	if !havePrompts {
-		w.verdict = "unknown"
-		w.detail = pane + " says " + claim + " and its visible screen was STATIC across " + samples + " samples " + interval + "s apart (hash " + screenHash + ") — but its endpoint " + endpoint + " did not answer /question and /permission with parseable arrays, so an outstanding prompt could not be ruled out. An authority that cannot be asked is not an authority that said no; the gate keeps its normal budget."
-		return
-	}
-	w.verdict = "settled"
-	w.detail = pane + " says " + claim + ", and every independent check CONTRADICTS it: its visible screen did not change across " + samples + " samples " + interval + "s apart (hash " + screenHash + ", pane.read source=visible), and its own endpoint " + endpoint + " reports nothing outstanding (/question " + itoa(qn) + ", /permission " + itoa(pn) + "). Nothing is moving and there is no prompt for anyone to answer, so that state cannot change on its own and no budget reaches idle from here."
+	return "unknown", pane + " says " + claim + " and its visible screen was STATIC across " + samples + " samples " + interval + "s apart, but a static screen alone does not distinguish a stale state from a pane holding a modal this check cannot see, so the gate keeps its normal budget."
 }
 
 // rpcWait is witness_rpc_wait: one `wait-agent`, its status.
@@ -387,18 +266,16 @@ func (w *witness) rpcWait(pane string, ms int64) int {
 	return exitStatus(cmd.Run())
 }
 
-// wait is witness_wait: 0 idle/done, 2 the budget was spent, 5 settled, 6 a person is waited on, else herdr-rpc's own.
+// wait is witness_wait: 0 idle/done, 2 the budget was spent, 6 a person is waited on, else herdr-rpc's own.
 func (w *witness) wait(pane string, totalMS int64) int {
 	a := w.a
 	w.verdict, w.detail = "", ""
 	sliceMS := a.envInt("WITNESS_SLICE_MS", 20000)
-	confirmations := a.envInt("WITNESS_CONFIRMATIONS", 2)
 	// a budget smaller than one slice is a caller that has already decided it will not wait long
 	if totalMS <= sliceMS {
 		return w.rpcWait(pane, totalMS)
 	}
 	deadline := nowSec() + totalMS/1000
-	var settled, human int64
 	for {
 		now := nowSec()
 		remaining := (deadline - now) * 1000
@@ -430,22 +307,6 @@ func (w *witness) wait(pane string, totalMS int64) int {
 		if w.onVerdict != nil {
 			w.onVerdict(w.verdict, w.detail, nowSec()-(deadline-totalMS/1000), deadline-nowSec())
 		}
-		switch w.verdict {
-		case "settled":
-			settled++
-			human = 0
-			if settled >= confirmations {
-				return rcSettled
-			}
-		case "awaiting-human":
-			human++
-			settled = 0
-			if human >= confirmations {
-				return rcHuman
-			}
-		default:
-			settled, human = 0, 0
-		}
 	}
 }
 
@@ -466,10 +327,6 @@ func (p *waitProgress) progress(verdict, detail string, elapsed, remaining int64
 		switch verdict {
 		case "live":
 			a.info(target + ": still LIVE after " + s + "s (" + r + "s left)")
-		case "settled":
-			a.info(target + ": still SETTLED after " + s + "s; confirming")
-		case "awaiting-human":
-			a.info(target + ": still awaiting a PERSON after " + s + "s; confirming")
 		case "unknown":
 			a.info(target + ": cross-check still unavailable after " + s + "s (" + r + "s left)")
 		}
@@ -480,10 +337,6 @@ func (p *waitProgress) progress(verdict, detail string, elapsed, remaining int64
 	switch verdict {
 	case "live":
 		a.info("still LIVE after " + s + "s (" + r + "s of budget left) — its screen moved between samples, so this is a real wait. " + detail)
-	case "settled":
-		a.info("cross-check says SETTLED after " + s + "s; confirming once more before ending the wait. " + detail)
-	case "awaiting-human":
-		a.info("cross-check says a PERSON is being waited on, after " + s + "s; confirming once more. " + detail)
 	case "unknown":
 		a.info("cross-check UNAVAILABLE after " + s + "s (" + r + "s left) — keeping the ordinary budget. " + detail)
 	}
@@ -555,7 +408,7 @@ func (a *app) cmdWaitOne() int {
 	// BEFORE ANY BUDGET IS SPENT: the one state where waiting is provably pointless
 	if pair := waitFalsePair(info); pair != "" {
 		a.warn(pane + " ENDED AND NEVER REPORTED: " + pair + ".")
-		a.dieRC(rcStranded, "no wait was started, because none can end well: nothing inside that pane is going to deliver the report. Read what it established with `herdr agent get "+pane+"` (tokens sum/sum2/…) and its engram observations, then close it with `hw done`. Do NOT reach for a larger budget and do NOT hw unstick it — the work is finished, only the delivery failed.")
+		a.dieRC(rcStranded, "no wait was started, because none can end well: nothing inside that pane is going to deliver the report. Read what it established with `herdr agent get "+pane+"` (tokens sum/sum2/…) and its engram observations, then close it with `hw done`. Do NOT reach for a larger budget — the work is finished, only the delivery failed.")
 	}
 	w := a.newWitness()
 	if dry {
@@ -564,13 +417,6 @@ func (a *app) cmdWaitOne() int {
 		case "live":
 			a.info("WOULD WAIT, and correctly. " + w.detail)
 			return 0
-		case "settled":
-			a.warn("WOULD NOT WAIT: " + w.detail)
-			a.settledAlreadyReportedNote(info)
-			return rcSettled
-		case "awaiting-human":
-			a.warn("WOULD NOT WAIT: " + w.detail)
-			return rcHuman
 		}
 		a.info("UNDETERMINED, so a real `hw wait` would keep its ordinary " + waitMS + "ms budget and say the cross-check was unavailable. " + w.detail)
 		return rcTimeout
@@ -589,18 +435,11 @@ func (a *app) cmdWaitOne() int {
 	case 0:
 		a.ok(pane + " reached idle/done. It is ready for `hw next`, or for you to read its report.")
 		return 0
-	case rcSettled:
-		if !prog.printed {
-			a.warn(w.detail)
-		}
-		a.warn(pane + " is SETTLED: that state was proved unable to change, so the remaining budget would have bought nothing. Look at the pane and decide what it needs — `hw done` and dispatch again is usually it. A larger budget is never the answer here.")
-		a.settledAlreadyReportedNote(info)
-		return rcSettled
 	case rcHuman:
 		if !prog.printed {
 			a.warn(w.detail)
 		}
-		a.warn(pane + " is waiting for a PERSON, not for time: its own endpoint confirms an outstanding prompt. Answer it on the pane — or have " + a.operator() + " answer it — and re-run this identical command. No budget answers a question.")
+		a.warn(pane + " is blocked on a prompt: a person has to answer it on the pane — or have " + a.operator() + " answer it — and then re-run this identical command. No budget answers a question.")
 		return rcHuman
 	case 2:
 		a.warn(timeoutSummary(w, prog, pane, ms))

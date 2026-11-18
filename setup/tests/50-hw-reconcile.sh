@@ -46,16 +46,10 @@ case "\$1 \$2" in
       pTurn|pMove) printf '{"result":{"agent":{"pane_id":"%s","agent_status":"idle","tokens":{"turn_state":"ended_unreported"}}}}\n' "\$pane" ;;
       *) exit 1 ;;
     esac ;;
-  "pane process-info")
-    printf '{"result":{"process_info":{"foreground_processes":[{"argv":["opencode","--port","49999"]}]}}}\n' ;;
   *) printf '{"result":{}}\n' ;;
 esac
 STUB
-cat > "$TMP/bin/curl" <<'STUB'
-#!/usr/bin/env bash
-printf '[]\n'
-STUB
-chmod +x "$TMP/bin/herdr" "$TMP/bin/curl"
+chmod +x "$TMP/bin/herdr"
 
 make_run() { # root task run pane turns
   local root="$1" task="$2" run="$3" pane="$4" turns="$5"
@@ -93,15 +87,15 @@ case "$out" in *"setup:ended-positive"*"ended-unreported:disk"*"__RC=3"*) : ;; *
 case "$out" in *"ended-reported"*|*"intentional-probe"*|*"retried-task"*) fail "R01 a reported run, superseded attempt, or explicit probe entered the queue: $out" ;; esac
 pass "R01 a durable ended turn is raised; done, superseded, and explicit --no-report runs are vetoed"
 
-# R02 — exact live turn token is only actionable after the shared witness says
-# the pane is no longer moving. This is why hw-reconcile sources state-witness.
+# R02 — an exact live turn token is not enough: the shared witness has to prove the pane is no longer moving, and it can only
+# say live or unknown (no verdict proves a pane settled), so neither a static nor a moving pane is raised from the token alone.
 r2="$TMP/r2"; mkdir -p "$r2"
-make_run "$r2" settled-turn 20260831-110000-1 pTurn 0 >/dev/null
+make_run "$r2" static-turn 20260831-110000-1 pTurn 0 >/dev/null
 make_run "$r2" moving-turn 20260831-110001-2 pMove 0 >/dev/null
 out="$(run_reconcile "$HARNESS/bin/hw-reconcile" "$r2")"
-case "$out" in *"setup:settled-turn"*"ended-unreported:settled"*) : ;; *) fail "R02 settled live turn was not raised through the witness: $out" ;; esac
-case "$out" in *"moving-turn"*) fail "R02 a moving pane was called orphaned: $out" ;; esac
-pass "R02 ended_unreported uses state-witness: settled is raised and moving is vetoed"
+case "$out" in *"static-turn"*|*"moving-turn"*) fail "R02 a live ended_unreported token was raised without a proved-settled witness: $out" ;; esac
+case "$out" in *"no finished, undelivered work found"*) : ;; *) fail "R02 the queue was not empty: $out" ;; esac
+pass "R02 ended_unreported on a live pane is never raised: the witness cannot prove it settled, and a moving one is vetoed"
 
 # R03 — done_status=done is completion evidence even when delivery and disk lost.
 r3="$TMP/r3"; mkdir -p "$r3"
@@ -130,7 +124,7 @@ pass "R04 only a delivered pending reply older than the threshold is raised"
 
 # The safety boundary is command-level, not prose: every observed herdr/RPC call
 # must be a read used by agent inspection or state-witness.
-bad_calls="$(grep -Ev '^herdr (agent get|pane process-info)|^rpc call pane.read' "$TMP/state/calls" 2>/dev/null || true)"
+bad_calls="$(grep -Ev '^herdr (agent get)|^rpc call pane.read' "$TMP/state/calls" 2>/dev/null || true)"
 [ -z "$bad_calls" ] || fail "R05 reconciler used a pane-mutating route: $bad_calls"
 pass "R05 reconciliation sends no prompt, key, or pane mutation; its observed calls are reads only"
 

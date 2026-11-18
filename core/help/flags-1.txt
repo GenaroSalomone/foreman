@@ -1,16 +1,10 @@
 FLAGS
     --brief <path>     the file the executor is given. Without it, it gets a tab
                        and nothing to do.
-    --sdd <mode>       none (the default) | speckit, opt-in where its speckit-*
-                       skills are on disk and its flow is wanted.
-    --agent <vendor>   claude | opencode | codex | pi. Defaults per lane; see above.
+    --sdd none         the only mode, and the default: accepted and ignored
+                       (the Spec Kit flow was removed; --sdd speckit dies).
+    --agent <vendor>   claude | pi. Defaults per lane; see above.
     --model <m>        claude: an alias (opus, sonnet, haiku, fable) or claude-*.
-                       opencode: provider/model, e.g. openai/<model>.
-                       codex: a bare id, e.g. <model> (no provider/ prefix).
-                       A sonnet or haiku ORCHESTRATOR is refused before anything
-                       is built under --sdd speckit: the phase agents pin
-                       their own models, so --model sets only the judgment
-                       above them. Use --model opus, or drop --sdd speckit.
     --model-why <s>    name the OPEN DECISION this task has to work out. The
                        manifest suggests sonnet by default and opus only where
                        one is declared, and prints the model beside the
@@ -24,13 +18,9 @@ FLAGS
                        Same as `requested_by:` in a brief, and wins over it.
                        Required or warned per lane (projects.json).
     --effort <e>       how hard the vendor should think, in that vendor's own
-                       form: claude --effort, codex -c
-                       model_reasoning_effort=, pi --thinking, and opencode an
-                       OPENCODE_CONFIG_CONTENT overlay on its primary agent's
-                       reasoningEffort (no CLI flag of its own), read back as
-                       effort_applied. Levels: low|medium|high|xhigh|max, plus
-                       ultra for codex and off|minimal for pi (pi never takes
-                       ultra; with none given pi sets low, and off for explore).
+                       form: claude --effort, pi --thinking. Levels:
+                       low|medium|high|xhigh|max, plus off|minimal for pi
+                       (with none given pi sets low, and off for explore).
                        A level travels only here, in the same words on every
                        vendor: a `:<level>` written inside a model id is
                        refused, naming the --effort to use instead.
@@ -39,5 +29,5 @@ FLAGS
                        none (CLAUDE_CODE_SUBAGENT_MODEL). Lane default:
                        `subagent_model` in projects.json, `inherit` when absent.
                        An agent that pins its own `model:` keeps it. Claude
-                       Code only: opencode and codex are NOT APPLIED. A live
+                       Code only: pi is NOT APPLIED. A live
                        pane keeps the one it launched with.

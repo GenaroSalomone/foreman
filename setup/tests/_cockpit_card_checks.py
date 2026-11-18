@@ -227,7 +227,7 @@ def model_without_diagnostic():
     that sentence; a model that was read comes through as written."""
     w = cw.World(tmpdir())
     w.executor(task="unread", model="none \u2014 no /x/projects/*/abc.jsonl \u2014 no assistant turn carried a model within 3s")
-    w.executor(task="noreader", model="n/a \u2014 hw has no model reader for vendor codex")
+    w.executor(task="noreader", model="n/a \u2014 hw has no model reader for vendor gemini")
     w.executor(task="read", model="claude-opus-5-5")
     w.publish()
     s = state(w)

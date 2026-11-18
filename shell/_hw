@@ -61,11 +61,11 @@ _hw() {
       ;;
     *)
       case ${words[CURRENT-1]} in
-        --agent)  _values 'agent' claude opencode codex ;;
+        --agent)  _values 'agent' claude pi ;;
         --effort) _values 'effort' low medium high xhigh max ultra ;;
         --model)  _values 'model' opus sonnet haiku fable ;;
         --brief)  _files -g '*.md' ;;
-        --sdd)    _values 'sdd' speckit none ;;
+        --sdd)    _values 'sdd' none ;;
         *)        _values 'option' '--agent' '--model' '--effort' '--here' '--no-db' '--brief' '--sdd' '--no-brief' '--no-handle-check' '--drop-db' ;;
       esac
       ;;

@@ -925,7 +925,7 @@ func (d *doneRun) brainLeakAtClose(proj, wt, branch string) {
 		return
 	}
 	gd := d.root + "/setup/guards"
-	if !(isFile(gd+"/brain-guard/hooks/hooks.json") && isFile(gd+"/brain-guard.opencode.json") && isFile(gd+"/deny-brain-writes.js") && isFile(gd+"/deny_brain_writes.py")) {
+	if !brainGuardFilesIn(gd) {
 		a.warn("brain leak check skipped: no brain guard under " + gd)
 		return
 	}

@@ -303,6 +303,14 @@ func (a *app) nextReviewGate(brief string) {
 	}
 }
 
+// nextSddGate is the check the launch makes on a brief's `sdd:`: the Spec Kit flow was removed (2026-11-16), so a brief that
+// still asks for it refuses the re-task before anything is sent. Any other value is read as none, as the launch reads it.
+func (a *app) nextSddGate(brief string) {
+	if nextDecl(nextBriefDeclares(brief), "sdd") == "speckit" {
+		a.die(speckitRemoved("brief declares sdd: speckit", "Nothing was sent and the task counter did not move. Declare sdd: none (or drop the key)."))
+	}
+}
+
 // nextIndependentReview is independentReview for a re-task: a build owes the independent review unless `review: none` + `review-skip:`.
 func nextIndependentReview(brief string) bool {
 	return reviewOwedBy(nextIsBuild(brief), nextFmValue("review", brief) != "", nextReviewMode(brief), nextFmValue("review-skip", brief))
@@ -408,7 +416,7 @@ func (a *app) nextCheckBriefEffort(brief, vendor, pane, running string) {
 // (absent when the brief asked for none, "NOT APPLIED — …" when the vendor loads none); only claude and pi load plugins, so
 // any other vendor is not held to it. A check, never a source. Nothing is sent and the counter does not move.
 func (a *app) nextCheckBriefPlugins(brief, vendor, pane, rundir string) {
-	if vendor != "claude" && vendor != "pi" { // # MUTATION-ANCHOR: 1150-G16
+	if vendor != "claude" && vendor != "pi" { // a run recorded with another vendor predates the removal: not held to it, and no new dispatch can write one
 		return
 	}
 	var loaded []string
@@ -429,24 +437,4 @@ func (a *app) nextCheckBriefPlugins(brief, vendor, pane, rundir string) {
 		have = strings.Join(loaded, ", ")
 	}
 	a.die("the re-task brief declares plugins " + strings.Join(missing, ", ") + " (plugins: or review:), but " + pane + " was launched with " + have + ", and a plugin is loaded when a session starts (" + map[string]string{"claude": "--plugin-dir", "pi": "-e"}[vendor] + "): hw next cannot add one to a live pane. NOTHING was sent and the counter did NOT move. Dispatch a fresh executor, which loads them: hw <project> <task> --fresh. Or change the brief if the brief is what is wrong — an executor that is not given a declared review plugin must not close on a review-skip.")
-}
-
-// nextPluginsReceipt records, for a re-task onto a vendor that loads no plugin (codex, opencode), the same `plugins` row its launch
-// writes when the brief declares some: "NOT APPLIED — …". Without it a pane launched with no plugins has no row, done-invoker reads
-// that as a pane that WAS meant to load them (the measured case) and refuses the review-skip that is the only exit a vendor with no
-// plugin has, while a fresh dispatch of the same brief is let close (Judgment Day, both judges, 2026-11-10). claude and pi write nothing:
-// their row is the launch's, and nextCheckBriefPlugins already held the re-task to it.
-func (a *app) nextPluginsReceipt(rundir, brief, vendor string) {
-	declared := nextPluginsDeclared(brief)
-	if vendor == "claude" || vendor == "pi" || len(declared) == 0 { // # MUTATION-ANCHOR: 1150-G21
-		return
-	}
-	// The vendor is herdr's live detection, an input: empty or unrecognised for a pane that may really be claude or pi. A pane whose
-	// launch row says plugins WERE applied, or an unnamed vendor, never gets the row that would shadow it as the LAST one every reader
-	// takes (done-invoker's exemption, hw revive's --plugin-dir) — Judgment Day round 2, both judges.
-	if prior, rc := reviveReceiptLast(rundir+"/receipt.jsonl", "plugins"); vendor == "" || (rc == 0 && prior != "" && !strings.HasPrefix(prior, "NOT APPLIED")) { // # MUTATION-ANCHOR: 1150-G22
-		return
-	}
-	a.receiptInto(rundir, "plugins", "NOT APPLIED — "+orDefaultStr(vendor, "unknown")+" does not load plugins (asked: "+strings.Join(declared, ",")+")",
-		"brief plugins: and review: in "+brief+" at hw next; only claude (--plugin-dir) and pi (-e) load plugins")
 }

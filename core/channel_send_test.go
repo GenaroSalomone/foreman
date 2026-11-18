@@ -1,7 +1,7 @@
 package main
 
 // In-process tests of channel-send (channel_send*.go): the cases the bash subjects cover (setup/tests/05, 26, 41,
-// 42, 66, 101, 111, 135) over a world of stub programs (herdr, herdr-rpc, holdfacts) and fake OpenCode endpoints.
+// 42, 66, 101, 111, 135) over a world of stub programs (herdr, herdr-rpc, holdfacts).
 // A mutant of a line the source marks as a mutation anchor must turn one of these red; setup/tests/1016 builds
 // each mutant and says which test killed it.
 
@@ -9,8 +9,6 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,6 +51,7 @@ esac
 exit 0
 `)
 	script("herdr-rpc", `printf 'rpc %s\n' "$*" >> "$STUB_DIR/calls"
+[ -z "$STUB_RPC_MOVING" ] || [ "$2" != pane.read ] || { n=$(cat "$STUB_DIR/moving" 2>/dev/null || echo 0); echo $((n+1)) > "$STUB_DIR/moving"; printf '{"read":{"text":"frame %s"}}\n' "$n"; exit 0; }
 [ "$1" != call ] || { [ ! -f "$STUB_DIR/rpc-call-out" ] || cat "$STUB_DIR/rpc-call-out"; exit "${STUB_RPC_CALL_RC:-0}"; }
 exit "${STUB_RPC_RC:-0}"
 `)
@@ -62,7 +61,6 @@ n=$(cat "$STUB_DIR/hold-undelivered" 2>/dev/null || echo 0)
 [ -z "$STUB_HOLD_ERR" ] || { echo "$STUB_HOLD_ERR"; exit 1; }
 exit 0
 `)
-	os.WriteFile(w.bin+"/state-witness.sh", []byte("# a stub: its presence is the fact\n"), 0o644)
 	t.Setenv("PATH", w.bin+":"+os.Getenv("PATH"))
 	t.Setenv("STUB_DIR", w.stub)
 	t.Setenv("TMPDIR", dir+"/tmp")
@@ -73,7 +71,7 @@ exit 0
 	t.Setenv("WITNESS_SAMPLES", "2")
 	t.Setenv("WITNESS_INTERVAL_S", "0")
 	for _, k := range []string{"HW_INVOKER_WAIT_MS", "HW_AWAITING_CHILD_PROBE_MS", "HW_REPORT_LOCK_WAIT_S", "STUB_RPC_RC", "STUB_PROMPT_RC",
-		"HW_LOCK_DIR", "HW_PROJECTS_JSON", "HW_BRAIN_ROOT", "HW_CORE", "HW_IMPL", "HW_IMPL_CHANNEL_SEND", "STUB_HOLD_ERR", "STUB_PROMPT_SLEEP", "STUB_RPC_CALL_RC", "STUB_SENDTEXT_RC", "STUB_SENDKEYS_RC", "HW_OPERATOR", "CLAUDE_PANE", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HC_TERMINAL_ID", "HERDR_APP_HOME"} {
+		"HW_LOCK_DIR", "HW_PROJECTS_JSON", "HW_BRAIN_ROOT", "HW_CORE", "HW_IMPL", "HW_IMPL_CHANNEL_SEND", "STUB_HOLD_ERR", "STUB_PROMPT_SLEEP", "STUB_RPC_CALL_RC", "STUB_RPC_MOVING", "STUB_SENDTEXT_RC", "STUB_SENDKEYS_RC", "HW_OPERATOR", "CLAUDE_PANE", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HC_TERMINAL_ID", "HERDR_APP_HOME"} {
 		t.Setenv(k, "")
 	}
 	return w
@@ -209,7 +207,7 @@ func TestChannelSendExitGuard(t *testing.T) {
 	ok := w.cs("--help")
 	ok.lacks(t, "MY EXIT CODE")
 	// every code has its own meaning
-	for rc, want := range map[int]string{4: "DELIVERED and provably in the receiver", 5: "ADMITTED, persistence UNCONFIRMED", 6: "RECEIVER UNUSABLE", 9: "a failure, not a delivery"} {
+	for rc, want := range map[int]string{4: "DELIVERED and provably in the receiver", 5: "ADMITTED, persistence UNCONFIRMED", 9: "a failure, not a delivery"} {
 		if !strings.Contains(csExitMeaning(rc), want) {
 			t.Errorf("meaning of %d: %q", rc, csExitMeaning(rc))
 		}
@@ -539,7 +537,7 @@ func TestChannelSendHeldReplyFallsBackToRawInput(t *testing.T) {
 	h.has(t, "--reply-hold REFUSED before delivery: hold is for another route. NOTHING was sent.")
 }
 
-// a blocked pane gives an unproved report or ruling NOTHING; a plain message asks the receiver's own endpoint.
+// a blocked pane gives an unproved report or ruling NOTHING; a plain message is refused too.
 func TestChannelSendBlockedPaneWithoutProof(t *testing.T) {
 	w := newCSWorld(t)
 	w.agent("idle", nil)
@@ -553,34 +551,13 @@ func TestChannelSendBlockedPaneWithoutProof(t *testing.T) {
 			t.Errorf("an unproved report reached the raw pane: %s", w.calls())
 		}
 	}
-	// a plain message with no readable endpoint refuses rather than guessing
+	// a plain message refuses rather than guessing: nothing can read whether a prompt is pending
 	p := w.cs("herdr", "wB:p1", "-", "hello")
 	p.rcIs(t, 1)
-	p.has(t, "and its endpoint could not be read to confirm whether a prompt is pending")
+	p.has(t, "and nothing can read whether a prompt is pending there")
 	if strings.Contains(w.calls(), "send-text") {
 		t.Errorf("a plain message reached the raw pane with nothing proving it safe: %s", w.calls())
 	}
-}
-
-// a plain message to a pane whose OWN endpoint says nothing is pending is let through raw.
-func TestChannelSendBlockedPlainMessageEndpointSaysClear(t *testing.T) {
-	srv := fakeOpenCode(t, &ocFake{questions: "[]", permissions: "[]"})
-	w := newCSWorld(t)
-	w.agent("idle", nil)
-	w.set("STUB_PROMPT_RC", "1")
-	os.WriteFile(w.stub+"/prompt-out", []byte(`{"error":{"code":"agent_blocked"}}`+"\n"), 0o644)
-	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
-	os.WriteFile(w.stub+"/process-info.json", []byte(`{"result":{"process_info":{"foreground_processes":[{"argv":["opencode","--port","`+port+`"]}]}}}`), 0o644)
-	r := w.cs("herdr", "wB:p1", "-", "hello")
-	r.rcIs(t, 0)
-	r.has(t, "but its own endpoint "+srv.URL+" confirms nothing is pending (/question 0, /permission 0)", "message submitted to wB:p1 through the blocked-pane fallback after agent_blocked (its own endpoint confirmed nothing pending).")
-	// with a question outstanding it refuses
-	srv2 := fakeOpenCode(t, &ocFake{questions: `[{"id":"q1"}]`, permissions: "[]"})
-	port2 := strings.TrimPrefix(srv2.URL, "http://127.0.0.1:")
-	os.WriteFile(w.stub+"/process-info.json", []byte(`{"result":{"process_info":{"foreground_processes":[{"argv":["opencode","--port","`+port2+`"]}]}}}`), 0o644)
-	q := w.cs("herdr", "wB:p1", "-", "hello")
-	q.rcIs(t, 1)
-	q.has(t, "CONFIRMS a real prompt is outstanding (/question 1, /permission 0). NOTHING was sent; raw pane input would overwrite a real human prompt.")
 }
 
 // ── --report-state: the proof that licenses a blocked-pane report (42) ──────
@@ -747,400 +724,35 @@ func TestChannelSendClaudeRoute(t *testing.T) {
 	nl.has(t, "claude session lookup returned 0 matches\n", "channel-send: claude session lookup failed\n")
 }
 
-func TestChannelSendCodexRoute(t *testing.T) {
+// OLD: the claude route read a failed `--mark` as an empty watermark ("none"), so an EARLIER send of the same bytes in the
+// transcript counted as PROVEN delivery. NEW: no watermark, no send, no false receipt (the same rule as the hc route).
+func TestChannelSendClaudeFailedMarkSendsNothing(t *testing.T) {
 	w := newCSWorld(t)
-	w.cs("--ruling", "codex", "t1", "/sock", "m").has(t, "--ruling REFUSED before delivery: the codex route exposes no receiver turn-state proof")
-	w.cs("--id", "k", "codex", "t1", "/sock", "m").has(t, "codex does not yet expose idempotent caller-supplied delivery ids")
-	w.cs("--require", "processed", "codex", "t1", "/sock", "m").has(t, "codex does not yet expose processed receipt proof")
-	w.cs("codex", "", "/sock", "m").has(t, "codex target thread is empty")
-	// the queue command is codex's own, with CODEX_HOME out of its environment
-	os.WriteFile(w.bin+"/codex", []byte("#!/bin/bash\nprintf '%s|' \"$@\" >> \"$STUB_DIR/codex\"; printf 'home=%s\\n' \"${CODEX_HOME-unset}\" >> \"$STUB_DIR/codex\"; echo noise; exit \"${STUB_CODEX_RC:-0}\"\n"), 0o755)
-	w.set("CODEX_HOME", "/somewhere")
-	r := w.cs("codex", "thr", "/sock", "go on")
-	r.rcIs(t, 0)
-	if r.out != "" {
-		t.Errorf("codex's stdout leaked: %q", r.out)
+	const sid, msg = "ses-1", "the payload"
+	os.WriteFile(w.stub+"/agent-list.json", []byte(`{"result":{"agents":[{"agent":"claude","agent_session":{"value":"`+sid+`"},"pane_id":"wC:p4"}]}}`), 0o644)
+	w.agent("idle", nil)
+	w.set("HOME", w.dir)
+	os.MkdirAll(w.dir+"/.claude/sessions", 0o755)
+	os.WriteFile(w.dir+"/.claude/sessions/1.json", []byte(fmt.Sprintf(`{"sessionId":"%s","name":"n","pid":%d}`, sid, os.Getpid())), 0o644)
+	os.MkdirAll(w.dir+"/.claude/projects/p", 0o755)
+	os.WriteFile(w.dir+"/.claude/projects/p/"+sid+".jsonl", []byte(`{"type":"queue-operation","operation":"enqueue","content":"`+msg+`"}`+"\n"), 0o644)
+	real, err := os.ReadFile("../bin/claude-delivery-receipt.py")
+	if err != nil {
+		t.Fatal(err)
 	}
-	b, _ := os.ReadFile(w.stub + "/codex")
-	if string(b) != "queue|--remote|unix:///sock|--thread|thr|--message|go on|home=unset\n" {
-		t.Errorf("codex was run as %q", b)
-	}
-	w.set("STUB_CODEX_RC", "7")
-	w.cs("codex", "thr", "/sock", "m").rcIs(t, 7)
-}
-
-// ── the OpenCode routes (26, 05, 41) ────────────────────────────────────────
-
-// ocFake is an OpenCode endpoint with just the routes channel-send touches.
-type ocFake struct {
-	mu          sync.Mutex
-	config      string // GET /config
-	agents      string // GET /agent
-	path        string // GET /path
-	status      string // GET /session/status
-	questions   string // GET /question
-	permissions string // GET /permission
-	posts       []string
-	stored      map[string]string // message id -> the stored message JSON (what GET /session/:id/message/:mid answers)
-	replyAfter  bool              // an assistant reply parented to the posted message exists
-	replyError  string            // its error, JSON
-	persist     bool              // GET of the posted message finds it
-	withhold    bool              // POST is accepted but the message never shows up
-	postStatus  int
-	missing     bool // GET /session/:id answers 404
-}
-
-func fakeOpenCode(t *testing.T, f *ocFake) *httptest.Server {
-	t.Helper()
-	if f.questions == "" {
-		f.questions = "[]"
-	}
-	if f.permissions == "" {
-		f.permissions = "[]"
-	}
-	if f.status == "" {
-		f.status = "{}"
-	}
-	if f.stored == nil {
-		f.stored = map[string]string{}
-	}
-	if f.postStatus == 0 {
-		f.postStatus = 204
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		write := func(code int, body string) { w.WriteHeader(code); fmt.Fprint(w, body) }
-		p := r.URL.Path
-		switch {
-		case p == "/config" && f.config != "":
-			write(200, f.config)
-		case p == "/agent" && f.agents != "":
-			write(200, f.agents)
-		case p == "/agent":
-			write(200, "[]")
-		case p == "/path" && f.path != "":
-			write(200, f.path)
-		case p == "/question":
-			write(200, f.questions)
-		case p == "/permission":
-			write(200, f.permissions)
-		case p == "/session/status":
-			write(200, f.status)
-		case strings.HasSuffix(p, "/prompt_async") && r.Method == "POST":
-			b := new(bytes.Buffer)
-			b.ReadFrom(r.Body)
-			f.posts = append(f.posts, b.String())
-			if f.postStatus == 204 && !f.withhold {
-				var m struct {
-					MessageID string `json:"messageID"`
-					Parts     []struct{ Text string }
-				}
-				json.Unmarshal(b.Bytes(), &m)
-				if f.persist || true {
-					f.stored[m.MessageID] = `{"info":{"id":"` + m.MessageID + `","role":"user"},"parts":[{"type":"text","text":` + jsonQ(m.Parts[0].Text) + `}]}`
-					f.persist = true
-				}
-			}
-			write(f.postStatus, "")
-		case strings.Contains(p, "/message/"):
-			id := p[strings.LastIndex(p, "/")+1:]
-			if s, ok := f.stored[id]; ok {
-				write(200, s)
-			} else {
-				write(404, `{"error":"not found"}`)
-			}
-		case strings.HasSuffix(p, "/message"):
-			var parts []string
-			for id := range f.stored {
-				parts = append(parts, `{"info":{"id":"x","role":"user"}}`)
-				if f.replyAfter {
-					errp := ""
-					if f.replyError != "" {
-						errp = `,"error":` + f.replyError
-					}
-					parts = append(parts, `{"info":{"role":"assistant","parentID":"`+id+`","time":{"completed":5}`+errp+`}}`)
-				}
-			}
-			write(200, "["+strings.Join(parts, ",")+"]")
-		case strings.HasPrefix(p, "/session/"):
-			if f.missing {
-				write(404, `{"error":"no session"}`)
-			} else {
-				write(200, `{"id":"ses_1"}`)
-			}
-		default:
-			write(404, "")
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func jsonQ(s string) string { b, _ := json.Marshal(s); return string(b) }
-
-func TestChannelSendOpenCodeDelivers(t *testing.T) {
-	w := newCSWorld(t)
-	f := &ocFake{}
-	srv := fakeOpenCode(t, f)
-	r := w.cs("opencode", "ses_1", srv.URL, "hello there")
-	r.rcIs(t, 0)
-	if len(f.posts) != 1 || !strings.Contains(f.posts[0], `"text":"hello there"`) || !strings.Contains(f.posts[0], `"messageID":"msg_channel_`) {
-		t.Errorf("posts: %v", f.posts)
-	}
-	// the same --id twice is one message, and the id is derived from the session and the key
-	f2 := &ocFake{}
-	s2 := fakeOpenCode(t, f2)
-	a := w.cs("--id", "k-1", "opencode", "ses_1", s2.URL, "hello")
-	a.rcIs(t, 0)
-	b := w.cs("--id", "k-1", "opencode", "ses_1", s2.URL, "hello")
-	b.rcIs(t, 0)
-	if len(f2.posts) != 1 {
-		t.Errorf("an idempotent resend posted again: %v", f2.posts)
-	}
-	if !strings.Contains(f2.posts[0], `"messageID":"msg_channel_`+"00") && false {
-		t.Skip()
-	}
-	// the id exists with other bytes: refused
-	c := w.cs("--id", "k-1", "opencode", "ses_1", s2.URL, "different")
-	c.rcIs(t, 1)
-	c.has(t, "opencode delivery failed at idempotency lookup: msg_channel_", "already exists with different message bytes")
-	// the endpoint and the target are validated before anything is sent
-	w.cs("opencode", "", srv.URL, "m").has(t, "opencode target session is empty")
-	w.cs("opencode", "ses_1", "ftp://x", "m").has(t, "invalid opencode endpoint: ftp://x")
-	// nobody is listening: exit 1, in node's words
-	dead := w.cs("opencode", "ses_1", "http://127.0.0.1:1", "m")
-	dead.rcIs(t, 1)
-	dead.has(t, "opencode delivery failed at session-identity: fetch failed\n")
-}
-
-// 05-M01/M02: a processed receipt needs a completed assistant reply PARENTED to the message and without an error.
-func TestChannelSendOpenCodeProcessedReceipt(t *testing.T) {
-	w := newCSWorld(t)
-	w.set("CHANNEL_DELIVERY_TIMEOUT_MS", "1500")
-	ok := &ocFake{replyAfter: true}
-	r := w.cs("--require", "processed", "opencode", "ses_1", fakeOpenCode(t, ok).URL, "m")
-	r.rcIs(t, 0)
-	none := &ocFake{}
-	n := w.cs("--require", "processed", "opencode", "ses_1", fakeOpenCode(t, none).URL, "m")
-	n.rcIs(t, 4)
-	n.has(t, "IS in the receiver's session — admitted and persisted — but no completed assistant response was causally parented to it within 1500ms. The delivery succeeded; the turn did not.")
-	bad := &ocFake{replyAfter: true, replyError: `{"name":"UnknownError"}`}
-	e := w.cs("--require", "processed", "opencode", "ses_1", fakeOpenCode(t, bad).URL, "m")
-	e.rcIs(t, 4)
-}
-
-// 26: a receiver whose default agent does not resolve is exit 6, before any POST.
-func TestChannelSendOpenCodePreflight(t *testing.T) {
-	w := newCSWorld(t)
-	dead := &ocFake{config: `{"default_agent":"ghost","agent":{"ghost":{"disable":true}}}`, agents: `[{"name":"build"},{"name":"plan"}]`, path: `{"config":"/cfg/x/opencode","directory":"/w/y"}`}
-	r := w.cs("opencode", "ses_1", fakeOpenCode(t, dead).URL, "m")
-	r.rcIs(t, 6)
-	r.has(t, `opencode delivery failed at receiver preflight: the receiver at http://127.0.0.1:`, `selects default agent "ghost", which is not among the 2 agents the endpoint actually resolves (GET /agent), because that scope also sets "disable": true on it.`,
-		`dies with 'default agent "ghost" not found' before the message is persisted, so NO POST was sent and nothing landed`, "\n  the config scopes that have to agree:\n    global : /cfg/x/opencode/opencode.json\n    project: /w/y/opencode.json", "then RESTART the receiver — the merged config is read at startup.")
-	if len(dead.posts) != 0 {
-		t.Errorf("a POST was sent to a dead receiver: %v", dead.posts)
-	}
-	for _, c := range []struct {
-		name string
-		f    *ocFake
-		why  string
-	}{
-		{"declared but unresolved", &ocFake{config: `{"default_agent":"ghost","agent":{"ghost":{"model":"x"}}}`, agents: `[{"name":"build"}]`}, "it is declared but did not survive config resolution"},
-		{"not declared", &ocFake{config: `{"default_agent":"ghost"}`, agents: `[{"name":"build"}]`}, "no merged config scope declares it at all"},
-	} {
-		x := w.cs("opencode", "ses_1", fakeOpenCode(t, c.f).URL, "m")
-		x.rcIs(t, 6)
-		x.has(t, "because "+c.why+".")
-	}
-	// transparent when it cannot tell: the delivery goes ahead
-	for name, f := range map[string]*ocFake{
-		"no default":       {config: `{}`, agents: `[{"name":"build"}]`},
-		"default resolves": {config: `{"default_agent":"build"}`, agents: `[{"name":"build"}]`},
-		"no agents named":  {config: `{"default_agent":"ghost"}`, agents: `[]`},
-		"not an array":     {config: `{"default_agent":"ghost"}`, agents: `{"build":1}`},
-		"blank default":    {config: `{"default_agent":"  "}`, agents: `[{"name":"build"}]`},
-		"unparseable":      {config: `not json`, agents: `[{"name":"build"}]`},
-	} {
-		if r := w.cs("opencode", "ses_1", fakeOpenCode(t, f).URL, "m"); r.rc != 0 {
-			t.Errorf("%s: a preflight that could not tell stopped the delivery (exit %d): %s", name, r.rc, r.err)
-		}
-	}
-	// 26-M06: a 204 whose message never shows up is exit 5 — it may have landed
-	w.set("CHANNEL_PERSISTENCE_TIMEOUT_MS", "300")
-	lost := &ocFake{withhold: true}
-	l := w.cs("opencode", "ses_1", fakeOpenCode(t, lost).URL, "m")
-	l.rcIs(t, 5)
-	l.has(t, "HTTP 204 was ACCEPTED by the endpoint, but polling never confirmed msg_channel_", "landed within 300ms. The message may already be in the receiver's session — this is not a proven non-delivery. Retrying without --id may duplicate it.")
-	// a refused admission is exit 1, with the body
-	refused := &ocFake{postStatus: 500}
-	x := w.cs("opencode", "ses_1", fakeOpenCode(t, refused).URL, "m")
-	x.rcIs(t, 1)
-	x.has(t, "opencode delivery failed at HTTP admission: HTTP 500")
-}
-
-// 41-M03: a ruling is refused before the POST when the receiver is busy or blocked.
-func TestChannelSendOpenCodeRulingRefusedBeforePOST(t *testing.T) {
-	w := newCSWorld(t)
-	w.set("CLAUDE_PANE", "wO:p2")
-	busy := &ocFake{status: `{"ses_1":{"type":"busy"}}`}
-	r := w.cs("--ruling", "opencode", "ses_1", fakeOpenCode(t, busy).URL, "fix")
+	os.WriteFile(w.bin+"/claude-delivery-receipt-real.py", real, 0o755)
+	os.WriteFile(w.bin+"/claude-delivery-receipt.py", []byte("import os, sys\nif '--mark' in sys.argv[1:]:\n    sys.exit(1)\nsys.argv[0] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'claude-delivery-receipt-real.py')\nexec(compile(open(sys.argv[0]).read(), sys.argv[0], 'exec'))\n"), 0o755)
+	os.WriteFile(w.bin+"/claude", []byte("#!/bin/bash\necho sent >> \"$STUB_DIR/claude-ran\"\necho CHANNEL_SENT\n"), 0o755)
+	w.set("HW_CLAUDE_LAND_MS", "500")
+	r := w.cs("claude", sid, "-", msg)
 	r.rcIs(t, 1)
-	r.has(t, "--ruling REFUSED before delivery: receiver is busy, not at a clean idle boundary.", "`hw ruling wO:p2 \"<the correction>\"` queues it", "DO NOT run hw done to reach exit 3.")
-	if len(busy.posts) != 0 {
-		t.Errorf("a refused ruling was posted: %v", busy.posts)
+	r.has(t, "transcript watermark could not be taken", "NOTHING was sent")
+	if _, err := os.Stat(w.stub + "/claude-ran"); err == nil {
+		t.Error("the sender ran although no watermark could be taken")
 	}
-	q := &ocFake{questions: `[{"id":"q9","sessionID":"ses_1"}]`}
-	rq := w.cs("--ruling", "opencode", "ses_1", fakeOpenCode(t, q).URL, "fix")
-	rq.rcIs(t, 1)
-	rq.has(t, "receiver is blocked by question q9")
-	// a generic redirect into a pending question is its own refusal, and a busy one goes through (prompt_async queues)
-	g := w.cs("opencode", "ses_1", fakeOpenCode(t, &ocFake{questions: `[{"id":"q9","sessionID":"ses_1"}]`}).URL, "go")
-	g.rcIs(t, 1)
-	g.has(t, "opencode delivery failed at process-capable activation: receiver has pending question q9; no text was injected")
-	bw := w.cs("opencode", "ses_1", fakeOpenCode(t, &ocFake{status: `{"ses_1":{"type":"retry"}}`}).URL, "go")
-	bw.rcIs(t, 0)
-	// an unknown status object is refused rather than guessed
-	us := w.cs("opencode", "ses_1", fakeOpenCode(t, &ocFake{status: `{"ses_1":{"type":"idle"}}`}).URL, "go")
-	us.rcIs(t, 1)
-	us.has(t, `unsupported receiver status {"type":"idle"}`)
-	// an idle receiver takes the ruling
-	idle := &ocFake{}
-	ok := w.cs("--ruling", "opencode", "ses_1", fakeOpenCode(t, idle).URL, "fix")
-	ok.rcIs(t, 0)
-}
-
-// ── opencode-tui: the first-delivery route ──────────────────────────────────
-
-type tuiFake struct {
-	mu        sync.Mutex
-	dir       string
-	status    string
-	questions string
-	calls     []string
-	text      string
-	submitted bool
-	submitAns string
-	noLand    bool
-	hang      bool
-}
-
-func fakeTUI(t *testing.T, f *tuiFake) *httptest.Server {
-	t.Helper()
-	if f.status == "" {
-		f.status = "{}"
-	}
-	if f.questions == "" {
-		f.questions = "[]"
-	}
-	if f.submitAns == "" {
-		f.submitAns = "true"
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		f.mu.Lock()
-		defer f.mu.Unlock()
-		f.calls = append(f.calls, r.Method+" "+r.URL.Path)
-		switch r.URL.Path {
-		case "/agent":
-			fmt.Fprint(w, "[]")
-		case "/session":
-			fmt.Fprintf(w, `[{"id":"ses_9","directory":%s}]`, jsonQ(f.dir))
-		case "/session/status":
-			fmt.Fprint(w, f.status)
-		case "/question":
-			fmt.Fprint(w, f.questions)
-		case "/permission":
-			fmt.Fprint(w, "[]")
-		case "/tui/clear-prompt":
-			f.text = ""
-			fmt.Fprint(w, "true")
-		case "/tui/append-prompt":
-			var b struct{ Text string }
-			json.NewDecoder(r.Body).Decode(&b)
-			f.text += b.Text
-			fmt.Fprint(w, "true")
-		case "/tui/submit-prompt":
-			f.submitted = true
-			fmt.Fprint(w, f.submitAns)
-		case "/session/ses_9/message":
-			if f.submitted && !f.noLand {
-				fmt.Fprintf(w, `[{"info":{"role":"user","time":{"created":1}},"parts":[{"type":"text","text":%s}]},{"info":{"role":"assistant","time":{"created":2,"completed":3}}}]`, jsonQ(f.text))
-			} else {
-				fmt.Fprint(w, "[]")
-			}
-		default:
-			w.WriteHeader(404)
-		}
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
-func TestChannelSendOpenCodeTUI(t *testing.T) {
-	w := newCSWorld(t)
-	dir := w.dir + "/work"
-	f := &tuiFake{dir: dir}
-	srv := fakeTUI(t, f)
-	r := w.cs("opencode-tui", dir, srv.URL, "the brief")
-	r.rcIs(t, 0)
-	r.has(t, "CHANNEL_SESSION_ID=ses_9\n")
-	if f.text != "the brief" {
-		t.Errorf("typed %q", f.text)
-	}
-	order := strings.Join(f.calls, "|")
-	if !(strings.Index(order, "POST /tui/clear-prompt") < strings.Index(order, "POST /tui/append-prompt") && strings.Index(order, "POST /tui/append-prompt") < strings.Index(order, "POST /tui/submit-prompt")) {
-		t.Errorf("clear, append, submit out of order: %s", order)
-	}
-	// processed: the turn must complete
-	p := w.cs("--require", "processed", "opencode-tui", dir, srv.URL, "the brief")
-	p.rcIs(t, 0)
-	// refusals before anything is typed
-	w.cs("opencode-tui", "rel", srv.URL, "m").has(t, "opencode-tui target must be the receiver's absolute working directory, not a session id (got: rel)")
-	w.cs("--ruling", "opencode-tui", dir, srv.URL, "m").has(t, "--ruling REFUSED: opencode-tui is the first-delivery route")
-	w.cs("opencode-tui", dir, srv.URL, "/clear").has(t, "the message begins with '/', which the TUI prompt reads as a slash command")
-	busy := &tuiFake{dir: dir, status: `{"ses_9":{"type":"busy"}}`}
-	b := w.cs("opencode-tui", dir, fakeTUI(t, busy).URL, "m")
-	b.rcIs(t, 1)
-	b.has(t, "opencode-tui delivery failed at receiver readiness: the receiver is mid-turn (ses_9).")
-	if busy.text != "" {
-		t.Error("something was typed into a busy receiver")
-	}
-	modal := &tuiFake{dir: dir, questions: `[{"sessionID":"ses_9"}]`}
-	m := w.cs("opencode-tui", dir, fakeTUI(t, modal).URL, "m")
-	m.rcIs(t, 1)
-	m.has(t, "the receiver has a pending question modal; text typed now answers the modal instead of opening a turn. NOTHING was typed.")
-	// a TUI that does not accept the submit
-	no := &tuiFake{dir: dir, submitAns: "false"}
-	n := w.cs("opencode-tui", dir, fakeTUI(t, no).URL, "m")
-	n.rcIs(t, 1)
-	n.has(t, "at prompt submit: POST /tui/submit-prompt answered false instead of true — the TUI did not accept it")
-	// accepted but never landed: exit 5
-	w.set("CHANNEL_TUI_LAND_TIMEOUT_MS", "500")
-	lost := &tuiFake{dir: dir, noLand: true}
-	l := w.cs("opencode-tui", dir, fakeTUI(t, lost).URL, "m")
-	l.rcIs(t, 5)
-	l.has(t, "no user message with these exact bytes appeared under "+dir+" within 500ms.")
-	// nothing listening: exit 1, "refused"; a hung receiver: exit 6
-	d := w.cs("opencode-tui", dir, "http://127.0.0.1:1", "m")
-	d.rcIs(t, 1)
-	d.has(t, "http://127.0.0.1:1 refused the connection (fetch failed). Nothing is listening yet")
-	hung := httptest.NewServer(http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) { <-r.Context().Done() }))
-	defer hung.Close()
-	w.set("CHANNEL_TUI_PROBE_TIMEOUT_MS", "200")
-	h := w.cs("opencode-tui", dir, hung.URL, "m")
-	h.rcIs(t, 6)
-	h.has(t, "accepted the connection and answered NOTHING within 200ms. The receiver is not slow, it is hung")
 }
 
 // ── pieces ──────────────────────────────────────────────────────────────────
-
-func TestChannelSendEncodeURIComponent(t *testing.T) {
-	for in, want := range map[string]string{"ses_1": "ses_1", "a b/c": "a%20b%2Fc", "/w/é": "%2Fw%2F%C3%A9", "a-_.!~*'()": "a-_.!~*'()"} {
-		if got := jsEncodeURIComponent(in); got != want {
-			t.Errorf("%q -> %q, want %q", in, got, want)
-		}
-	}
-}
 
 func TestChannelSendPySplitLines(t *testing.T) {
 	got := pySplitLines("a\nb\r\nc\rd\x0be\x0cf\u2028g\n")
@@ -1152,60 +764,28 @@ func TestChannelSendPySplitLines(t *testing.T) {
 	}
 }
 
-func opencodeProc(w *csWorld, srv *httptest.Server) {
-	port := strings.TrimPrefix(srv.URL, "http://127.0.0.1:")
-	os.WriteFile(w.stub+"/process-info.json", []byte(`{"result":{"process_info":{"foreground_processes":[{"argv":["opencode","--port","`+port+`"]}]}}}`), 0o644)
-}
-
-// the cross-check: a wait that cannot end is said so, with what was read, before the budget is spent.
-func TestChannelSendWitnessCrossCheck(t *testing.T) {
-	w := newCSWorld(t)
-	w.agent("working", nil)
-	w.set("STUB_RPC_RC", "2")
-	w.set("WITNESS_SLICE_MS", "100")
-	w.set("HW_INVOKER_WAIT_MS", "30000")
-	os.WriteFile(w.stub+"/rpc-call-out", []byte(`{"read":{"text":"a static screen"}}`), 0o644)
-	opencodeProc(w, fakeOpenCode(t, &ocFake{}))
-	r := w.cs("herdr", "wW:p1", "-", "x")
-	r.rcIs(t, 1)
-	r.has(t, "wW:p1 is NOT going to become idle: wW:p1 says agent_status=working, and every independent check CONTRADICTS it", "NOTHING was sent, so nothing was lost", "THE ONE ROUTE LEFT, and it is not a retry: raw keystrokes — `herdr pane send-text wW:p1")
-	if strings.Contains(w.calls(), "agent prompt") {
-		t.Errorf("a pane that cannot become idle was sent to: %s", w.calls())
-	}
-	// a prompt the receiver's own endpoint confirms is a person to answer
-	opencodeProc(w, fakeOpenCode(t, &ocFake{questions: `[{"id":"q"}]`}))
-	h := w.cs("herdr", "wW:p1", "-", "x")
-	h.rcIs(t, 1)
-	h.has(t, "wW:p1 is WAITING FOR A PERSON: wW:p1 says agent_status=working, and its own endpoint", "CONFIRMS a real prompt is outstanding (/question 1, /permission 0)", "Answer it on that pane (or have the operator answer it), then re-run this identical command.")
-	w.set("HW_OPERATOR", "Ada")
-	w.cs("herdr", "wW:p1", "-", "x").has(t, "(or have Ada answer it)")
-	// the claude route reads the same verdicts, and names the pane it waited on
-	os.WriteFile(w.stub+"/agent-list.json", []byte(`{"result":{"agents":[{"agent":"claude","agent_session":{"value":"ses-1"},"pane_id":"wW:p1"}]}}`), 0o644)
-	c := w.cs("claude", "ses-1", "-", "x")
-	c.rcIs(t, 1)
-	c.has(t, "wW:p1 (claude session ses-1) is WAITING FOR A PERSON:", "A larger budget, --allow-turn-ended and a raw keystroke route all fail the same way")
-}
-
-// a proved report to a blocked pane whose screen and endpoint both say "nothing is moving" is taken raw.
-func TestChannelSendProvedReportToAStaticBlockedPane(t *testing.T) {
+// a proved report to a blocked pane: a screen that moves is live and takes the raw fallback; a static one proves nothing, so
+// nothing is sent (no authority reads whether a prompt is outstanding).
+func TestChannelSendProvedReportToABlockedPane(t *testing.T) {
 	w := newCSWorld(t)
 	w.agent("blocked", nil)
 	run := reportWorld(t, w, "wP:p1")
 	w.set("STUB_PROMPT_RC", "1")
 	os.WriteFile(w.stub+"/prompt-out", []byte(`{"error":{"code":"agent_blocked"}}`+"\n"), 0o644)
 	os.WriteFile(w.stub+"/rpc-call-out", []byte(`{"read":{"text":"static"}}`), 0o644)
-	opencodeProc(w, fakeOpenCode(t, &ocFake{}))
+	h := w.cs("--report", "--report-state", run, "herdr", "wP:p1", "-", "done")
+	h.rcIs(t, 1)
+	h.has(t, "state-witness could not prove whether raw input is safe:", "its visible screen was STATIC", "NOTHING was sent")
+	if strings.Contains(w.calls(), "send-text") {
+		t.Errorf("a report reached the raw pane with nothing proving it safe: %s", w.calls())
+	}
+	w.set("STUB_RPC_MOVING", "1")
 	r := w.cs("--report", "--report-state", run, "herdr", "wP:p1", "-", "done")
 	r.rcIs(t, 0)
-	r.has(t, "state-witness classified wP:p1 as settled rather than awaiting-human:", "falling back ONLY for this dispatch-bound unreported run to raw pane input", "proved run report submitted to wP:p1 through the blocked-pane fallback after agent_blocked.")
+	r.has(t, "state-witness classified wP:p1 as live rather than waiting for a person:", "falling back ONLY for this dispatch-bound unreported run to raw pane input", "proved run report submitted to wP:p1 through the blocked-pane fallback after agent_blocked.")
 	if !strings.Contains(w.calls(), "pane send-text wP:p1 done\n") || !strings.Contains(w.calls(), "pane send-keys wP:p1 enter\n") {
 		t.Errorf("raw input was not sent:\n%s", w.calls())
 	}
-	// and with a question outstanding it is a person's, not ours to overwrite
-	opencodeProc(w, fakeOpenCode(t, &ocFake{questions: `[{"id":"q"}]`}))
-	h := w.cs("--report", "--report-state", run, "herdr", "wP:p1", "-", "done")
-	h.rcIs(t, 1)
-	h.has(t, "state-witness confirms it is WAITING FOR A PERSON:", "raw pane input would overwrite a real human prompt.")
 }
 
 // the send is marked in flight BEFORE herdr is asked, so a kill that lands while it runs says exit 5 (42-M04).
@@ -1291,7 +871,7 @@ func TestChannelSendTheWaiterDoesNotReportTheDeathOurOwnKillCaused(t *testing.T)
 }
 
 // 73: each non-zero status of channel-send names its exact meaning on the banner, never the fallback of an unknown code. The
-// label mutants 73-G01..G03 (core/channel_send.go, setup/tests/contract-hw/mutants-cs) turn the case of 4, 5 and 6 into an unknown code.
+// label mutants 73-G01..G02 (core/channel_send.go, setup/tests/contract-hw/mutants-cs) turn the case of 4 and 5 into an unknown code.
 func TestChannelSendExitMeanings(t *testing.T) {
 	for _, c := range []struct {
 		rc   int
@@ -1397,12 +977,14 @@ func TestHCDeliveryIsProvenFromTheReceiversTranscriptWhileItsTurnRuns(t *testing
 		old        bool   // an EARLIER send of the same bytes is already in the transcript
 		rc         int
 		note       string
+		badMark    bool // the watermark could not be taken (--mark fails)
 	}{
-		{"default account", ".claude", true, true, false, 0, "delivery PROVEN in receiver session " + sid},
-		{"a personal account", ".claude-personal", true, true, false, 0, "delivery PROVEN in receiver session " + sid},
-		{"an earlier send of the same bytes is not a receipt", ".claude", false, true, true, 5, "UNCONFIRMED"},
-		{"claude never queued it", ".claude", false, true, false, 5, "UNCONFIRMED"},
-		{"not a claude session: the counters decide, as they did", ".claude", true, false, false, 5, "UNCONFIRMED"},
+		{"default account", ".claude", true, true, false, 0, "delivery PROVEN in receiver session " + sid, false},
+		{"a personal account", ".claude-personal", true, true, false, 0, "delivery PROVEN in receiver session " + sid, false},
+		{"an earlier send of the same bytes is not a receipt", ".claude", false, true, true, 5, "UNCONFIRMED", false},
+		{"claude never queued it", ".claude", false, true, false, 5, "UNCONFIRMED", false},
+		{"not a claude session: the counters decide, as they did", ".claude", true, false, false, 5, "UNCONFIRMED", false},
+		{"an unreadable watermark is not an empty one: an earlier send of the same bytes must not count", ".claude", false, true, true, 5, "UNCONFIRMED", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newCSWorld(t)
@@ -1423,6 +1005,10 @@ func TestHCDeliveryIsProvenFromTheReceiversTranscriptWhileItsTurnRuns(t *testing
 			receipt, err := os.ReadFile("../bin/claude-delivery-receipt.py")
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.badMark { // the real script on every call but --mark, which fails
+				os.WriteFile(w.bin+"/claude-delivery-receipt-real.py", receipt, 0o755)
+				receipt = []byte("import os, sys\nif '--mark' in sys.argv[1:]:\n    sys.exit(1)\nsys.argv[0] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'claude-delivery-receipt-real.py')\nexec(compile(open(sys.argv[0]).read(), sys.argv[0], 'exec'))\n")
 			}
 			os.WriteFile(w.bin+"/claude-delivery-receipt.py", receipt, 0o755)
 			enq := ":"
@@ -1447,4 +1033,26 @@ exit 0
 			}
 		})
 	}
+}
+
+// R10: a --reply-hold after an earlier prompt retired the hold is delivered as a plain report; a missing hold with
+// no HOLD-RETIRED record (a wrong path) still refuses.
+func TestReplyHoldAfterRetirementDelivers(t *testing.T) {
+	w := newCSWorld(t)
+	w.agent("idle", nil)
+	w.set("STUB_HOLD_ERR", "holdfacts: no such hold file") // what the real holdfacts says about a missing file
+	hold := w.stub + "/pending-reply-1"
+	miss := w.cs("--report", "--reply-hold", hold, "--id", "lid-9", "hc", "t7", "-", "x")
+	miss.rcIs(t, 1)
+	miss.has(t, "--reply-hold REFUSED before delivery")
+	os.WriteFile(w.stub+"/transcript.log", []byte("2026-11-17T00:00:00Z  HOLD-RETIRED  envelope=other\n    | x\n"), 0o644)
+	wrong := w.cs("--report", "--reply-hold", hold, "--id", "lid-9", "hc", "t7", "-", "x")
+	wrong.rcIs(t, 1) // a record for another logical id is no record
+	os.WriteFile(w.stub+"/transcript.log", []byte("2026-11-17T00:00:00Z  HOLD-RETIRED  envelope=lid-9\n    | x\n"), 0o644)
+	w.set("HW_HC_PROOF_MS", "3000")
+	r := w.cs("--report", "--reply-hold", hold, "--id", "lid-9", "hc", "t7", "-", "x")
+	if strings.Contains(r.err+r.out, "REFUSED") {
+		t.Fatalf("a hold retired as answered refused the reply: %s%s", r.out, r.err)
+	}
+	r.has(t, "was already retired as answered")
 }

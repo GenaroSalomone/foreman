@@ -6,8 +6,7 @@ package main
 // `tab create`), so on the app it refused ("herdr agent list did not answer") or, with a TUI herdr running, looked at the wrong
 // agents. The same recorded facts (cwd, env, session resume) are repeated in a new `hc run` terminal instead of a tab.
 //
-// shortcut: claude only (the other vendors' resume flags are unmeasured on hc). A run launched in the sandbox is armed again
-// and its shim goes first on the new terminal's PATH, as dispatch does on hc.
+// shortcut: claude only (the other vendors' resume flags are unmeasured on hc).
 
 import (
 	"context"
@@ -41,7 +40,7 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 	proj, task, rundir, cwd := st.proj, st.task, st.rundir, st.cwd
 	if vendor != "claude" {
 		// every vendor is LAUNCHED on the app since hc-dispatch-every-vendor; what is claude-only is the resume, and this says why
-		a.reviveDie("this run lives in the herdr app, and hw revive resumes only claude there: the resumed session is proved by reading claude's <config>/sessions/<pid>.json for the new terminal, and " + vendor + " has no such read-back (pi and codex record no session id on the app; opencode's comes from its own server, and resuming it in an app terminal is unmeasured). session_vendor is " + vendor + ". Start it again with `hw " + proj + " " + task + "`: the worktree is intact")
+		a.reviveDie("this run lives in the herdr app, and hw revive resumes only claude there: the resumed session is proved by reading claude's <config>/sessions/<pid>.json for the new terminal, and " + vendor + " has no such read-back (pi records no session id on the app). session_vendor is " + vendor + ". Start it again with `hw " + proj + " " + task + "`: the worktree is intact")
 	}
 	// One task, one terminal. AN UNREAD LIST IS NOT AN EMPTY ONE.
 	raw, ok := hcOut(20*time.Second, "ls", "--json", "--label", "hw_project="+proj, "--label", "hw_task="+task)
@@ -73,7 +72,7 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 		a.reviveDie("could not read whether " + proj + ":" + task + " is already live — `hc get` did not answer. Refusing rather than resuming a session twice.")
 	}
 	// A LABEL IS NOT A SESSION: after a reboot the core gives a kept terminal a shell and keeps its labels (MEASURED 2026-11-16:
-	// a terminal holding only zsh refused the revive as "still live"). Only a claude or opencode process running in it is.
+	// a terminal holding only zsh refused the revive as "still live"). Only a claude process running in it is.
 	var stale []string // live terminals holding only a shell under this task's labels: ended before the new one starts
 	for _, addr := range agents {
 		raw, _ := get(addr)
@@ -91,15 +90,6 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 			a.reviveDie("could not tell whether session " + sid + " of " + proj + ":" + task + " is live in " + addr + ": " + what + ". Refusing rather than resuming a session twice; read it with `hc get " + addr + "`.")
 		}
 	}
-	shimDir := ""
-	if exitStatus(a.reviveSandboxArmed(proj, task)) != 1 { // FAIL CLOSED: anything but a clean "never armed" is armed again
-		shim, armed := a.reviveSandboxShim(st, vendor, rundir)
-		if !armed || shim == "" {
-			a.reviveDie("this run was launched in the sandbox and it could not be armed again (see the warning above); hw revive will not start it unconfined")
-		}
-		shimDir = shim
-		a.receiptInto(rundir, "sandbox", filepath.Dir(shim)+"/profile.sb", "hw-sandbox arm ("+vendor+"); shim "+shim+" first on the PATH of the `hc run` terminal")
-	}
 	st.agentArgs = cmdArgs
 	a.reviveResolvePermissions(st)
 	a.reviveFrameworkArgs(st, vendor, cmdArgs, rundir)
@@ -110,7 +100,7 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 		"--", "env", "-u", "HERDR_ENV", "-u", "HERDR_PANE_ID", "-u", "HERDR_SOCKET_PATH", "-u", "HERDR_TAB_ID", "-u", "HERDR_WORKSPACE_ID",
 		"-u", "HW_INVOKER_PANE", "-u", "CLAUDE_CODE_CHILD_SESSION", "CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1", "CLAUDE_CODE_BASH_EDIT_DIFF=0"}
 	args = append(args, envShown...)
-	args = append(args, hcSandboxPathWord(shimDir, hcPathWord(a.reviveBinDir(), a.getenv("PATH"))), "claude")
+	args = append(args, hcPathWord(a.reviveBinDir(), a.getenv("PATH")), "claude")
 	if st.explorerArm { // an hc terminal has no shell to type the launch function into: the JSON is a word of the argv
 		if json := a.explorerFor(proj).claudeJSON(); json != "" {
 			args = append(args, "--agents", json)
@@ -148,11 +138,6 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 	a.receiptInto(rundir, "revived_pane", addr, "hc run --json address")
 	// the app opens a tab for the terminal and calls it by its number («2»): a dispatch names it after its task, and so does a revive
 	hcNameTab(herdrAppOut, lSleep, addr, task)
-	if shimDir != "" && !hcBrokerAlive(filepath.Dir(shimDir), lSleep) { // the heartbeat is the proof it runs in the sandbox, as on a pane
-		hcOut(20*time.Second, "kill", addr)
-		a.receiptInto(rundir, "revived_agent", "failed", "no sandbox broker heartbeat in "+filepath.Dir(shimDir))
-		a.reviveDie("sandbox: " + vendor + " started in " + addr + " but the broker never came up (" + filepath.Dir(shimDir) + "/broker.alive), so it may have been running UNCONFINED: " + addr + " was killed (`hc kill`).")
-	}
 	// proved by the terminal's own `hc get`, as dispatch proves a brief: live, and the session claude wrote for its pid
 	var got string
 	live := false
@@ -162,9 +147,6 @@ func (a *app) reviveOnHC(st *reviveRunState, sid, vendor, cmdArgs string, envSho
 		if m, isMap := func() (jmap, bool) { x, p := bjParse(brTrimNL(info)); mm, k := x.(jmap); return mm, p && k }(); read && isMap && hcStr(m, "state") == "live" {
 			live = true
 			got = claudeSessionOf(bjRaw(m["pid"]), hcStr(m, "cwd"), a.reviveConfigDir(envShown), a.getenv("CLAUDE_CONFIG_DIR"), a.getenv("HOME")+"/.claude")
-			if got == "" && shimDir != "" {
-				got = claudeSessionSandboxed(bjRaw(m["pid"]), hcStr(m, "cwd"), a.reviveConfigDir(envShown), a.getenv("CLAUDE_CONFIG_DIR"), a.getenv("HOME")+"/.claude")
-			}
 			if got != "" {
 				break
 			}
@@ -203,12 +185,12 @@ func (a *app) reviveConfigDir(envShown []string) string {
 
 // sessionPrograms are the agents a session runs as; shellPrograms what the core puts in a terminal it kept after a loss.
 var (
-	sessionPrograms = map[string]bool{"claude": true, "opencode": true}
+	sessionPrograms = map[string]bool{"claude": true}
 	shellPrograms   = map[string]bool{"zsh": true, "bash": true, "sh": true, "fish": true, "nu": true, "dash": true, "ksh": true, "tcsh": true}
 )
 
 // hcSessionProcess says whether a session runs in the terminal `hc get` described (m): "live" when its foreground process is
-// claude or opencode, "stale" when the terminal is finished or holds only a shell, and "unknown" for anything else (no record,
+// claude, "stale" when the terminal is finished or holds only a shell, and "unknown" for anything else (no record,
 // no foreground process, another program), with what was read. Unknown is never stale: the caller refuses on it.
 func hcSessionProcess(m jmap, addr string) (verdict, what string) {
 	if m == nil {
@@ -235,9 +217,9 @@ func hcSessionProcess(m jmap, addr string) (verdict, what string) {
 	case sessionPrograms[prog]:
 		return "live", prog + pid + " runs there"
 	case shellPrograms[prog]:
-		return "stale", "only " + prog + pid + " runs there, no claude or opencode"
+		return "stale", "only " + prog + pid + " runs there, no claude"
 	}
-	return "unknown", "its foreground process is " + orStr(prog, "unnamed") + pid + ", neither claude, opencode nor a shell"
+	return "unknown", "its foreground process is " + orStr(prog, "unnamed") + pid + ", neither claude nor a shell"
 }
 
 // herdrAppOut is `herdr-app <args>` as hcNameTab takes it: (stdout, exit status); a call that cannot run is status 1.

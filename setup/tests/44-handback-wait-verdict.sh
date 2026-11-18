@@ -7,7 +7,7 @@ cp "$ROOT"/bin/* "$BIN/" 2>/dev/null || true
 cat > "$STUB/herdr" <<'STUB'
 #!/usr/bin/env bash
 case "$1 $2" in
-  "agent get") printf '{"result":{"agent":{"agent":"opencode","agent_status":"done","tokens":{"turn_state":"%s"}}}}\n' "${TURN_STATE:-handback_refused}" ;;
+  "agent get") printf '{"result":{"agent":{"agent":"claude","agent_status":"done","tokens":{"turn_state":"%s"}}}}\n' "${TURN_STATE:-handback_refused}" ;;
   *) printf '{"result":{}}\n' ;;
 esac
 STUB

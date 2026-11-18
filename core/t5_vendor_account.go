@@ -94,6 +94,15 @@ func (d *dsp) resolveAccount() {
 	d.accountLine = d.account + " → CLAUDE_CONFIG_DIR=" + dir + "  (" + d.accountSrc + "; parity verified by `" + verifier + " --check`)"
 }
 
+// refuseUnestablishedAccount stops the dispatch, before anything is built, when resolveAccount refused the account (unknown name,
+// or capability parity not established).
+func (d *dsp) refuseUnestablishedAccount() {
+	if d.accountVerdict == "refused" {
+		d.warn(d.accountRefusal)
+		d.die("account '" + d.account + "' was selected (" + d.accountSrc + ") and hw could not establish it. Nothing was built. Fix what the line above names, or dispatch under the default account with --account default.")
+	}
+}
+
 // vdLoadDict is the python helper of claude_first_run_pending: a JSON object from a file, {} otherwise.
 func vdLoadDict(path string) jmap {
 	data, err := os.ReadFile(path)

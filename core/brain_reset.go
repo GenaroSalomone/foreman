@@ -165,9 +165,6 @@ func (b *brainRun) armSelfReset(pane, panesJSON string) int {
 	tmp := brOrStr(b.getenv("TMPDIR"), "/tmp")
 	selfLog := tmp + "/brain-self-reset-" + sanitizePane(pane) + ".log"
 	selfArgs := []string{"brain", proj}
-	if b.kind == "opencode" {
-		selfArgs = append(selfArgs, "--opencode")
-	}
 	if b.kind == "claude" {
 		selfArgs = append(selfArgs, "--claude")
 	}

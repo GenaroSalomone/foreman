@@ -167,13 +167,6 @@ func (l *lch) receiptSession(pane string, drc int) {
 		l.lrcSleep()
 		waited += 1000
 	}
-	// THE DELIVERY ROUTE ALREADY READ THIS ID: opencode-tui asked the endpoint which session the brief's turn
-	// landed in; herdr's agent_session is a second, slower publisher of the same fact.
-	if tui := orDefaultStr(l.tuiSessionID, l.env("HW_TUI_SESSION_ID")); sid == "" && tui != "" { // # MUTATION-ANCHOR: 847-A2-07
-		sid = tui
-		vendor = "opencode"
-		src = "channel-send opencode-tui: the session the brief's turn landed in, read from the executor's own endpoint (herdr published no agent_session within " + strconv.FormatInt(budget/1000, 10) + "s)"
-	}
 	if sid == "" {
 		// NOT an empty string: a brief whose delivery failed never opened the turn that creates the session.
 		l.receipt("session_id",
@@ -189,15 +182,11 @@ func (l *lch) receiptSession(pane string, drc int) {
 
 // receiptResume records the vendor's own resume for a session, and says the conversation stays addressable.
 func (l *lch) receiptResume(sid, vendor string) {
-	// The payoff, spelled out. The cwd matters: opencode resolves a session against the directory it ran in.
+	// The payoff, spelled out. The cwd matters: a vendor resolves a session against the directory it ran in.
 	var resume string
 	switch vendor { // # MUTATION-ANCHOR: 847-A2-08
 	case "claude":
 		resume = "cd " + l.wt + " && claude --resume " + sid
-	case "opencode":
-		resume = "cd " + l.wt + " && opencode --session " + sid + "   # read-only: opencode export " + sid
-	case "codex":
-		resume = "cd " + l.wt + " && codex resume " + sid
 	case "pi":
 		resume = "cd " + l.wt + " && pi --session " + sid
 	default:
@@ -233,57 +222,6 @@ func lrcClaudeModel(data []byte) string {
 	return bashSub(lastLine(outs))
 }
 
-// lrcOpencodeModel is `jq -r '[.messages[]?.info | select(.role=="assistant" and .modelID != null)
-// | "\(.providerID)/\(.modelID)"] | last // empty'`.
-func lrcOpencodeModel(data []byte) string {
-	vals, _ := parseStream(data)
-	var outs []string
-	for _, v := range vals {
-		msgs, ok := v.get("messages")
-		if !ok {
-			continue
-		}
-		var items []*jval
-		switch msgs.kind {
-		case vArr:
-			items = msgs.arr
-		case vObj:
-			for _, m := range msgs.obj {
-				items = append(items, m.v)
-			}
-		}
-		last := ""
-		have := false
-		failed := false
-		for _, it := range items {
-			info, ok := it.get("info")
-			if !ok {
-				failed = true
-				break
-			}
-			role, ok := info.get("role")
-			if !ok {
-				failed = true
-				break
-			}
-			mid, ok := info.get("modelID")
-			if !ok {
-				failed = true
-				break
-			}
-			if role.kind == vStr && role.s == "assistant" && mid.kind != vNull {
-				pid, _ := info.get("providerID")
-				last, have = pid.tostring()+"/"+mid.tostring(), true
-			}
-		}
-		if failed || !have {
-			continue
-		}
-		outs = append(outs, last)
-	}
-	return bashSub(strings.Join(outs, "\n"))
-}
-
 // receiptModel is _receipt_model: the model the session's own record says answered, against the one handed to the
 // vendor. Always 0. Follows receiptSession (the first assistant turn exists only after the brief).
 func (l *lch) receiptModel(pane string, drc int) int {
@@ -301,15 +239,15 @@ func (l *lch) receiptModel(pane string, drc int) int {
 		asked = l.model
 	}
 	sid := l.receiptGet("session_id")
-	// A vendor with no reader (codex) is not a fault: nothing was measured and nothing is claimed.
-	if l.agent != "claude" && l.agent != "opencode" && l.agent != "pi" { // # MUTATION-ANCHOR: 847-A2-10
+	// A vendor with no reader is not a fault: nothing was measured and nothing is claimed.
+	if l.agent != "claude" && l.agent != "pi" {
 		ag := lrcOr(l.agent, "unknown")
 		l.receipt("model_running", "n/a — hw has no model reader for vendor "+ag, "_receipt_model: no reader for this vendor")
 		l.receipt("model_verdict", "n/a — nothing measured for vendor "+ag+"; asked: "+lrcOr(asked, "<agent default>"), "_receipt_model: no reader for this vendor")
 		return 0
 	}
 	if l.agent == "pi" {
-		sid = "pi" // pi publishes its own record (setup/pi/hw-executor.ts): no session id is needed to read it, even under --sandbox
+		sid = "pi" // pi publishes its own record (setup/pi/hw-executor.ts): no session id is needed to read it
 	}
 	piThinking := ""
 	if sid == "" || strings.HasPrefix(sid, "none") { // # MUTATION-ANCHOR: 847-A2-11
@@ -318,7 +256,7 @@ func (l *lch) receiptModel(pane string, drc int) int {
 		for {
 			if l.agent == "pi" {
 				running, piThinking, src = l.piRuntimeRead() // # MUTATION-ANCHOR: 986-G05
-			} else if l.agent == "claude" {
+			} else {
 				cfg := l.accountConfigDir
 				if cfg == "" {
 					cfg = l.env("CLAUDE_CONFIG_DIR")
@@ -343,14 +281,6 @@ func (l *lch) receiptModel(pane string, drc int) int {
 				} else {
 					src = "no " + cfg + "/projects/*/" + sid + ".jsonl"
 				}
-			} else { // opencode: the export goes to a file in bash (piped, it truncates a large session)
-				dir := ""
-				if isDir(l.wt) {
-					dir = l.wt
-				}
-				out, _ := l.sh(cmdSpec{name: "opencode", args: []string{"export", sid}, dir: dir, quiet: true})
-				running = lrcOpencodeModel([]byte(out))
-				src = "opencode export " + sid + ", the last assistant providerID/modelID"
 			}
 			if running != "" {
 				break
@@ -469,19 +399,6 @@ func (l *lch) receiptVerdict() {
 	case strings.HasPrefix(m, "UNESTABLISHED"):
 		l.warn("UNESTABLISHED  thinking: " + strings.TrimPrefix(m, "UNESTABLISHED — "))
 		unestablished = true
-	}
-	// the effort: an opencode --effort is a claim until the live config says so
-	if l.agent == "opencode" && l.effort != "" {
-		m = l.receiptGet("effort_applied")
-		switch {
-		case strings.HasPrefix(m, "yes"):
-		case strings.HasPrefix(m, "no"):
-			l.warn("DIVERGENCE  effort: the manifest carried " + l.effort + " and the live executor does not have it (" + m + ")")
-			diverged = true
-		default:
-			l.warn("UNESTABLISHED  effort: " + lrcOr(m, "never read back from the live executor"))
-			unestablished = true
-		}
 	}
 	switch {
 	case !diverged && !unestablished: // # MUTATION-ANCHOR: 847-A2-17
@@ -787,7 +704,7 @@ func (l *lch) ledgerCommitBrief() {
 // worktreeHookFiles is _worktree_hook_files: the candidate hook-config files that exist.
 func worktreeHookFiles(wt string) []string {
 	var out []string
-	for _, f := range []string{wt + "/.claude/settings.json", wt + "/.claude/settings.local.json", wt + "/.codex/hooks.json", wt + "/opencode.json"} {
+	for _, f := range []string{wt + "/.claude/settings.json", wt + "/.claude/settings.local.json"} {
 		if fi, err := os.Stat(f); err == nil && fi.Mode().IsRegular() { // [ -f ]
 			out = append(out, f)
 		}

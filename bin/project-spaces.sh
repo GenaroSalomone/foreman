@@ -6,16 +6,8 @@
 # place: two copies of a mapping is the drift that produced most of 2026-08-24's
 # frictions, where a rule corrected in one file stayed wrong in another.
 #
-# Sourced by bin/hw and bin/brain. NOT unconditionally folded into
-# invoker-common.sh: hw sources it late and on purpose, inside cmd_next and
-# _deliver_brief, and pulling it into every invoker at startup would drag its
-# globals along for callers that never need them. The one exception, since
-# 2026-09-15: invoker-common.sh conditionally sources this file — guarded by
-# `[ -r ... ]`, swallowing errors, falling back to its own literal if anything
-# here is missing or fails — purely to read all_lane_worktree_roots() for
-# INVOKER_ENV_ROOTS. That is a narrow, defensive read, not a standing
-# dependency: done-invoker/ask-invoker keep working even if this file is
-# absent or broken.
+# Sourced by install.sh, scripts/init.sh, shell/hw-restore-env.zsh and (for one diagnostic) hw-core brain. The invokers (Go)
+# read the lane table themselves (core/invokers/lanetable.go) and do not source it.
 #
 # One space per project, one tab per agent:
 #
@@ -71,7 +63,8 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
     | (["product_repo","hw_aliases","brain_aliases","space","engram","vendor","model","account","artifacts","repoless",
         "checkout","checkout_var","base","base_ref_prefix","branch","worktree_root","worktree","ports",
         "hint_aliases","build","agents_from","deps","db","devserver","reap","sweep","brain_guard","brief_note","qa_target",
-        "model_floor","model_pins","subagent_model","pi_subagent_models","requested_by","opencode_config_dir","suite_lock","org"]) as $fields
+        "model_floor","model_pins","subagent_model","pi_subagent_models","requested_by","suite_lock","org",
+        "opencode_config_dir"]) as $fields  # opencode_config_dir: RETIRED, accepted and ignored for one release (core/lanes.go agrees)
     | ({model_floor: ["tier","accepts"], deps: ["line","contention"], db: ["line","provisioned","no_worktree","no_db_inert"],
         devserver: ["start","line","off"], reap: ["copies","copies_from","max_worktrees","max_disk_pct","max_build_gb"]}) as $sub
     | ([$lanes | to_entries[] | .key as $l | .value | to_entries[] | select($sub[.key] != null) | .key as $f
@@ -180,7 +173,6 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
           emit($l; "agents_from"; $v.agents_from // ""),
           emit($l; "brief_note"; $v.brief_note // ""),
           emit($l; "qa_target"; if $v.qa_target == true then "1" else "" end),
-          emit($l; "opencode_config_dir"; $v.opencode_config_dir // "" | exp),
           emit($l; "deps_line"; $v.deps.line // ""),
           emit($l; "deps_contention"; if $v.deps.contention == true then "1" else "" end),
           emit($l; "db_line"; $v.db.line // ""),
@@ -334,18 +326,15 @@ project_space_label() {
 # looks up.
 project_brainer_tab() { printf 'brainer'; }
 
-# The vendor a project's brainer actually runs. A lane's brainer may be opencode —
-# `opencode.json`, its orchestrator agent, its whole history — so
-# `brain <lane>` with no flag used to start a CLAUDE brainer beside it. Observed
-# 2026-08-24 during the tab migration: it created a second brainer tab nobody
-# asked for. A default that contradicts the project is not a default.
+# The vendor a project's brainer actually runs: the lane's own `vendor`, claude
+# when it names none. A default that contradicts the project is not a default.
 project_default_kind() {
   local v; v="$(lane_get "$1" vendor)" || v=""
   printf '%s' "${v:-claude}"
 }
 
 # The provider a lane's own decision pins, for the vendor above. A product lane's
-# lane decision may require a provider (OpenCode direct `openai/gpt-5.6-sol`), and for a while
+# lane decision may require a provider (`openai/gpt-5.6-sol`), and for a while
 # that decision lived only in memory and in whoever remembered to type it — so
 # an abbreviated command silently launched something else and the manifest
 # called it `(default)`. A default that matches the decision is the decision;
@@ -379,14 +368,13 @@ model_is_build_only() {
 # ORDER, so one lives here beside the other model facts rather than being
 # re-derived by each caller.
 #
-# Matched on the LAST path segment, exactly like _sdd_model_is_below_orchestrator
-# in bin/hw, so an opencode `anthropic/claude-sonnet-5` ranks the same as
-# claude's `sonnet`.
+# Matched on the LAST path segment, so a provider-prefixed
+# `anthropic/claude-sonnet-5` ranks the same as claude's `sonnet`.
 #
 # EMPTY OUTPUT MEANS UNRANKABLE, and that is a real answer, not a gap:
 # `openai/gpt-5.6-sol` and `fable` are not points on this ladder, and a caller
-# that gets nothing back must make no claim. Same posture as the sonnet-
-# orchestrator gate: this knows the claude tier ladder and claims nothing else.
+# that gets nothing back must make no claim: this knows the claude tier ladder
+# and claims nothing else.
 model_tier() {
   case "${1##*/}" in
     haiku|haiku-*|*haiku*)   printf '1' ;;
@@ -399,7 +387,7 @@ model_tier() {
 # THE TOP TIER OF A VENDOR, AS FAR AS hw CAN RANK IT — the ceiling's counterpart of the ladder above. A `kind:
 # build` task is implementation: its decisions were made upstream, and the top model reads files it should hand to
 # a cheap explorer (road-pace-build, 2026-10-14: opus, `kind: build`, read the code itself). Claude's opus and
-# fable qualify, on the LAST path segment like the ladder (so opencode's `anthropic/claude-opus-5` does too).
+# fable qualify, on the LAST path segment like the ladder (so a provider-prefixed `anthropic/claude-opus-5` does too).
 # Models hw cannot rank (openai/gpt-5.6-sol is a build-only pin by its own decision; gpt-6-astra, deepseek-v4-pro)
 # are NOT top tier here: UNESTABLISHED, named in docs/KNOWN-LIMITATIONS, not guessed.
 model_is_top_tier() {
@@ -430,8 +418,8 @@ project_model_floor_accepts() {
 
 # THE MODEL A CLAUDE EXECUTOR'S SUBAGENTS RUN ON when they name none: `inherit`
 # (Claude Code's own behaviour, the executor's model) or a model. hw hands it to
-# Claude Code as CLAUDE_CODE_SUBAGENT_MODEL, and to nothing else: opencode and
-# codex do not read it. Absent is `inherit`. An agent that pins its own `model:`
+# Claude Code as CLAUDE_CODE_SUBAGENT_MODEL, and to nothing else: pi does
+# not read it. Absent is `inherit`. An agent that pins its own `model:`
 # keeps it, because hw never sets the _FORCE variant (setup/decisions.md).
 project_subagent_model() {
   local v; v="$(lane_get "$1" subagent_model)" || v=""
@@ -451,8 +439,8 @@ project_requested_by_mode() {
 # model, and not in a `.envrc` nobody sees.
 #
 # The ONLY mechanism is CLAUDE_CONFIG_DIR, which is why every consumer of this
-# table also has to check the VENDOR: opencode and codex do not read it, so
-# naming an account for them would be a field that claims a redirect that never
+# table also has to check the VENDOR: pi does not read it, so
+# naming an account for it would be a field that claims a redirect that never
 # happens. That belief — an executor that thinks it is on the personal account
 # and is not — is the failure this table exists to make impossible, so the
 # callers state APPLIED or NOT APPLIED rather than just the name.
@@ -585,7 +573,7 @@ ALL_KNOWN_PROJECTS=""  # filled from projects.json's survey order by lane_config
 # per repo-backed lane's own `.worktrees`.
 #
 # THE SINGLE SOURCE for the invoker return-channel's non-$WORK roots. Until
-# 2026-09-15, bin/invoker-common.sh's INVOKER_ENV_ROOTS and
+# 2026-09-15, the invokers' INVOKER_ENV_ROOTS (then in bash) and
 # shell/hw-restore-env.zsh's `roots` array were two hand-typed copies of
 # "$WORK plus the repo-backed lane roots" — and a third, unrelated copy lived
 # in bin/hw's `_next_autoclosed_run_for_pane`. None of the three had been

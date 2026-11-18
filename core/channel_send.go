@@ -8,10 +8,9 @@ package main
 //
 // This file: the command line, the exit guard (a non-zero exit that cannot be swallowed by a pipe), the signal
 // outcomes (being killed is one of three reported states) and the route switch. The routes are in
-// channel_send_herdr.go, channel_send_http.go (opencode, opencode-tui) and channel_send_claude.go (claude, codex,
+// channel_send_herdr.go, channel_send_claude.go (claude and
 // the --report-state proof). The programs the bash ran stay programs here: herdr, herdr-rpc, holdfacts,
-// claude-delivery-receipt.py, claude, codex, ps, find — what it did with jq, python3's two embedded scripts and
-// node's two is native.
+// claude-delivery-receipt.py, claude, ps, find — what it did with jq and python3's two embedded scripts is native.
 
 import (
 	_ "embed"
@@ -337,7 +336,7 @@ parse:
 		c.die("--allow-turn-ended cannot make a ruling ordered; use --ruling alone")
 	}
 	if len(args) < 4 {
-		c.die("usage: channel-send [--require admitted|processed] [--id logical-id] [--allow-turn-ended] [--report|--ruling] [--report-state absolute-directory] [--reply-hold absolute-file] <claude|opencode|opencode-tui|codex|herdr> <session-or-pane-or-directory> <endpoint|-> <message|-> (a lone '-' for the message reads it from stdin — the way for text with backticks, $, quotes or newlines that argv would mangle)")
+		c.die("usage: channel-send [--require admitted|processed] [--id logical-id] [--allow-turn-ended] [--report|--ruling] [--report-state absolute-directory] [--reply-hold absolute-file] <claude|herdr|hc> <session-or-pane-or-directory> <endpoint|-> <message|-> (a lone '-' for the message reads it from stdin — the way for text with backticks, $, quotes or newlines that argv would mangle)")
 	}
 	c.vendor, c.tgt, c.endpoint = args[0], args[1], args[2]
 	// An app terminal named on the herdr route is an hc terminal: stall-watch, setup/heavy's FROZEN alert and hw secret's vault
@@ -400,6 +399,13 @@ func (c *chanSend) checkHold() {
 	if c.isRuling {
 		intent = "ruling"
 	}
+	// A hold an earlier real prompt answered is already retired: this run's log says so. The reply is then a plain
+	// --report (no hold to prove or clear). A missing hold with no such record still goes to holdfacts and is refused.
+	if c.isReport && !c.isRuling && holdRetiredAsAnswered(c.replyHold, c.deliveryKey) {
+		c.printf("channel-send: --reply-hold %s was already retired as answered (an earlier prompt reached the pane); delivering this as a plain --report.\n", c.replyHold)
+		c.replyHold = ""
+		return
+	}
 	hargs := []string{"match", c.replyHold, "--intent", intent, "--route", c.vendor, "--target", c.tgt}
 	if c.deliveryKey != "" {
 		hargs = append(hargs, "--logical-id", c.deliveryKey)
@@ -430,6 +436,29 @@ func (c *chanSend) checkHold() {
 	c.holdProven = true
 }
 
+// holdRetiredAsAnswered: the hold file is gone AND the run's transcript.log holds a HOLD-RETIRED record (for `id` when
+// one is given). A wrong path has no log beside it, so it never matches.
+func holdRetiredAsAnswered(file, id string) bool {
+	if _, err := os.Stat(file); !os.IsNotExist(err) {
+		return false
+	}
+	d := filepath.Dir(file)
+	if base := filepath.Base(d); len(base) > 1 && base[0] == 't' && strings.Trim(base[1:], "0123456789") == "" {
+		d = filepath.Dir(d)
+	}
+	b, err := os.ReadFile(d + "/transcript.log")
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(string(b), "\n") {
+		f := strings.Fields(l)
+		if len(f) >= 3 && f[1] == "HOLD-RETIRED" && (id == "" || f[2] == "envelope="+id) {
+			return true
+		}
+	}
+	return false
+}
+
 // clearReplyHold is _clear_reply_hold: the answer or ruling is delivered, so its text goes to the transcript and
 // the hold goes away.
 func (c *chanSend) clearReplyHold() {
@@ -456,13 +485,18 @@ func (c *chanSend) clearReplyHold() {
 	if c.isRuling {
 		kind = "RULING"
 	}
-	csTranscriptAppend(filepath.Dir(c.replyHold), kind, envelope, c.message)
-	os.Remove(c.replyHold)
 	// An hc terminal keeps its labels until someone writes them (a herdr pane's tokens expire on their own TTL), so the
-	// ask's `hw_ask_state=delivered` would outlive its answer (rc1-app-live-qa F6). Best effort, like the transcript.
+	// ask's `hw_ask_state=delivered` would outlive its answer (rc1-app-live-qa F6).
+	hcTarget := ""
 	if c.vendor == "hc" {
-		extRun(extCall{Name: "hc", Args: []string{"label", c.tgt, "hw_ask_state=answered"}, Env: childEnv(), Merge: true})
+		hcTarget = c.tgt
 	}
+	consumeHold(c.replyHold, kind, envelope, c.message, hcTarget)
+}
+
+// hcLabelAsked writes the ask state onto an hc terminal's labels, which keep their value until someone writes them. Best effort.
+func hcLabelAsked(terminal, state string) {
+	extRun(extCall{Name: "hc", Args: []string{"label", terminal, "hw_ask_state=" + state}, Env: childEnv(), Merge: true})
 }
 
 // csTranscriptAppend is transcript_append (the bash state witness): best effort, always.
@@ -532,12 +566,6 @@ func (c *chanSend) sanitizeProbe() {
 // route is the `case "$VENDOR"` switch.
 func (c *chanSend) route() {
 	switch c.vendor {
-	case "opencode-tui":
-		c.routeOpencodeTUI()
-	case "opencode":
-		c.routeOpencode()
-	case "codex":
-		c.routeCodex()
 	case "claude":
 		c.routeClaude()
 	case "herdr":

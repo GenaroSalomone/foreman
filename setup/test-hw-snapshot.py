@@ -90,6 +90,14 @@ def inventory(root):
     return result
 
 
+def remove_tree(path):
+    """rmtree that survives what the copy kept: a read-only directory (copies retain their modes) cannot lose its children until it is writable."""
+    def writable(func, target, _exc):
+        os.chmod(os.path.dirname(target) or '.', 0o700)
+        func(target)
+    shutil.rmtree(path, onerror=writable) if os.path.lexists(path) else None
+
+
 def tracking(root):
     try:
         proc = subprocess.run(['git', '-C', str(root), 'ls-files', '-z'],
@@ -218,7 +226,7 @@ def main():
         candidate = base / 'brain'
         persistent = None
         for attempt in range(1, CAPTURE_ATTEMPTS + 1):
-            shutil.rmtree(candidate, ignore_errors=True)
+            remove_tree(candidate)
             failure = None
             try:
                 frozen, tracked, diff, tolerated = capture(root, candidate)

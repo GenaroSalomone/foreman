@@ -1,6 +1,6 @@
 package main
 
-// channel-send's claude and codex routes, and the --report-state proof (the two python3 heredocs of
+// channel-send's claude route, and the --report-state proof (the two python3 heredocs of
 // bin/channel-send, native). The claude route still runs `claude -p` as the transport adapter and
 // bin/claude-delivery-receipt.py as the receiver-transcript witness, as the bash did.
 
@@ -151,48 +151,6 @@ func (c *chanSend) checkReportState() {
 	c.reportProven = true
 }
 
-// ── codex ───────────────────────────────────────────────────────────────────
-
-func (c *chanSend) routeCodex() {
-	if c.isRuling && !c.holdProven {
-		c.die("--ruling REFUSED before delivery: the codex route exposes no receiver turn-state proof, so this command cannot establish a clean boundary. NOTHING was sent. Finish or stop the current work, then use hw next with the corrected brief/ruling when appropriate.")
-	}
-	if c.deliveryKey != "" {
-		c.die("codex does not yet expose idempotent caller-supplied delivery ids")
-	}
-	if c.required != "admitted" {
-		c.die("codex does not yet expose processed receipt proof")
-	}
-	if c.tgt == "" {
-		c.die("codex target thread is empty")
-	}
-	cmd := exec.Command("codex", "queue", "--remote", "unix://"+c.endpoint, "--thread", c.tgt, "--message", c.message)
-	var env []string
-	for _, e := range os.Environ() { // env -u CODEX_HOME
-		if !strings.HasPrefix(e, "CODEX_HOME=") {
-			env = append(env, e)
-		}
-	}
-	if x := childEnv(); x != nil {
-		env = env[:0]
-		for _, e := range x {
-			if !strings.HasPrefix(e, "CODEX_HOME=") {
-				env = append(env, e)
-			}
-		}
-	}
-	cmd.Env = env
-	cmd.Stdin = os.Stdin
-	cmd.Stderr = c.err
-	if err := cmd.Run(); err != nil {
-		if _, ok := err.(*exec.Error); ok {
-			c.printf("channel-send: codex: command not found\n")
-			c.exit(127)
-		}
-		c.exit(exitStatus(err))
-	}
-}
-
 // ── claude ──────────────────────────────────────────────────────────────────
 
 // claudePane is `herdr agent list | jq … | head -1`: the pane hosting that claude session.
@@ -325,20 +283,9 @@ func (c *chanSend) routeClaude() {
 		"Call SendMessage once with the target above and the exact text inside payload. " +
 		"Then output exactly CHANNEL_SENT on tool success or CHANNEL_FAILED on tool failure."
 	// THE WATERMARK IS TAKEN BEFORE THE SEND.
-	since := ""
-	{
-		cmd := exec.Command("python3", c.binDir+"/claude-delivery-receipt.py", "--mark")
-		cmd.Env = append(os.Environ(), "CHANNEL_TARGET="+c.tgt)
-		var out bytes.Buffer
-		cmd.Stdout = &out
-		if err := cmd.Run(); err != nil {
-			since = bashSub(out.String()) + "none"
-		} else {
-			since = bashSub(out.String())
-		}
-	}
-	if since == "" {
-		since = "none"
+	since, ok := c.transcriptMark(c.tgt)
+	if !ok { // this route has no second witness: without a watermark the receipt cannot be told from an earlier send
+		c.die("the receiver's transcript watermark could not be taken (claude-delivery-receipt.py --mark failed), so a delivery to " + c.tgt + " could not be proven. NOTHING was sent.")
 	}
 	cl := exec.Command("claude", "-p", "--model", "haiku", "--effort", "low",
 		"--permission-mode", "bypassPermissions", "--no-session-persistence",

@@ -40,8 +40,8 @@
 # current turn is answered against a state the executor never saw, and
 # `working` is precisely when a blocked executor asks. So now: PUBLISH the
 # question, choose the receiver-owned route, and
-# account only after receiver-owned delivery proof. Herdr routes still wait for
-# idle; native OpenCode/Codex routes do not. See invoker-common.sh.
+# account only after receiver-owned delivery proof. The herdr route waits for
+# idle. See core/invokers (route.go).
 #
 # THE SHIM: this file keeps the name (the interface, setup/release-standard.md «Versioning») and execs the invokers binary
 # (core/cmd/invokers); the behaviour is core/invokers. It has no bash body since go-060 S5. HW_INVOKERS names a binary (a seam of

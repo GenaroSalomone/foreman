@@ -59,7 +59,7 @@ func (l *lch) laneGitWorktree(beforeCut func(main, base string), localConfig fun
 		return
 	}
 
-	l.laneTrustSdd(wt)
+	l.trustDir(wt)
 
 	l.step("3/4  space + layout")
 	l.laneSpaceTwoPane(wt)

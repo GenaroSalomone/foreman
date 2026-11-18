@@ -21,6 +21,13 @@ import (
 
 var reUUID = regexp.MustCompile(`^[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}$`)
 
+// claudeAccountDirs are the config dirs a session may live under: the process's own, the default, then every ~/.claude-* account, sorted.
+func claudeAccountDirs(home, cfg string) []string {
+	more, _ := filepath.Glob(brEscapeGlob(home) + "/.claude-*")
+	sort.Strings(more)
+	return append([]string{cfg, home + "/.claude"}, more...)
+}
+
 // sessionTranscript is brain_session_transcript: the transcript found for a session id, "" and false when there is
 // none. An id that is not a UUID is not judged here ("not-a-uuid", true). The lane's own account dir is looked in
 // FIRST (laneDir, "" for none), so a session id both accounts hold resolves to the one the relaunch will run under.
@@ -28,11 +35,7 @@ func (b *brainRun) sessionTranscript(sid, laneDir string) (string, bool) {
 	if !reUUID.MatchString(sid) {
 		return "not-a-uuid", true
 	}
-	dirs := []string{laneDir, b.getenv("CLAUDE_CONFIG_DIR"), b.home + "/.claude"}
-	more, _ := filepath.Glob(brEscapeGlob(b.home) + "/.claude-*")
-	sort.Strings(more)
-	dirs = append(dirs, more...)
-	for _, d := range dirs {
+	for _, d := range append([]string{laneDir}, claudeAccountDirs(b.home, b.getenv("CLAUDE_CONFIG_DIR"))...) {
 		if d == "" {
 			continue
 		}
@@ -331,15 +334,6 @@ func (b *brainRun) trustEdit(cfg, dir string) int {
 
 // versionAtLeast is _version_at_least: dotted a >= b, three numeric parts.
 func versionAtLeast(a, b string) bool { return depsAtLeast(a, b) } // # MUTATION-ANCHOR: go-803-M06
-
-// freePort is _free_port.
-func freePort() string {
-	ln, err := listenLoopback()
-	if err != nil {
-		return ""
-	}
-	return ln
-}
 
 // ── the account, the permissions ────────────────────────────────────────────────────────────────────────────────
 

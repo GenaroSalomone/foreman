@@ -35,16 +35,13 @@ const reviveHelp = `hw revive <project> <task> [--run <id>] [--dry-run]
 
 // reviveRun is the state cmd_revive keeps in its locals and in the globals its helpers read.
 type reviveRunState struct {
-	proj, task   string
-	rundir       string
-	cwd          string
-	agentArgs    string // AGENT_ARGS
-	explorerArm  bool   // EXPLORER_ARM: the revived claude gets the cheap explorer by file + function (EXPLORER_RUNDIR is rundir)
-	sandbox      bool   // SANDBOX
-	sandboxRun   string // _SANDBOX_RUNDIR
-	sandboxArmed string // _SANDBOX_ARMED
-	permissions  string // PERMISSIONS
-	permSrc      string
+	proj, task  string
+	rundir      string
+	cwd         string
+	agentArgs   string // AGENT_ARGS
+	explorerArm bool   // EXPLORER_ARM: the revived claude gets the cheap explorer by file + function (EXPLORER_RUNDIR is rundir)
+	permissions string // PERMISSIONS
+	permSrc     string
 }
 
 // reviveDie is _revive_die: the refusal, on stderr, and status 1.
@@ -177,6 +174,11 @@ func (a *app) reviveCmd(proj, task string, dry bool, wantRun string) {
 		a.reviveDie("the selected run " + filepath.Base(rundir) + " has no receipt.jsonl, so no session was ever recorded for it. Receipts start with the run that introduced them.")
 	}
 
+	// --sandbox was removed (setup/decisions.md, 2026-11-16): a run that was dispatched under it is revived WITHOUT confinement.
+	if raw, err := os.ReadFile(receipt); err == nil && strings.Contains(string(raw), `"key":"sandbox"`) {
+		a.warn("run " + filepath.Base(rundir) + " was launched under --sandbox, which was removed: it is revived UNCONFINED.")
+	}
+
 	// the three facts of the receipt; a jq that fails ends bash, silently, with its own status (pipefail + set -e)
 	sid, rc := reviveReceiptLast(receipt, "session_id")
 	if rc != 0 {
@@ -194,22 +196,14 @@ func (a *app) reviveCmd(proj, task string, dry bool, wantRun string) {
 		a.reviveDie("run " + filepath.Base(rundir) + " recorded no session_resume — its executor published no session id in time (see the session_id receipt line, if any), so the conversation is not addressable and hw will not guess at it by title. 58 of setup's 143 receipts are in this state; this is one of them.")
 	}
 	switch vendor {
-	case "claude", "opencode", "codex", "pi": // # MUTATION-ANCHOR: 863-G29
+	case "claude", "pi": // # MUTATION-ANCHOR: 863-G29
 	default:
 		shown := vendor
 		if shown == "" {
 			shown = "absent"
 		}
-		a.reviveDie("session_vendor is '" + shown + "', not one of claude|opencode|codex|pi — no agent kind is claimed for it")
+		a.reviveDie("session_vendor is '" + shown + "', not one of claude|pi — no agent kind is claimed for it")
 	}
-	// Revival bypasses the normal launch router, so replay the recorded framework contract before it can
-	// create a tab or start the recorded vendor.
-	framework := reviveFramework(rundir)
-	a.reviveValidateSDD(vendor, framework, wt)
-	// A root dispatch can predate an explicit re-task that changed this live surface: measure separately so a
-	// recorded `none` cannot mask the revived pane's incompatible effective framework.
-	a.reviveValidateSDD(vendor, "", wt)
-
 	// FACT 1 AND FACT 3 FROM ONE RECORD: `cd <dir> && <vendor> <args>[   # comment]`
 	if !strings.HasPrefix(resume, "cd ") || !strings.Contains(resume[3:], " && ") {
 		a.reviveDie("session_resume is not in the shape hw writes (cd <dir> && <vendor> …): " + resume)
@@ -218,7 +212,7 @@ func (a *app) reviveCmd(proj, task string, dry bool, wantRun string) {
 	i := strings.Index(restS, " && ")
 	cwd := restS[:i]
 	restS = restS[i+len(" && "):]
-	if j := strings.Index(restS, "   #"); j >= 0 { // the opencode line carries a read-only hint after three spaces
+	if j := strings.Index(restS, "   #"); j >= 0 { // the recorded line may carry a hint after three spaces
 		restS = restS[:j]
 	}
 	cmdBin, cmdArgs := restS, restS
@@ -336,11 +330,6 @@ func (a *app) reviveCmd(proj, task string, dry bool, wantRun string) {
 		a.reviveDie("an agent is already running in " + cwd + " (" + strings.ReplaceAll(occ.list, "\n", " ") + ") — revive would give one directory two agents")
 	}
 
-	// A run launched in the sandbox comes back in it. FAIL CLOSED: anything but a clean "never armed" revives it armed.
-	sbxRC := exitStatus(a.reviveSandboxArmed(proj, task))
-	if sbxRC != 1 { // # MUTATION-ANCHOR: 863-G07
-		st.sandbox, st.sandboxRun = true, rundir
-	}
 	pw, ok := a.reviveProjectWorkspace(proj, cwd)
 	if !ok {
 		a.reviveDie("could not find or create the workspace for " + proj)
@@ -469,11 +458,4 @@ func reviveOr(v *jval, def string) string {
 		return def
 	}
 	return reviveText(v)
-}
-
-// reviveSandboxArmed is `hw-sandbox armed <proj> <task>`: its error, nil when armed (status 0); 1 is "never armed".
-func (a *app) reviveSandboxArmed(proj, task string) error {
-	cmd := exec.Command(a.reviveBinDir()+"/hw-sandbox", "armed", proj, task)
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	return cmd.Run()
 }

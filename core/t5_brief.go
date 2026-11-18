@@ -13,7 +13,6 @@ import (
 	"bytes"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
@@ -22,19 +21,17 @@ import (
 	"unicode/utf8"
 )
 
-// brState is area A's private state: the frontmatter read once (BRIEF_DECLS), ASKED, AUTHORIZES, and whether the
-// effective sdd mode has been resolved (SDD_EFFECTIVE_MODE+set).
+// brState is area A's private state: the frontmatter read once (BRIEF_DECLS), ASKED and AUTHORIZES.
 type brState struct {
-	brDeclsRead   bool
-	brDecls       string
-	brAsked       string
-	brAuthorizes  string
-	brAuthMarker  string
-	brSecrets     string
-	brAssets      []string
-	brSddResolved bool
-	brLaneTried   bool
-	brLaneRoot    *jval
+	brDeclsRead  bool
+	brDecls      string
+	brAsked      string
+	brAuthorizes string
+	brAuthMarker string
+	brSecrets    string
+	brAssets     []string
+	brLaneTried  bool
+	brLaneRoot   *jval
 }
 
 // ── small helpers ────────────────────────────────────────────────────────────
@@ -213,14 +210,6 @@ func (d *dsp) brTaskBase() string {
 		return d.baseOverride
 	}
 	return d.brLaneBase()
-}
-
-// brSurfaceDir is _surface_dir: where the framework mode is read from.
-func (d *dsp) brSurfaceDir() string {
-	if d.brIsProductRepo() {
-		return d.c.checkout(d.proj)
-	}
-	return d.intendedWorkdir()
 }
 
 // ── the brief: inferred, archived, absent ───────────────────────────────────
@@ -459,7 +448,7 @@ func brItoa(n int) string { return strconv.Itoa(n) }
 
 // brTaskKindFromName is _task_kind_from_name.
 func brTaskKindFromName(t string) string {
-	for _, s := range []string{"diagnosis", "diagnose", "audit", "explore", "research", "review", "investigation"} { // # MUTATION-ANCHOR: 844-A18
+	for _, s := range []string{"diagnosis", "diagnose", "audit", "explore", "research", "review", "investigation"} {
 		if strings.Contains(t, s) {
 			return "explore"
 		}
@@ -486,8 +475,8 @@ func (d *dsp) checkTaskKind(kind, how string) {
 		}
 		return
 	}
-	if d.model != "" && d.modelIsBuildOnly(d.model) { // # MUTATION-ANCHOR: 844-A23
-		if how == "declared" { // # MUTATION-ANCHOR: 844-A24
+	if d.model != "" && d.modelIsBuildOnly(d.model) {
+		if how == "declared" {
 			d.die("this task is declared kind=" + kind + " and " + d.model + " is a build model — its own runner labels every turn \"Build\". Exploration decides WHAT to build; handing it to the model meant for building the decision is how ten browser diagnoses ran on it on 2026-08-24/25 while the same lane ran the same class of task on opus. Nothing was built. Relaunch with a model that reasons: --agent claude --model opus, or --model opus if you keep this vendor.")
 		}
 		src := d.modelSrc
@@ -496,7 +485,7 @@ func (d *dsp) checkTaskKind(kind, how string) {
 		}
 		d.warn("task name suggests this is exploration (" + kind + ") but the model is " + d.model + ", which is a build model (" + src + ").")
 		d.warn("the lane pin is right for building and wrong for deciding what to build. If this really is exploration: --agent claude --model opus.")
-		d.warn("if it is not, say so in the brief (kind: build) and this stops asking.") // # MUTATION-ANCHOR: 844-A25
+		d.warn("if it is not, say so in the brief (kind: build) and this stops asking.")
 	} else if how == "declared" {
 		d.brAppendDeclared("kind") // # MUTATION-ANCHOR: 844-A22
 	}
@@ -557,7 +546,7 @@ func brEditDistance(a, b []rune) int {
 func brHasKey(decls, key string) bool {
 	for _, line := range strings.Split(decls, "\n") {
 		first, _, _ := strings.Cut(line, "\t")
-		if first == key { // # MUTATION-ANCHOR: 844-910-M03
+		if first == key {
 			return true
 		}
 	}
@@ -631,7 +620,6 @@ func (d *dsp) warnBriefNamesNoModelNorEffort(decls string) {
 }
 
 // loadBriefDecls is _load_brief_decls: the frontmatter read once, BRIEF_DECLS returned (no trailing newline).
-// Area C reads it for `sdd` (the sdd model gate).
 func (d *dsp) loadBriefDecls() string {
 	if !d.brDeclsRead {
 		d.brDecls = brBriefDeclares(d.brief)
@@ -666,7 +654,7 @@ func brReadKV(line string) (string, string) {
 }
 
 // briefVendor is the vendor whose levels the brief's `effort:` is judged by: the one that will RUN it. A fresh dispatch runs the
-// resolved --agent; a REUSED pane runs its own, which the lane's default does not name (a codex pane takes `ultra`, a claude
+// resolved --agent; a REUSED pane runs its own, which the lane's default does not name (a pi pane takes `off`, a claude
 // lane does not), so it is measured live through herdr — the same read the manifest prints. Unmeasured, the resolved agent.
 func (d *dsp) briefVendor() string {
 	if d.reusePane == "" {
@@ -695,9 +683,6 @@ func (d *dsp) brDispatchActual(key string) string {
 		}
 		return orDefaultStr(d.effort, "<agent default>")
 	case "sdd":
-		if d.brSddIsSet() {
-			return orDefaultStr(d.sddEffectiveMode, "none")
-		}
 		return orDefaultStr(d.sdd, "none")
 	case "placement":
 		if d.here { // # MUTATION-ANCHOR: 844-A33
@@ -722,36 +707,6 @@ func (d *dsp) brDispatchActual(key string) string {
 		return d.brTaskBase() // # MUTATION-ANCHOR: 844-A38
 	}
 	return ""
-}
-
-// brSddIsSet is [ -n "${SDD_EFFECTIVE_MODE+set}" ]: the launch route resolves it (_validate_sdd_vendor_pair) before
-// the contract; the reuse route does not, until _ensure_sdd_effective_for_contract does.
-func (d *dsp) brSddIsSet() bool { return d.reusePane == "" || d.brSddResolved }
-
-// brResolveEffectiveSdd is _resolve_effective_sdd_mode, which area C owns (adapter: the one place that names it).
-func (d *dsp) brResolveEffectiveSdd(requested, surface, inherited string) {
-	d.resolveEffectiveSddMode(requested, surface, inherited)
-	d.brSddResolved = true
-}
-
-// ensureSddEffectiveForContract is _ensure_sdd_effective_for_contract.
-func (d *dsp) ensureSddEffectiveForContract() {
-	if d.brSddIsSet() {
-		return
-	}
-	surface, inherited := "", ""
-	if d.reusePane != "" {
-		if d.brIsProductRepo() {
-			surface = d.brSurfaceDir()
-		} else {
-			surface = filepath.Dir(filepath.Dir(d.reuseRundir))
-		}
-		inherited = d.runDispatchFramework(d.reuseRundir)
-		d.brResolveEffectiveSdd(d.sddRequested(), surface, inherited)
-		return
-	}
-	surface = d.codexValidationSurface()
-	d.brResolveEffectiveSdd(d.sdd, surface, inherited)
 }
 
 // brHeavyRuleRe is the pattern of _brief_heavy_rule_line: a pgrep with -f that names one of the three heavy jobs.
@@ -1085,7 +1040,7 @@ func (d *dsp) checkBriefContract() {
 	if decls == "" {
 		d.briefDeclared = "none"
 		d.warnBriefNamesNoModelNorEffort(decls)
-		if inferred != "" { // # MUTATION-ANCHOR: 844-A39
+		if inferred != "" {
 			d.checkTaskKind(inferred, "inferred")
 		}
 		d.warnBriefBodyAgents() // # MUTATION-ANCHOR: 844-A158
@@ -1141,10 +1096,7 @@ func (d *dsp) checkBriefContract() {
 		if key == "sandbox" {
 			switch val {
 			case "true", "yes": // # MUTATION-ANCHOR: 844-A44
-				d.sandbox = true // # MUTATION-ANCHOR: 844-A45
-				if d.sandboxSrc == "" {
-					d.sandboxSrc = "brief frontmatter"
-				}
+				d.die(sandboxRemoved("the brief key sandbox: " + val))
 			case "false", "no": // # MUTATION-ANCHOR: 844-A46
 			default:
 				d.die("the brief declares sandbox: " + val + " — it takes true or false. NOTHING was built.") // # MUTATION-ANCHOR: 844-A47
@@ -1191,12 +1143,12 @@ func (d *dsp) checkBriefContract() {
 			bad = true
 			continue
 		}
+		if key == "sdd" && val == "speckit" { // REMOVED: the Spec Kit flow left hw
+			d.die(speckitRemoved("brief declares sdd: speckit", "Declare sdd: none (or drop the key)."))
+		}
 		if key == "sdd" && val == "gentle" { // RETIRED SPELLING: `sdd: gentle` is read as `sdd: none` (gentle-ai left hw)
 			d.warn("brief declares sdd: gentle, which is retired (gentle-ai left hw): read as sdd: none")
 			val = "none"
-		}
-		if key == "sdd" {
-			d.ensureSddEffectiveForContract()
 		}
 		if key == "model" { // the brief door of the ONE effort check: a level inside the id is refused, not compared away
 			if msg := modelEffortSuffixRefusal(val, "the brief's model:"); msg != "" {
@@ -1209,7 +1161,7 @@ func (d *dsp) checkBriefContract() {
 			}
 		}
 		actual := d.brDispatchActual(key)
-		if val != actual { // # MUTATION-ANCHOR: 844-A55
+		if val != actual {
 			d.warn("brief declares " + key + "=" + val + " but this dispatch resolves " + key + "=" + actual)
 			bad = true
 		} else {
@@ -1221,7 +1173,7 @@ func (d *dsp) checkBriefContract() {
 		if requiredAgentBad { // # MUTATION-ANCHOR: 844-A56
 			d.die("the brief requires a named agent this " + d.agent + " runtime cannot invoke (see above). NOTHING was built — no worktree, no database, no pane. Choose a vendor that defines that agent, or change the brief if the mechanism requirement is wrong.")
 		}
-		d.die("the brief and the flags disagree (see above). NOTHING was built — no worktree, no database, no pane. Either fix the flags, or change the brief if the brief is what is wrong. This check exists because on 2026-08-24 a brief asking for OpenCode in a project tab was dispatched as Claude in a legacy space, and nothing compared the two.")
+		d.die("the brief and the flags disagree (see above). NOTHING was built — no worktree, no database, no pane. Either fix the flags, or change the brief if the brief is what is wrong. This check exists because on 2026-08-24 a brief asking for one vendor in a project tab was dispatched as another in a legacy space, and nothing compared the two.")
 	}
 	d.warnBriefBodyAgents() // # MUTATION-ANCHOR: 844-A159
 	if d.briefDeclared == "" {

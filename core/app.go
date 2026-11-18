@@ -66,9 +66,6 @@ func run(args []string, stdout, stderr *os.File) (rc int) {
 	if len(args) > 0 && args[0] == "stop-hook" { // the Stop hook (stop_hook.go): its stdout is the hook's, its stderr is never written
 		return runStopHook(args[1:], stdout, realGetenv, os.Stdin)
 	}
-	if len(args) > 0 && args[0] == "hw-sandbox" { // the Seatbelt sandbox and its outbox broker (hw_sandbox.go): raw bytes, no colour, no lane table
-		return sbMain(args[1:], stdout, stderr)
-	}
 	if len(args) > 0 && args[0] == "channel-send" { // the delivery transport (channel_send.go): raw bytes, no colour, no lane table
 		return runChannelSend(args[1:], stdout, stderr, realGetenv, os.Stdin, isTerminal(stdout), isTerminal(os.Stdin))
 	}
@@ -248,7 +245,7 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout, os.Stderr)) }
 // outsideAppGate refuses, before the verb runs, an app terminal address (`t3`, `machine/t3`) named from a process that is
 // not an app terminal. Without HC_TERMINAL_ID the caller names no app, and every herdr call of the verb would land on the
 // person's own server (QA6 N2). It lists, per verb, only the arguments that ARE addresses, so a task named `t3` is not one.
-// The verbs that read their address themselves (next, unstick, ruling) keep their own refusal; revive has its own, in reviveCmd.
+// The verbs that read their address themselves (next, ruling) keep their own refusal; revive has its own, in reviveCmd.
 func (a *app) outsideAppGate(verb string) {
 	var addrs []string
 	args := a.args

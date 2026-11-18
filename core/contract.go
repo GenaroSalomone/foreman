@@ -21,7 +21,7 @@ import (
 var RunIDPattern = regexp.MustCompile(`^2[0-9]{7}-[0-9]{6}-[0-9]+$`)
 
 // Markers are the zero-byte files whose presence is a fact about a run
-// (bin/hw, bin/done-invoker, bin/invoker-common.sh).
+// (written by hw and read by the invokers).
 var Markers = []string{"done", "reporting", "reopened", "blocked-waiting", "blocked-resumed", "delivery-uncertain"}
 
 // RunIDs lists the run directories under a task's .hw directory, newest name

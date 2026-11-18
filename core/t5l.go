@@ -144,7 +144,6 @@ func (l *lch) repolessArm() {
 		return
 	}
 	l.trustDir(l.wt)
-	l.applySdd(l.wt, l.sdd)
 	l.step("2/3  space + layout")
 	l.exportHwEnv(l.wt)
 	if l.artifactsDirFor(l.proj, l.wt) != l.wt {

@@ -1,9 +1,8 @@
 {
   "comment": [
-    "What the read-only guards protect, for every lane and every runtime.",
-    "Read by setup/guards/deny_repo_writes.py (Claude Code and Codex) and",
-    "setup/guards/deny-repo-writes.js (OpenCode), and by specialist_roster.py",
-    "for specialists_from. Why each value is what it is stays in the comment",
+    "What the read-only guards protect, for every lane.",
+    "Read by setup/guards/deny_repo_writes.py (Claude Code) and by",
+    "specialist_roster.py for specialists_from. Why each value is what it is stays in the comment",
     "beside the readers; this file carries values.",
     "",
     "Paths: a leading ~ is the user's home from the password database, not",

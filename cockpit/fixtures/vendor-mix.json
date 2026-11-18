@@ -46,7 +46,7 @@
     "last_at": 1789997780000
    },
    "gate": null,
-   "vendor": "opencode",
+   "vendor": "pi",
    "model": "provider/model-x",
    "effort": "medium",
    "agent_status": "working",
@@ -191,7 +191,7 @@
     "last_at": null
    },
    "gate": null,
-   "vendor": "codex",
+   "vendor": "claude",
    "model": "model-y",
    "effort": null,
    "agent_status": "idle",

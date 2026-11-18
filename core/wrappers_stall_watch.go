@@ -158,7 +158,7 @@ func swRun(w *wenv, args []string) int {
 		msg := "stall: " + or(w.getenv("HW_PROJECT"), "?") + ":" + or(w.getenv("HW_TASK"), "?") + " (pane " + or(pane, "?") +
 			") ended its turn at " + start.Format("15:04") + ", waiting on " + what + ", and has had no new turn for " +
 			strconv.FormatInt(mins, 10) + " min (HW_STALL_MIN=" + strconv.FormatInt(limit/60, 10) +
-			"). `hw status` shows it STALLED. It may be legitimate (a long heavy run, `setup/heavy --status`; an ask you have not answered) or stuck (an orphaned lock, a stopped holder): look at the pane, then rule it, or `hw unstick`/`hw done` it."
+			"). `hw status` shows it STALLED. It may be legitimate (a long heavy run, `setup/heavy --status`; an ask you have not answered) or stuck (an orphaned lock, a stopped holder): look at the pane, then rule it, or `hw done` it."
 		swAppend(alerts, swStamp(now)+" "+msg+"\n")
 		invoker := w.getenv("HW_INVOKER_PANE")
 		if invoker == "" {

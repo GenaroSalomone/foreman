@@ -12,7 +12,7 @@ A vulnerability is not an issue: see [`SECURITY.md`](SECURITY.md).
 
 ## Changing something
 
-1. Clone the repository (the [README](README.md#2-install) has the command)
+1. Clone the repository (the [README](README.md#quickstart) has the command)
    and run the fast gate once in it, to see it green before you start:
 
    ```sh

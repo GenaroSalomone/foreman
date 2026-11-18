@@ -3,7 +3,6 @@
 #
 #   ./install.sh --brain ~/brain --lane myapp --repo ~/code/myapp
 #   ./install.sh --brain ~/brain --lane other --repo ~/code/other   # add a lane
-#   ./install.sh --brain ~/brain --lane oc --repo ~/code/oc --vendor opencode  # OpenCode executors
 #   ./install.sh --brain ~/brain --check                            # look, write nothing
 #   ./install.sh --brain ~/brain --with-judgment-day                # also activate Judgment Day
 #   ./install.sh --with-recommended                                 # install missing dependencies with Homebrew
@@ -17,11 +16,8 @@
 #                            setup/guards/ runtime files), copied from this checkout,
 #                            plus projects.json, guards.json, CLAUDE.md, and per lane
 #                            <brain>/<lane>/{CLAUDE.md,decisions.md,briefs/,.claude/}
-#                            and, for an OpenCode lane, <brain>/<lane>/.opencode-executor/:
-#                            the executor's own OPENCODE_CONFIG_DIR (its guard)
 #   <bin-dir>/               symlinks hw, brain, done-invoker, ask-invoker,
-#                            channel-send, decisions → <brain>/bin/ (and
-#                            opencode-auto, when the run installs an OpenCode lane)
+#                            channel-send, decisions → <brain>/bin/
 #   <brain>/core/dist/<os>-<arch>/hw-core
 #                            hw's Go half, built here with setup/build-core when a Go toolchain
 #                            (1.22 or newer) is on PATH; every tool runs in it. It is REQUIRED: without such a
@@ -93,7 +89,7 @@ if [ -z "$_self" ] || [ ! -f "$(dirname "$_self")/bin/hw" ]; then
   exit "$_rc"
 fi
 SRC="$(cd -P "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BRAIN_DIR="" LANE="" REPO="" BASE="" CHECK=0 VENDOR="" MODEL="" WITH_JD=0 WITH_RP=0 WITH_REC=0 PERMISSIONS_OPT=""
+BRAIN_DIR="" LANE="" REPO="" BASE="" CHECK=0 WITH_JD=0 WITH_RP=0 WITH_REC=0 PERMISSIONS_OPT=""
 UPGRADE=0 DRY_RUN=0 TO="" BIN_DIR_GIVEN=0 NO_CORE="${FOREMAN_NO_CORE:-0}"   # FOREMAN_NO_CORE=1 is the suite's seam (tests/_common.sh), not a user option: it skips the build and says so
 ORIG_ARGS=("$@")
 OPERATOR="" MIN_MODEL="" REQ_BY=""   # "" = not given; --min-model / --requested-by "none" = given, none
@@ -132,7 +128,7 @@ usage() {
   cat <<'EOF'
 usage: install.sh init [--brain DIR] [--lane NAME] [--repo PATH] [--yes] [--dry-run]
        install.sh upgrade --brain DIR [--to VERSION] [--dry-run]
-       install.sh --brain DIR [--lane NAME --repo PATH [--base BRANCH] [--vendor claude|opencode [--model P/M]]]
+       install.sh --brain DIR [--lane NAME --repo PATH [--base BRANCH]]
                   [--operator NAME] [--min-model haiku|sonnet|opus|none] [--requested-by required|warn|none]
                   [--bin-dir DIR] [--with-judgment-day] [--with-review-plugins] [--with-recommended] [--permissions ask|skip] [--check]
 
@@ -140,10 +136,6 @@ usage: install.sh init [--brain DIR] [--lane NAME] [--repo PATH] [--yes] [--dry-
   --lane NAME     a lane for one product repository (lowercase word)
   --repo PATH     that repository's checkout (a git repo; never written to)
   --base BRANCH   the branch task worktrees start from (default: the repo's current branch)
-  --vendor V      who runs the lane's executors: claude (default) or opencode, which is
-                  deprecated: outside the 1.0 promise, it can be removed without a major version.
-                  The brainer is Claude Code either way
-  --model P/M     an opencode lane's default model, provider/model (default: opencode's own)
   --operator NAME the name hw's messages give for whoever decides (default: "the operator")
   --min-model T   the lowest Claude tier the lane launches without --below-floor-why:
                   haiku, sonnet, opus, or none (default: none)
@@ -158,8 +150,8 @@ usage: install.sh init [--brain DIR] [--lane NAME] [--repo PATH] [--yes] [--dry-
                   ~/.claude or ~/.pi and nothing becomes active by itself. Without them a brief with
                   plugins: is refused, naming this flag. Needs a checkout that carries setup/vendor/plugins
   --permissions P skip (recommended, the default) or ask. skip launches Claude Code with
-                  --dangerously-skip-permissions and OpenCode with --auto; ask leaves their
-                  permission prompts on, so an unattended executor waits for a person.
+                  --dangerously-skip-permissions; ask leaves its permission prompts on,
+                  so an unattended executor waits for a person.
                   Written to ~/.config/hw/permissions (XDG_CONFIG_HOME); --check writes nothing
   --with-recommended  install what is missing, required and recommended, with Homebrew, one
                   package at a time, each command printed before it runs; alone, it installs
@@ -201,8 +193,6 @@ while [ $# -gt 0 ]; do
     --lane)    [ $# -ge 2 ] || die "--lane needs a name"; LANE="$2"; shift 2 ;;
     --repo)    [ $# -ge 2 ] || die "--repo needs a path"; REPO="$2"; shift 2 ;;
     --base)    [ $# -ge 2 ] || die "--base needs a branch"; BASE="$2"; shift 2 ;;
-    --vendor)  [ $# -ge 2 ] || die "--vendor needs claude or opencode"; VENDOR="$2"; shift 2 ;;
-    --model)   [ $# -ge 2 ] || die "--model needs provider/model"; MODEL="$2"; shift 2 ;;
     --operator) [ $# -ge 2 ] || die "--operator needs a name"; OPERATOR="$2"; shift 2 ;;
     --min-model) [ $# -ge 2 ] || die "--min-model needs haiku, sonnet, opus or none"; MIN_MODEL="$2"; shift 2 ;;
     --requested-by) [ $# -ge 2 ] || die "--requested-by needs required, warn or none"; REQ_BY="$2"; shift 2 ;;
@@ -226,7 +216,7 @@ done
 [ "$UPGRADE" = 1 ] || [ "$DRY_RUN" = 0 ] || die "--dry-run only means something with upgrade"
 if [ "$UPGRADE" = 1 ]; then
   [ -n "$BRAIN_DIR" ] || die "upgrade needs --brain DIR"
-  [ -z "$LANE$REPO$BASE$VENDOR$MODEL$OPERATOR$MIN_MODEL$REQ_BY$PERMISSIONS_OPT" ] && [ "$CHECK$WITH_JD$WITH_RP$WITH_REC$BIN_DIR_GIVEN" = 00000 ] \
+  [ -z "$LANE$REPO$BASE$OPERATOR$MIN_MODEL$REQ_BY$PERMISSIONS_OPT" ] && [ "$CHECK$WITH_JD$WITH_RP$WITH_REC$BIN_DIR_GIVEN" = 00000 ] \
     || die "upgrade takes only --brain, --to and --dry-run: it reinstalls with the flags the install recorded"
 fi
 case "$PERMISSIONS_OPT" in ""|ask|skip) ;; *) die "--permissions must be ask or skip (got: $PERMISSIONS_OPT)" ;; esac
@@ -236,15 +226,6 @@ if [ -n "$LANE" ] || [ -n "$REPO" ]; then
   case "$LANE" in brain|setup|work|bin|lib|layouts|lanes) die "lane name '$LANE' is reserved by the brain's own layout" ;; esac
 fi
 [ -z "$BASE" ] || [ -n "$LANE" ] || die "--base only means something with --lane"
-[ -z "$VENDOR" ] || [ -n "$LANE" ] || die "--vendor only means something with --lane"
-# Codex is not offered: nothing here can prove a Codex executor end to end today
-# (docs/INSTALL.md, "Limits, stated").
-case "$VENDOR" in
-  ""|claude|opencode) ;;
-  *) die "--vendor must be claude or opencode (got: $VENDOR) — Codex lanes are not installed by this script" ;;
-esac
-[ -z "$MODEL" ] || [ -n "$LANE" ] || die "--model only means something with --lane"
-[ -z "$MODEL" ] || [[ "$MODEL" =~ ^[^/[:space:]]+/[^[:space:]]+$ ]] || die "--model must be provider/model (got: $MODEL) — try: opencode models"
 
 [ -z "$OPERATOR$MIN_MODEL$REQ_BY" ] || [ -n "$LANE" ] || die "--operator, --min-model and --requested-by only mean something with --lane"
 valid_operator() { [ -n "$1" ] && [ "${#1}" -le 60 ] && [[ "$1" != *[[:cntrl:]]* ]]; }
@@ -285,8 +266,7 @@ brain, path = sys.argv[1:3]
 r = json.load(open(path))
 if not isinstance(r, dict):
     raise SystemExit("not an object")
-# The record keeps the install's own flags. What a lane declares (vendor, model,
-# operator, floor, request rule) is read from projects.json by the install itself,
+# The record keeps the install's own flags. What a lane declares (operator, floor, request rule) is read from projects.json by the install itself,
 # so it is never replayed from here: a hand edit there would be refused as a conflict.
 OWN = ("base",)
 try:
@@ -299,7 +279,6 @@ def declared(l, k):
     if k == "operator": return pj.get("operator") if isinstance(pj.get("operator"), str) else None
     if k == "min_model":
         f = row.get("model_floor"); return f.get("tier") if isinstance(f, dict) else None
-    if k == "vendor": return row.get("vendor", "claude")
     return row.get(k)
 g = ["--brain", brain]
 if r.get("bin_dir"): g += ["--bin-dir", r["bin_dir"]]
@@ -310,11 +289,11 @@ for l in (r.get("lanes") or [None]):
     a = list(g)
     if l:
         a += ["--lane", l["lane"], "--repo", l["repo"]]
-        for k, f in (("base", "--base"), ("vendor", "--vendor"), ("model", "--model"),
+        for k, f in (("base", "--base"),
                      ("operator", "--operator"), ("min_model", "--min-model"), ("requested_by", "--requested-by")):
             if k in OWN and l.get(k): a += [f, l[k]]
         # a record from before this was so: its old values lose to projects.json, said once
-        diff = ["%s %s -> %s" % (k, l[k], declared(l, k) or "none") for k in ("vendor", "model", "operator", "min_model", "requested_by")
+        diff = ["%s %s -> %s" % (k, l[k], declared(l, k) or "none") for k in ("operator", "min_model", "requested_by")
                 if k not in OWN and l.get(k) and declared(l, k) is not None and declared(l, k) != l[k]]
         # only the copy that applies says so: the one that fetches it would say it twice
         if diff and (os.environ.get("FOREMAN_INSTALLED_FROM") or os.environ.get("FOREMAN_UPGRADE_TARGET") == "1"):
@@ -342,7 +321,7 @@ do_upgrade() {
       if [ -f "$BR/projects.json" ] && [ -n "$(jq -r '.lanes // {} | to_entries[] | select(.value.checkout) | .key' "$BR/projects.json" 2>/dev/null)" ]; then
         jq -r --arg c "$INSTALL_CMD" --arg b "$BR" '.lanes | to_entries[] | select(.value.checkout)
           | "  \($c) --brain \($b) --lane \(.key) --repo \(.value.checkout)"' "$BR/projects.json"
-        printf '(a lane that exists keeps its vendor, model and rules; add --with-judgment-day or --bin-dir DIR if you used them)\n'
+        printf '(a lane that exists keeps its rules; add --with-judgment-day or --bin-dir DIR if you used them)\n'
       else
         printf '  %s --brain %s --lane <name> --repo <path>   (plus --with-judgment-day or --bin-dir DIR if you used them)\n' "$INSTALL_CMD" "$BR"
       fi
@@ -425,15 +404,12 @@ EOF
 if [ "$UPGRADE" = 1 ]; then do_upgrade; fi
 
 # A LANE THAT EXISTS KEEPS WHAT ITS ROW SAYS unless the run names otherwise.
-# Re-running the plain command over a lane someone edited by hand (its model,
-# its vendor) must not turn into a refusal nothing can get past: only an
-# EXPLICIT --vendor/--model that differs is refused, in the plan below.
-# The row's kit comes with it: a row whose vendor is opencode keeps the
-# opencode_config_dir it has (or has not), instead of being compared against
-# the one a new lane would get.
-ROW_VENDOR="" ROW_KIT="" ROW_EXISTS="" ROW_OPERATOR="" ROW_FLOOR="" ROW_REQBY=""
+# Re-running the plain command over a lane someone edited by hand must not turn
+# into a refusal nothing can get past: only an EXPLICIT option that differs is
+# refused, in the plan below.
+ROW_EXISTS="" ROW_OPERATOR="" ROW_FLOOR="" ROW_REQBY=""
 adopt_lane_row() {
-  local row rm
+  local row
   row="$(python3 - "$(abspath "$BRAIN_DIR")/projects.json" "$LANE" <<'PY' 2>/dev/null || true
 import json, sys
 try:
@@ -445,22 +421,19 @@ op = doc.get("operator", "")
 op = op if isinstance(op, str) else ""
 # \x1f, not a tab: `read` collapses runs of a whitespace IFS, and most of these are often "".
 if cur is None:
-    print("\x1f".join(["", "", "", "0", op, "", "", ""]))
+    print("\x1f".join(["0", op, "", "", ""]))
 else:
     floor = cur.get("model_floor")
     floor = floor.get("tier", "") if isinstance(floor, dict) else ""
-    print("\x1f".join([cur.get("vendor", "claude"), cur.get("model", ""), cur.get("opencode_config_dir", ""),
-                       "1", op, floor, cur.get("requested_by", ""), ""]))
+    print("\x1f".join(["1", op, floor, cur.get("requested_by", ""), ""]))
 PY
 )"
   [ -n "$row" ] || return 0
-  IFS=$'\x1f' read -r ROW_VENDOR rm ROW_KIT ROW_EXISTS ROW_OPERATOR ROW_FLOOR ROW_REQBY <<EOF
+  IFS=$'\x1f' read -r ROW_EXISTS ROW_OPERATOR ROW_FLOOR ROW_REQBY <<EOF
 $row
 EOF
   [ "$ROW_EXISTS" = 1 ] || return 0
-  [ -n "$VENDOR" ] || VENDOR="$ROW_VENDOR"
-  [ -n "$MODEL" ] || [ "$VENDOR" != "$ROW_VENDOR" ] || MODEL="$rm"
-  # The lane's floor and request rule are chosen once, like its vendor: a re-run
+  # The lane's floor and request rule are chosen once: a re-run
   # that names neither keeps the row's.
   [ -n "$MIN_MODEL" ] || MIN_MODEL="${ROW_FLOOR:-none}"
   [ -n "$REQ_BY" ] || REQ_BY="${ROW_REQBY:-none}"
@@ -740,28 +713,15 @@ else
   if [ -n "$_gov" ] && [ "$(printf '1.22\n%s\n' "$_gov" | sort -V | head -n 1)" = 1.22 ]; then ok "go $_gov (builds hw-core)"; CORE_BUILD=1   # MUTATION-ANCHOR: 993-M02
   else printf '  MISSING go >= 1.22 — Go %s is older than 1.22, and hw-core (the Go half of hw) is required. Update: https://go.dev/dl\n' "${_gov:-of an unreadable version}"; missing=1; fix_tool "go >= 1.22: https://go.dev/dl"; fi
 fi
-# Linux needs four more that macOS setups carry already: hw and its scripts
-# call sd, fd and rg, and the OpenCode guard plugin is an ES module run by Node.
+# Linux needs three more that macOS setups carry already: hw and its scripts
+# call sd, fd and rg.
 if [ "$(uname -s)" = Linux ]; then
   need sd "hw and the lane scripts edit files with it" "apt install sd"
   need fd "hw finds files with it" "apt install fd-find, then link fdfind as fd"
   need rg "hw and the guards search with it" "apt install ripgrep"
-  if type -P node >/dev/null 2>&1; then
-    floor node 1 "; the OpenCode guard plugin is an ES module in a .js file"
-  else
-    deps_row node || die "lib/hw/deps.conf has no row for node"
-    printf '  MISSING node — the OpenCode guard plugin is an ES module in a .js file (%s or newer). Install: https://nodejs.org/en/download\n' "$DEPS_MIN"; missing=1; fix_tool "node >= $DEPS_MIN: https://nodejs.org/en/download"
-  fi
 fi
 { type -P python3 >/dev/null 2>&1 && python3 --version >/dev/null 2>&1; } || die "python3 is required to continue and does not run here (macOS: xcode-select --install; Linux: apt install python3)"   # MUTATION-ANCHOR: 996-M03
-MODEL_GIVEN="$MODEL"
 [ -z "$LANE" ] || adopt_lane_row
-: "${VENDOR:=claude}"
-# After the row is adopted: --model over an existing opencode lane needs no --vendor.
-[ -z "$MODEL_GIVEN" ] || [ "$VENDOR" = opencode ] || die "--model only means something with --vendor opencode"
-# opencode-auto only for a run that installs an OpenCode lane: a Claude-only
-# user who already has one of their own is not refused over a name they never use.
-[ "$VENDOR" != opencode ] || LINKS+=(opencode-auto)
 bash_major="${BASH_VERSINFO[0]}"
 case "$(uname -s)" in
   Darwin) ok "macOS" ;;
@@ -778,20 +738,6 @@ if type -P herdr >/dev/null 2>&1; then
   else
     printf "  MISSING herdr's claude integration — hw reads an agent's state through it. Install: herdr integration install claude\n"
     missing=1; fix_integration "herdr integration install claude"
-  fi
-fi
-if [ "$VENDOR" = opencode ]; then
-  need opencode "this lane's executors run in it" "https://opencode.ai"
-  if type -P opencode >/dev/null 2>&1; then
-    floor opencode 1
-  fi
-  if type -P herdr >/dev/null 2>&1; then
-    if grep -q '^opencode: current' <<<"$herdr_int"; then
-      ok "herdr's opencode integration"
-    else
-      printf "  MISSING herdr's opencode integration — hw reads an opencode executor's state through it. Install: herdr integration install opencode\n"
-      missing=1; fix_integration "herdr integration install opencode"
-    fi
   fi
 fi
 _soft="engram fzf rg"; [ "$(uname -s)" != Linux ] || _soft="engram fzf"   # rg is required on Linux, above
@@ -851,8 +797,8 @@ PERM_FILE="$(hw_permissions_file)"
 hw_permissions_resolve "$PERMISSIONS_OPT" || die "$PERMISSIONS_ERR"
 if [ -z "$PERMISSIONS_OPT" ] && [ ! -f "$PERM_FILE" ] && [ -z "${HW_PERMISSIONS:-}" ] && [ "$CHECK" = 0 ] && [ -t 1 ] \
    && { [ -n "$ASK_FD" ] || open_terminal; }; then
-  say "skip (recommended): Claude Code runs with --dangerously-skip-permissions and OpenCode with --auto, so executors"
-  say "never stop on a prompt. ask: those flags are left off, and an unattended executor WAITS for a person on every prompt."
+  say "skip (recommended): Claude Code runs with --dangerously-skip-permissions, so executors"
+  say "never stop on a prompt. ask: that flag is left off, and an unattended executor WAITS for a person on every prompt."
   PERMISSIONS_ANS=""
   ask PERMISSIONS_ANS "permissions" "skip" is_perm
   PERMISSIONS_OPT="${PERMISSIONS_ANS:-skip}"
@@ -942,12 +888,9 @@ fi
 PLAN="$(mktemp "${TMPDIR:-/tmp}/brain-install.XXXXXX")"
 trap 'rm -f "$PLAN"' EXIT
 STOP_CMD="bash '$BRAIN/bin/hw-stop-hook.sh' stop"
-OC_KIT=""
-if [ -n "$ROW_VENDOR" ] && [ "$VENDOR" = "$ROW_VENDOR" ]; then OC_KIT="$ROW_KIT"
-elif [ "$VENDOR" = opencode ]; then OC_KIT="$BRAIN/$LANE/.opencode-executor"; fi
-python3 - "$BRAIN" "$LANE" "$REPO" "$BASE" "$CLAUDE_CFG/settings.json" "$STOP_CMD" "$PLAN" "$VENDOR" "$MODEL" "$OC_KIT" "$OPERATOR" "$MIN_MODEL" "$REQ_BY" <<'PY'
+python3 - "$BRAIN" "$LANE" "$REPO" "$BASE" "$CLAUDE_CFG/settings.json" "$STOP_CMD" "$PLAN" "$OPERATOR" "$MIN_MODEL" "$REQ_BY" <<'PY'
 import json, os, sys
-brain, lane, repo, base, settings, stop_cmd, plan, vendor, model, oc_kit, operator, min_model, req_by = sys.argv[1:14]
+brain, lane, repo, base, settings, stop_cmd, plan, operator, min_model, req_by = sys.argv[1:11]
 out = {"refuse": [], "notes": []}
 BAD = object()   # unparseable — distinct from a file whose JSON is literally `false`
 
@@ -968,19 +911,12 @@ if lane and isinstance(pj, dict):
     if cur is not None and cur.get("checkout") != repo:
         out["refuse"].append("lane '%s' already exists in %s/projects.json with checkout %s, not %s — pick another lane name"
                              % (lane, brain, cur.get("checkout"), repo))
-    # The vendor is chosen once, when the lane is created: a second run that
-    # names another one would otherwise report success and change nothing.
     elif cur is not None:
         floor = cur.get("model_floor")
-        have = (cur.get("vendor", "claude"), cur.get("model", ""), cur.get("opencode_config_dir", ""))
-        want = (vendor, model, oc_kit)
         have_rules = ((floor.get("tier") if isinstance(floor, dict) else None) or "none", cur.get("requested_by") or "none")
         if have_rules != (min_model, req_by):
             out["refuse"].append("lane '%s' already exists in %s/projects.json with min-model=%s requested-by=%s, not min-model=%s requested-by=%s — edit projects.json by hand to change them"
                                  % (lane, brain, have_rules[0], have_rules[1], min_model, req_by))
-        if have != want:
-            out["refuse"].append("lane '%s' already exists in %s/projects.json as vendor=%s model=%s opencode_config_dir=%s, not vendor=%s model=%s opencode_config_dir=%s — edit projects.json by hand to change it, or pick another lane name"
-                                 % (lane, brain, have[0], have[1] or "<default>", have[2] or "<none>", want[0], want[1] or "<default>", want[2] or "<none>"))
     # The operator is the table's, said once: a name given now over a different one is
     # not silently kept nor silently replaced.
     if operator and isinstance(pj.get("operator"), str) and pj["operator"] != operator:
@@ -1247,13 +1183,13 @@ else
   # a run that builds none (the suite's seam, or a source with no core/) writes no switch file: nothing says bash
 fi
 put "$SRC/lanes/git-worktree.sh" "$BRAIN/lanes/git-worktree.sh"
-for g in deny_repo_writes.py deny-repo-writes.js deny-repo-writes-codex.py specialist_roster.py lane_housekeeping.py; do
+for g in deny_repo_writes.py deny_repo_writes_ask.py specialist_roster.py lane_housekeeping.py; do
   put "$SRC/setup/guards/$g" "$BRAIN/setup/guards/$g"
 done
 # The brain guard: a product lane's executor is not launched without it, so it
 # is mechanism like the read-only guard. Its list of programs is the operator's
 # to extend, so it is written once and never overwritten.
-for g in deny_brain_writes.py deny-brain-writes.js brain-guard.opencode.json; do
+for g in deny_brain_writes.py deny_brain_writes_shell.py deny_brain_writes_main.py; do
   put "$SRC/setup/guards/$g" "$BRAIN/setup/guards/$g"
 done
 sync_dir "$SRC/setup/guards/brain-guard" "$BRAIN/setup/guards/brain-guard"
@@ -1273,14 +1209,6 @@ else
     grep -E '^bin/hw[[:space:]]' "$SRC/setup/suite-data/brain-guard-programs.txt"; } >> "$_gp"
   chg "setup/suite-data/brain-guard-programs.txt (yours, kept) — the executor's bin/hw line added"
 fi
-# Every OpenCode executor's copy of the guard module is mechanism too, so a
-# guard fix reaches it on ANY run — not only on one that names its lane.
-if [ -f "$BRAIN/projects.json" ]; then
-  while IFS= read -r kit; do
-    [ -d "$kit/setup/guards" ] || continue
-    case "$kit/" in "$BRAIN/"*) put "$SRC/setup/guards/deny-repo-writes.js" "$kit/setup/guards/deny-repo-writes.js" ;; esac
-  done < <(jq -r '.lanes[] | .opencode_config_dir // empty' "$BRAIN/projects.json")
-fi
 src_sha="$(git -C "$SRC" rev-parse HEAD 2>/dev/null || echo unknown)"
 marker_new="$(printf '{\n  "installed_from": "%s",\n  "commit": "%s",\n  "version": "%s"\n}\n' "${FOREMAN_INSTALLED_FROM:-$SRC}" "$src_sha" "$(install_version)")"
 if [ "$(cat "$BRAIN/$MARKER" 2>/dev/null)" = "$marker_new" ]; then ok "$MARKER"
@@ -1290,7 +1218,7 @@ else printf '%s\n' "$marker_new" > "$BRAIN/$MARKER"; chg "$MARKER (commit $src_s
 # merged into what earlier runs recorded (a lane is replaced by name, the
 # switches only turn on), and left alone, date included, when nothing changed.
 RECORD_STATE="$(R_VERSION="$(install_version)" R_BIN_DIR="$([ "$BIN_DIR_GIVEN" = 0 ] || printf '%s' "$BIN_OUT")" R_JD="$WITH_JD" R_RP="$WITH_RP" R_PERM="$PERMISSIONS_OPT" \
-  R_LATEST_URL="$DEFAULT_LATEST_URL" R_LANE="$LANE" R_REPO="$REPO" R_BASE="$BASE" R_VENDOR="$VENDOR" R_MODEL="$MODEL" R_OPERATOR="$OPERATOR" R_MIN_MODEL="$MIN_MODEL" R_REQ_BY="$REQ_BY" \
+  R_LATEST_URL="$DEFAULT_LATEST_URL" R_LANE="$LANE" R_REPO="$REPO" R_BASE="$BASE" R_OPERATOR="$OPERATOR" R_MIN_MODEL="$MIN_MODEL" R_REQ_BY="$REQ_BY" \
   python3 - "$BRAIN/$RECORD_REL" <<'PY'
 import datetime, json, os, sys
 path = sys.argv[1]
@@ -1314,7 +1242,7 @@ flags = {
 }
 if e["R_LANE"]:
     lane = {"lane": e["R_LANE"], "repo": e["R_REPO"]}
-    for k, v in (("base", "R_BASE"), ("vendor", "R_VENDOR"), ("model", "R_MODEL"),
+    for k, v in (("base", "R_BASE"),
                  ("operator", "R_OPERATOR"), ("min_model", "R_MIN_MODEL"), ("requested_by", "R_REQ_BY")):
         if k in OWN and e[v]: lane[k] = e[v]
     flags["lanes"] = [l for l in flags["lanes"] if l.get("lane") != e["R_LANE"]] + [lane]
@@ -1358,7 +1286,7 @@ EOF
 # ── 4. the lane ─────────────────────────────────────────────────────────────
 shim() {  # <lane> — the per-lane Claude hook; the logic lives in setup/guards
   cat <<EOF
-#!/usr/bin/env python3
+#!/usr/bin/env -S python3 -I
 """The '$1' brainer's read-only guard. Generated by install.sh; the logic is
 setup/guards/deny_repo_writes.py and the policy guards.json, both at the brain
 root. A module that does not load DENIES every Bash command: Claude Code runs a
@@ -1419,9 +1347,9 @@ fi
 
 # projects.json, guards.json and every .claude/settings.json in one python
 # pass, each written only when its content changes.
-python3 - "$BRAIN" "$LANE" "$REPO" "$BASE" "$VENDOR" "$MODEL" "$OC_KIT" "$OPERATOR" "$MIN_MODEL" "$REQ_BY" <<'PY'
+python3 - "$BRAIN" "$LANE" "$REPO" "$BASE" "$OPERATOR" "$MIN_MODEL" "$REQ_BY" <<'PY'
 import json, os, sys
-brain, lane, repo, base, vendor, model, oc_kit, operator, min_model, req_by = sys.argv[1:11]
+brain, lane, repo, base, operator, min_model, req_by = sys.argv[1:8]
 
 def load(path, default):
     try:
@@ -1462,15 +1390,13 @@ if pj is None:
           "work": work, "lanes": {}}
 entry = {
     "product_repo": True, "hw_aliases": [], "brain_aliases": [],
-    "space": lane, "engram": lane, "vendor": vendor, "model": model, "account": "default",
+    "space": lane, "engram": lane, "vendor": "claude", "account": "default",
     "checkout": repo, "base": base, "base_ref_prefix": "",
     "branch": "task/{task}",
     "worktree_root": "{work}/{lane}", "worktree": "{work}/{lane}/{task}",
     "build": "lanes/git-worktree.sh",
     "db": {"line": "none — this lane provisions no database", "no_db_inert": True},
 }
-if oc_kit:
-    entry["opencode_config_dir"] = oc_kit
 if min_model != "none":
     entry["model_floor"] = {"tier": min_model}
 if req_by != "none":
@@ -1537,61 +1463,6 @@ if [ -n "$LANE" ]; then
   done
 fi
 
-# ── 4b. an OpenCode lane: the executor's own config directory ──────────────
-# hw hands it to the executor as OPENCODE_CONFIG_DIR (projects.json's
-# `opencode_config_dir`), which opencode loads like a project `.opencode/`.
-# So the guard reaches the executor without a byte in ~/.config/opencode or in
-# the worktree. Its policy is the executor's, not the brainer's: the lane's
-# checkout is protected, the task's own worktree is not — the brainer's
-# guards.json protects work/<lane> too, and would refuse every command an
-# executor runs there. The shared module is COPIED into the kit because it
-# finds its policy three directories above itself.
-if [ -n "$OC_KIT" ]; then
-  printf '\nopencode executor → %s\n' "${OC_KIT#"$BRAIN"/}"
-  mkdir -p "$OC_KIT/setup/guards" "$OC_KIT/plugin"
-  put "$SRC/setup/guards/deny-repo-writes.js" "$OC_KIT/setup/guards/deny-repo-writes.js"
-  python3 - "$BRAIN" "$LANE" "$REPO" <<'PY' | put_text "$OC_KIT/guards.json"
-import json, sys
-brain, lane, repo = sys.argv[1:4]
-tail = ("An executor writes only in its own worktree; the %s checkout is read-only to it. "
-        "Read-only git (log/status/diff/show/rev-list) is allowed." % lane)
-where = "the %s checkout (an executor writes only in its own worktree)" % lane
-pane = {"repo": repo, "worktrees": repo, "write_here": "your task's own worktree", "where": where}
-print(json.dumps({
-    "comment": ["What the %s OPENCODE EXECUTOR's guard protects. Written by install.sh;"
-                " the brainer's policy is guards.json at the brain root." % lane],
-    "brain_root": brain, "product_repos": [repo],  # MUTATION-ANCHOR: 198-M01
-    "defaults": {"git_tail": tail,
-                 "redirect_tail": "If you were only reading and the '>' is part of a search pattern, keep the checkout's absolute path out of the command."},
-    "lanes": {"brain": pane, lane: pane}}, indent=2))
-PY
-  cat <<EOF | put_text "$OC_KIT/plugin/deny-repo-writes.js"
-// The '$LANE' opencode EXECUTOR's guard. Generated by install.sh; the logic is
-// ../setup/guards/deny-repo-writes.js and the policy ../guards.json.
-// The import is dynamic and guarded: a module that does not load becomes a
-// throw on every bash call — opencode's one refusal — never a missing guard.
-const LANE = "$LANE";
-const SHARED = "../setup/guards/deny-repo-writes.js";
-
-export const DenyRepoWrites = async (pluginInput) => {
-  try {
-    const { makeDenyRepoWrites } = await import(SHARED);
-    return await makeDenyRepoWrites(LANE)(pluginInput);
-  } catch (error) {
-    const why = String(error?.message ?? error);
-    return {
-      "tool.execute.before": async (input) => {
-        if (input.tool !== "bash") return;
-        throw new Error(
-          "Blocked: the $LANE executor guard could not load its shared module (" +
-          SHARED + "): " + why + ". Every bash command is refused until it loads.");
-      },
-    };
-  }
-};
-EOF
-fi
-
 # ── 5. the user's side: PATH links and one Claude Code Stop hook ────────────
 printf '\nuser config\n'
 mkdir -p "$BIN_OUT"
@@ -1651,10 +1522,6 @@ if [ -n "$FIRST_RUN" ]; then
   printf '  %s   # finish the welcome and login, accept the Bypass Permissions warning, /exit\n' "$(claude_first_run_command "${CLAUDE_CONFIG_DIR:-}")"
 fi
 [ "$ENGRAM_WIRED" != no ] || printf '\nand for memory: engram setup claude-code\n'
-if [ "$VENDOR" = opencode ]; then
-  printf '\nand for the %s executors: opencode signs into its own provider, and that login is yours\n' "$LANE"
-  printf '  (opencode auth login, or a --model that needs none). This installer never reads it.\n'
-fi
 if [ -n "$LANE" ]; then
   cat <<EOF
 

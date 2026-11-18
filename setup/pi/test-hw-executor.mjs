@@ -19,7 +19,11 @@
 //                     (needs HW_PI_SUBAGENTS_DIR to hold a stub src/agents/frontmatter.js)
 //   plugin-agents     the declared plugins' own agents registered as `plugin:name` (HW_PI_PLUGIN_AGENT_DIRS), the name a
 //                     Claude executor reads from --plugin-dir: `pstack:comment-sicko` was `Unknown agent` before
+import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
+// The policy's product repos, read from the Python guard the adapter asks (setup/guards/deny_repo_writes_ask.py).
+const productRepos = () => JSON.parse(spawnSync("python3", [`${process.env.HW_BRAIN_ROOT}/setup/guards/deny_repo_writes_ask.py`],
+  { input: JSON.stringify({ lane: "brain", op: "product_repos" }), encoding: "utf8" }).stdout).repos;
 const [adapter, mode] = process.argv.slice(2);
 if (!adapter || !mode) {
   console.error("usage: node --experimental-strip-types test-hw-executor.mjs <adapter.ts> <mode>\n  modes: guard child-guard secret product-executor brain-guard turn-end runtime budget fallback specialists plugin-agents (see the header of this file)");
@@ -68,7 +72,7 @@ if (mode === "guard") {
   const tc = (toolName, input) => call("tool_call", { type: "tool_call", toolCallId: "t1", toolName, input });
   // The protected roots come from the policy itself (guards.json), so this
   // names no lane's tree and holds for the export's demo policy too.
-  const { PRODUCT_REPOS } = await import(`${process.env.HW_BRAIN_ROOT}/setup/guards/deny-repo-writes.js`);
+  const PRODUCT_REPOS = productRepos();
   const A = PRODUCT_REPOS[0], B = PRODUCT_REPOS[PRODUCT_REPOS.length - 1];
   let r = await tc("bash", { command: `echo x > ${A}/pi-test-nonexistent/f.txt` });
   ok(r?.block === true && /Blocked/.test(r.reason), "bash redirect into a product repo is blocked");
@@ -130,7 +134,7 @@ if (mode === "guard") {
   // A PLUGIN'S CHILD (pstack's `agent`), which starts pi with discovery ON and no `-ne`: what it finds in the private
   // agent directory's extensions/ is setup/pi/hw-child-guard.ts, and it must judge a tool call exactly as the executor
   // does. Nothing here writes: the protected path is a directory that does not exist, so the redirect fails in bash too.
-  const { PRODUCT_REPOS } = await import(`${process.env.HW_BRAIN_ROOT}/setup/guards/deny-repo-writes.js`);
+  const PRODUCT_REPOS = productRepos();
   const A = PRODUCT_REPOS[0];
   const tc = (toolName, input) => call("tool_call", { type: "tool_call", toolCallId: "t1", toolName, input });
   let r = await tc("bash", { command: `echo x > ${A}/pi-test-nonexistent/f.txt` });
@@ -529,7 +533,7 @@ if (mode === "guard") {
   }
   const secret = await refuse("monitor", "cat ." + "env");
   ok(secret?.block === true && /secret/i.test(secret.reason ?? ""), "the secret read guard judges a monitor's command before it starts");
-  const { PRODUCT_REPOS } = await import(`${process.env.HW_BRAIN_ROOT}/setup/guards/deny-repo-writes.js`);
+  const PRODUCT_REPOS = productRepos();
   const write = await refuse("monitor", `echo x > ${PRODUCT_REPOS[0]}/pi-test-nonexistent/f.txt`);
   ok(write?.block === true && /Blocked/.test(write.reason ?? ""), "the write guard judges a monitor's command too (a redirect into a product repo is refused)");
   // the output filter: a protected file's line never reaches an event, the log or the end notice

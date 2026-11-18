@@ -1,6 +1,6 @@
 package main
 
-// What hw revive hands the agent: the framework gate, the machine's permissions policy, the env file read back,
+// What hw revive hands the agent: the machine's permissions policy, the env file read back,
 // the workspace the tab goes into, and the args the recorded `resume` never carried because they are POLICY and
 // not identity (the permissions flag, the brain guard, the engram label proxy, the artifact tools).
 
@@ -12,38 +12,6 @@ import (
 	"strings"
 	"unicode"
 )
-
-// reviveSpeckitSkills is _speckit_skills_in: whether <dir>/.claude/skills holds a speckit-* skill.
-func reviveSpeckitSkills(dir string) bool {
-	d := dir + "/.claude/skills"
-	if !isDir(d) {
-		return false
-	}
-	ms, _ := filepath.Glob(d + "/speckit-*")
-	for _, m := range ms {
-		if _, err := os.Stat(m); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
-// reviveValidateSDD is _validate_sdd_vendor_pair (bin/hw:5698): it dies, before anything is built, for a
-// vendor that cannot run the framework in force.
-func (a *app) reviveValidateSDD(vendor, requested, surface string) {
-	mode := requested
-	if mode == "" && reviveSpeckitSkills(surface) {
-		mode = "speckit"
-	}
-	switch vendor + ":" + mode {
-	case "codex:", "codex:none", "opencode:", "opencode:none":
-		return
-	case "codex:speckit":
-		a.die("Codex framework dispatch REFUSED BEFORE BUILDING ANYTHING: --sdd " + mode + " requires a demonstrated native entry and completed flow, but that capability is unverified. Nothing was built. Use --sdd none for direct delivery, or validate Codex framework execution before re-dispatching.") // # MUTATION-ANCHOR: 863-G10
-	case "opencode:speckit":
-		a.die("OpenCode framework dispatch REFUSED BEFORE BUILDING ANYTHING: --sdd " + mode + " is Spec Kit, but this machine exposes Spec Kit only as Claude Code skills. Nothing was built. Use --agent claude for Spec Kit, or --sdd none for direct delivery.")
-	}
-}
 
 // reviveResolvePermissions is hw_permissions_resolve "" (project-spaces.sh:711) followed by its caller's
 // `|| _revive_die "$PERMISSIONS_ERR"`: ask|skip, from HW_PERMISSIONS, the machine file, or the default.
@@ -79,17 +47,17 @@ func (a *app) reviveResolvePermissions(st *reviveRunState) {
 }
 
 // reviveEnvAllowed reports whether `hw revive` may replay a name from the run env. The file sits in the
-// executor-writable workdir, and the replay starts the pane's shell BEFORE the sandbox shim is armed (lead #19), so
+// executor-writable workdir, and the replay starts the pane's shell with whatever that file says, so
 // only the names _write_run_env writes (core/t5l_env.go) pass, by exact name: BASH_ENV, ZDOTDIR, ENV, PATH, DYLD_*,
 // HW_CORE and every other HW_*/ENGRAM_* name hw never wrote are refused.
 var reviveEnvAllowedNames = map[string]bool{}
 
 func init() {
 	for _, k := range strings.Fields(`HW_PROJECT HW_TASK HW_WORKDIR HW_RUN HW_ARTIFACTS TMPDIR HW_LOCK_DIR ENGRAM_PROJECT
-		HW_EXECUTOR_VENDOR HW_INVOKER_VENDOR HW_INVOKER_SESSION HW_INVOKER_ENDPOINT HW_AGENT_PORT HW_AGENT_ENDPOINT
+		HW_EXECUTOR_VENDOR HW_INVOKER_VENDOR HW_INVOKER_SESSION HW_INVOKER_ENDPOINT
 		HW_PORT_WEB HW_PORT_API AGENT_BROWSER_NAMESPACE HW_BROWSER_PROFILE HW_REVIEW_BASE_REF HW_REVIEW_BASE_BRANCH
-		CLAUDE_CONFIG_DIR CLAUDE_CODE_DISABLE_AUTO_MEMORY CLAUDE_CODE_SUBAGENT_MODEL OPENCODE_CONFIG_DIR OPENCODE_CONFIG
-		HW_NEXT_WAIT_MS OPENCODE_CONFIG_CONTENT HW_OPENCODE_EFFORT HW_OPENCODE_EFFORT_AGENT HW_PI_BRAIN_GUARD
+		CLAUDE_CONFIG_DIR CLAUDE_CODE_DISABLE_AUTO_MEMORY CLAUDE_CODE_SUBAGENT_MODEL
+		HW_NEXT_WAIT_MS HW_PI_BRAIN_GUARD
 		HW_PI_FALLBACK_MODEL HW_PI_FALLBACK_THINKING HW_PI_ASKED_MODEL HW_PI_SUBAGENTS_DIR HW_PI_SUBAGENT_MODELS
 		HW_PI_EXPLORE_AGENT HW_PI_CLAUDE_AGENT_DIRS HW_PI_PLUGIN_AGENT_DIRS PI_SUBAGENT_EXTRA_AGENT_DIRS HW_INVOKER_PANE
 		HW_NO_REPORT HW_CHAINING_ENABLED HW_CHAINING_LEASE_SECONDS HW_CHAINING_LEASE_REASON HW_CHAINING_LEASE_HOLDER
@@ -208,8 +176,8 @@ docs:
 }
 
 // reviveEngramProxy is _engram_proxy_args (bin/hw:4641) for a revive (never a dry run): the args that put the
-// engram label proxy in front of `engram mcp`, written for the vendor. It starts from an empty AGENT_ARGS.
-func (a *app) reviveEngramProxy(proj, agent string) string {
+// engram label proxy in front of `engram mcp`, as claude's --mcp-config. It starts from an empty AGENT_ARGS.
+func (a *app) reviveEngramProxy(proj string) string {
 	label := a.c.t.get(proj, "engram")
 	if label == "" {
 		label = "brain"
@@ -233,18 +201,12 @@ func (a *app) reviveEngramProxy(proj, agent string) string {
 	if st, err := os.Stat(proxy); err != nil || st.Mode()&0o111 == 0 {
 		a.die("the engram label proxy is not on disk at " + proxy + ", and an executor is not launched with an unguarded engram")
 	}
-	switch agent {
-	case "claude":
-		doc := "{\n  \"mcpServers\": {\n    \"engram\": {\n      \"command\": " + reviveJSONString(proxy) + ",\n      \"args\": [\n        \"--label\",\n        " +
-			reviveJSONString(label) + ",\n        \"--\",\n        " + reviveJSONString(eng) + ",\n        \"mcp\",\n        \"--tools=agent\"\n      ]\n    }\n  }\n}\n"
-		if os.MkdirAll(filepath.Dir(file), 0o777) != nil || os.WriteFile(file, []byte(doc), 0o666) != nil {
-			a.die("could not write the engram proxy's --mcp-config at " + file)
-		}
-		return "--mcp-config " + file
-	case "codex":
-		return "-c mcp_servers.engram.command=\"" + proxy + "\" -c mcp_servers.engram.args=[\"--label\",\"" + label + "\",\"--\",\"" + eng + "\",\"mcp\",\"--tools=agent\"]" // # MUTATION-ANCHOR: 863-G11
+	doc := "{\n  \"mcpServers\": {\n    \"engram\": {\n      \"command\": " + reviveJSONString(proxy) + ",\n      \"args\": [\n        \"--label\",\n        " +
+		reviveJSONString(label) + ",\n        \"--\",\n        " + reviveJSONString(eng) + ",\n        \"mcp\",\n        \"--tools=agent\"\n      ]\n    }\n  }\n}\n"
+	if os.MkdirAll(filepath.Dir(file), 0o777) != nil || os.WriteFile(file, []byte(doc), 0o666) != nil {
+		a.die("could not write the engram proxy's --mcp-config at " + file)
 	}
-	return ""
+	return "--mcp-config " + file
 }
 
 func reviveJSONString(s string) string {
@@ -258,8 +220,7 @@ func (a *app) reviveBrainGuardOn(proj string) bool {
 	if _, _, guard := a.reviveLaneFields(proj); !guard {
 		return false
 	}
-	d := a.reviveBrainRoot() + "/setup/guards"
-	return isFile(d+"/brain-guard/hooks/hooks.json") && isFile(d+"/brain-guard.opencode.json") && isFile(d+"/deny-brain-writes.js") && isFile(d+"/deny_brain_writes.py")
+	return brainGuardFilesIn(a.reviveBrainRoot() + "/setup/guards")
 }
 
 // revivePluginDirs is pluginsArgs for a run that already exists: one directory per plugin the run's receipt says the
@@ -294,17 +255,6 @@ func (a *app) reviveFrameworkArgs(st *reviveRunState, vendor, cmdArgs, rundir st
 			args += add
 		}
 	}
-	if vendor == "codex" && st.permissions == "ask" {
-		if !reviveHasWord(args, "-a") {
-			args += " -a on-request" // # MUTATION-ANCHOR: 863-G25
-		}
-	}
-	if vendor == "codex" {
-		if !strings.Contains(" "+args+" ", " -c mcp_servers.engram.") {
-			rev := args
-			args = rev + " " + a.reviveEngramProxy(st.proj, "codex")
-		}
-	}
 	if vendor == "claude" {
 		if !reviveHasWord(cmdArgs, "--dangerously-skip-permissions") {
 			if st.permissions == "skip" { // # MUTATION-ANCHOR: 863-G12
@@ -325,7 +275,7 @@ func (a *app) reviveFrameworkArgs(st *reviveRunState, vendor, cmdArgs, rundir st
 		}
 		if !reviveHasWord(args, "--mcp-config") {
 			rev := args
-			args = rev + " " + a.reviveEngramProxy(st.proj, "claude")
+			args = rev + " " + a.reviveEngramProxy(st.proj)
 		}
 		// its artifact tools: the account is the one the revived pane will actually run under
 		acct := "default"
@@ -348,11 +298,6 @@ func (a *app) reviveFrameworkArgs(st *reviveRunState, vendor, cmdArgs, rundir st
 		st.explorerArm = false
 		if !reviveHasWord(args, "--agents") && a.explorerFor(st.proj).claudeJSON() != "" { // # MUTATION-ANCHOR: 1007-G02
 			st.explorerArm = true
-		}
-	}
-	if vendor == "codex" {
-		if !strings.Contains(" "+args+" ", " -c agents."+explorerName+".") {
-			args += a.explorerFor(st.proj).codexArgs()
 		}
 	}
 	st.agentArgs = args

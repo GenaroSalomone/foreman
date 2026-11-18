@@ -56,8 +56,6 @@ type dsp struct {
 	permissions, permissionsSrc, permissionsLine, permissionsErr string
 	agentArgs                                                    string
 	sdd                                                          string
-	sddDefaulted                                                 bool // no --sdd: none by default (sdd-legado-070); the reuse route does not forward it
-	sddEffectiveMode                                             string
 
 	// flags
 	brief, briefText                          string
@@ -78,8 +76,6 @@ type dsp struct {
 	tab                                       bool
 	tabExplicit, spaceExplicit                bool
 	dispatchDry                               bool
-	sandbox                                   bool
-	sandboxSrc, sandboxLine                   string
 	checkHandles                              bool
 	allowStaleHooks                           bool
 	checkReuse                                bool
@@ -99,11 +95,6 @@ type dsp struct {
 
 	// the lines the vendor step hands the manifest
 	artifactsLine, engramProxyLine string
-	opencodePrimaryAgent           string
-	opencodeAgentPort              string
-	opencodeExecutorConfig         string
-	opencodeEffortOverlay          string
-	hwAgentEndpoint                string
 
 	// the invoker (the brainer pane reports go to), resolved lazily as bash does
 	invokerDone                                          bool
@@ -123,8 +114,6 @@ type dsp struct {
 
 	// the manifest
 	dispatchText      string
-	dispatchFramework string
-	dispatchInPlay    bool
 	verifyFullSuite   bool
 	depsLine          string
 	hwRun             string

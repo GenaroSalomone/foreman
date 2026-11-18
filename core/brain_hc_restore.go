@@ -27,6 +27,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -151,6 +152,14 @@ func (b *brainRun) hcHolder() string {
 	return hcStr(h, "instance")
 }
 
+// appendNew is append that leaves a lane named twice (`restore demo demo`, or a lane and its alias) as the one it is.
+func appendNew(lanes []string, l string) []string {
+	if slices.Contains(lanes, l) {
+		return lanes
+	}
+	return append(lanes, l)
+}
+
 type restoreStep struct{ lane, addr, sid string }
 
 // restore is `brain restore [<lane>...] [--dry-run] [--on-start]`.
@@ -170,10 +179,10 @@ func (b *brainRun) restore(args []string) int {
 			b.errf("brain restore: unknown flag: %s  (try: --dry-run, --on-start)\n", a)
 			return 64
 		case b.laneKnown(a):
-			lanes = append(lanes, a)
+			lanes = appendNew(lanes, a)
 		default:
 			if al := b.laneAlias(a); al != "" {
-				lanes = append(lanes, al)
+				lanes = appendNew(lanes, al)
 				continue
 			}
 			b.errf("brain restore: not a lane: %s  (try: %s)\n", a, strings.Join(b.tab.names, ", "))
@@ -307,11 +316,6 @@ func (b *brainRun) restoreLanes(lanes []string, dry, keptOnly bool) (settled map
 			continue
 		}
 		n++
-		if b.tab.get(lane, "vendor") == "opencode" && brFileExists(laneDir+"/opencode.json") {
-			b.outf("skipped %s: its brainer is opencode, and only a claude conversation is resumed\n", lane)
-			settled[lane] = true
-			continue
-		}
 		addr := ""
 		for _, t := range terms {
 			if sameDir(t.cwd, laneDir) {

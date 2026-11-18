@@ -122,12 +122,12 @@ def falls_back_when_the_pane_cannot_be_read():
     tok = {"turn_state": "ended_unreported", "ctx_pct": "42.5", "ctx_tokens": "85000"}
     w.executor(task="blank", status="idle", tokens=tok, screen="a shell prompt, no statusline here\n")
     w.executor(task="unreadable", status="idle", tokens=tok)                       # the read fails
-    w.executor(task="opencode", vendor="opencode", status="working", screen=line("500k", "50.0"))
+    w.executor(task="gemini", vendor="gemini", status="working", screen=line("500k", "50.0"))
     w.publish()
     s = state(w)
     for t in ("blank", "unreadable"):
         assert ctx(s, t) == {"pct": 42.5, "tokens": 85000, "source": "turn-end"}, "%s: %s" % (t, ctx(s, t))
-    assert ctx(s, "opencode") == EMPTY, "an opencode pane's screen is not a claude statusline: %s" % ctx(s, "opencode")
+    assert ctx(s, "gemini") == EMPTY, "a non-claude pane's screen is not a claude statusline: %s" % ctx(s, "gemini")
 
 
 # ── a pi executor: its own state file, never a statusline or a claude transcript ─────────────────────
@@ -204,13 +204,13 @@ def pi_tokens_stand_alone_without_a_percent():
 def pi_and_claude_sources_do_not_cross():
     """pi-runtime.json is read for a pi run only, and a pi run never looks for a claude transcript."""
     w = cw.World(tmpdir())
-    for v in ("claude", "opencode", "codex"):
+    for v in ("claude", "gemini"):
         pi_file(w.executor(task=v, vendor=v, status="working"), {"tokens": 7538, "window": 1000000, "pct": 0.7538})
     p = w.executor(task="pi", vendor="pi", status="working")
     transcript(w, p, "33333333-aaaa-bbbb-cccc-0000000000a1", 283800, "claude-opus-4-7[1m]")        # a session id and a claude transcript, no pi file
     w.publish()
     s = state(w)
-    for v in ("claude", "opencode", "codex"):
+    for v in ("claude", "gemini"):
         assert ctx(s, v) == EMPTY, "a %s run must not read pi-runtime.json: %s" % (v, ctx(s, v))
     assert ctx(s, "pi") == EMPTY, "a pi run must not read a claude transcript: %s" % ctx(s, "pi")
 

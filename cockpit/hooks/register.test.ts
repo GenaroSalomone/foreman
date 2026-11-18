@@ -123,11 +123,11 @@ test('the cut running is on the band', async ($, on) => {
   expect(has(await texts(await drawBand($)), /CUT running/)).toBe(true)
 })
 
-test('opencode rows show ctx n/a and every vendor draws a row', async ($, on) => {
+test('rows without tokens show ctx n/a and every vendor draws a row', async ($, on) => {
   world(on, FIXTURES['vendor-mix.json']!, NOW)
   const lines = await texts(await drawPane($))
-  expect(has(lines, /opencode.*ctx n\/a/)).toBe(true)
-  expect(has(lines, /codex/)).toBe(true)
+  expect(has(lines, /pi · provider\/model-x.*ctx n\/a/)).toBe(true)
+  expect(has(lines, /claude · model-y/)).toBe(true)
   expect(has(lines, /^pi · /)).toBe(true)
 })
 
@@ -314,7 +314,7 @@ test('a card names the harness as hw wrote it, and a missing model or effort is 
   world(on, FIXTURES['vendor-mix.json']!, NOW)
   const lines = await texts(await drawPane($))
   expect(has(lines, /^pi · — · — · ctx/)).toBe(true)
-  expect(has(lines, /^opencode · provider\/model-x · medium · ctx n\/a/)).toBe(true)
+  expect(has(lines, /^pi · provider\/model-x · medium · ctx n\/a/)).toBe(true)
 })
 
 // ── how long an executor has worked, and whether it still moves ──

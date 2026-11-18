@@ -62,10 +62,10 @@ printf 'herdr %s %s\n' "\$1" "\${2:-}" >> "$STUB_LOG"
 case "\$1 \${2:-}" in
   "agent get")
     _t="\${W_TOKENS:-}"; [ -n "\$_t" ] || _t='{}'
-    printf '{"result":{"agent":{"agent":"opencode","agent_status":"%s","cwd":"%s","tokens":%s}}}\n' \\
+    printf '{"result":{"agent":{"agent":"claude","agent_status":"%s","cwd":"%s","tokens":%s}}}\n' \\
       "\${W_STATUS:-blocked}" "$WORKD" "\$_t" ;;
   "pane process-info")
-    printf '{"result":{"process_info":{"foreground_processes":[{"argv":["opencode","--port","49999"]}]}}}\n' ;;
+    printf '{"result":{"process_info":{"foreground_processes":[{"argv":["claude"]}]}}}\n' ;;
   *) printf '{"result":{}}\n' ;;
 esac
 STUB
@@ -100,25 +100,8 @@ DONE_STUCK='{"blocked_reason":"stuck","blocked_scope":"root","done_status":"done
 GENUINELY_STUCK='{"blocked_reason":"stuck","blocked_scope":"root"}'
 DONE_STUCK_BLOCKED_REPORT='{"blocked_reason":"stuck","blocked_scope":"root","done_status":"blocked","done_state":"delivered"}'
 
-# ── hw wait --dry-run: settled + already reported ───────────────────────────
-out="$(W_TOKENS="$DONE_STUCK" W_STATUS=blocked hw_wait wX:p1 --dry-run)" || true
-expect_says "hw wait: a settled blocked/stuck pane that already reported names it" \
-  "it already reported (done_status=done, done_state=delivered)" "$out"
-expect_says "hw wait: and says the token is stale, not a live condition" "stale" "$out"
-expect_silent "hw wait: and does NOT recommend hw unstick on a finished executor" "in-place recovery is available" "$out"
-
-# ── hw wait --dry-run: genuinely stuck (no done token) is UNCHANGED ─────────
-out="$(W_TOKENS="$GENUINELY_STUCK" W_STATUS=blocked hw_wait wX:p1 --dry-run)" || true
-expect_silent "hw wait: a genuinely stuck pane (no done token) gets no already-reported note" \
-  "it already reported" "$out"
-
-# ── hw wait, the real (non-dry) settled path carries the same note ─────────
-# witness_wait currently rounds its deadline to whole seconds. Three seconds
-# guarantees at least two full seconds after that truncation: enough for both
-# 200ms settled confirmations plus fixture/process overhead on a loaded host.
-out="$(W_TOKENS="$DONE_STUCK" W_STATUS=blocked hw_wait wX:p1 --timeout-ms $((3000 * HW_TEST_SLOW)))" || true
-expect_says "hw wait (real): the settled exit also carries the already-reported note" \
-  "it already reported (done_status=done, done_state=delivered)" "$out"
+# (`hw wait` no longer names a settled, already-reported pane: the settled verdict came from an endpoint only a removed vendor
+# had; claude and pi panes are judged live or undetermined, so this file keeps the `hw next` half.)
 
 # ── hw next (real, non-dry): delivered completion opens the gate ───────────
 # `done_status=blocked` (a task that reported --blocked) counts too — this is
@@ -136,15 +119,7 @@ expect_says "hw next: a blocked/stuck pane that already reported is reused, not 
 expect_says "hw next: and advances the next task again" "task 3 dispatched" "$out"
 expect_silent "hw next: and never recommends restarting a finished executor" "in-place recovery is available" "$out"
 
-# `hw next`'s own earlier gate refuses "has not reported" before these
-# branches are ever reached unless the task already reported (marker or
-# done_status token) or `--force` overrides it — so the genuinely-stuck,
-# never-reported case can only reach this message via --force, same as a real
-# brainer deliberately overriding an executor it knows will never report.
-out="$(W_TOKENS="$GENUINELY_STUCK" W_STATUS=blocked hw_next wX:p1 --force --wait-ms 1000 "next task")" || true
-expect_says "hw next: a genuinely stuck pane (no done token, --force) keeps the hw unstick recommendation, unchanged" \
-  "hw unstick" "$out"
-expect_silent "hw next: and is never told it already reported when it did not" "already reported" "$out"
+# (A genuinely stuck pane's `hw unstick` advice came from the settled verdict, which only a removed vendor's endpoint could reach.)
 
 # The one mutation arm this file ran (72-M01, `and false` on the already-reported check in lib/hw/next.sh, so a finished
 # reason=stuck pane is sent to hw unstick again) edited bash that go-060 S4 removed. Go holder: anchor 862-G10

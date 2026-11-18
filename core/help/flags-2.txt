@@ -7,14 +7,9 @@
                         Each proved done-invoker report creates one next-task authority.
                         A successful `hw next` consumes that authority; the next proved
                         report re-arms a fresh task-bound lease. Expiry closes the pane.
-    --sandbox          run the executor inside a Seatbelt profile that confines
-                       its writes and cuts its control sockets; it reports
-                       through an outbox. Same as `sandbox: true` in a brief.
-                       macOS and Claude Code only; TCP stays open
-                       (docs/THREAT-MODEL.md).
     --dry-run          print the dispatch, create nothing.
     --allow-stale-hooks launch even though the worktree's versioned hook settings
-                       (.claude/settings*.json, .codex/hooks.json, opencode.json)
+                       (.claude/settings*.json)
                        invoke a binary not on PATH — recorded in the receipt
     --fresh            build a fresh executor even when a reusable one is live
                        (contaminated context, another vendor/model, deliberate
@@ -27,7 +22,6 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md has the whole block)
     effort: <level>    the same, for --effort: the same levels per vendor and
                        the same refusal words. A brief that declares neither
                        model: nor effort: gets one warning naming both.
-    sandbox: true      same as --sandbox; `false` never turns a --sandbox off.
     requires-agents: [primary:|subagent:]<name>[, …]
                        agents the task cannot do without. hw refuses the
                        dispatch when the executor cannot reach one from its
@@ -52,8 +46,7 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md has the whole block)
                        claude: one --plugin-dir each, hooks running natively in
                        that session (writes redirected to $HW_ARTIFACTS/plugin-state);
                        pi: one -e <plugin dir> each (skills and extension);
-                       opencode and codex: NOT APPLIED. A name that is not
-                       installed refuses the dispatch before anything is built,
+                       A name that is not installed refuses the dispatch before anything is built,
                        naming the command that installs them.
     boundary: <what must never cross>
                        a build is not accepted as done without

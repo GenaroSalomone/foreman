@@ -11,8 +11,8 @@ git -C ~/code/toy add README.md && git -C ~/code/toy commit -m init
 ./install.sh --brain ~/brain --lane demo --repo ~/code/toy
 cp docs/examples/demo/briefs/hello.md ~/brain/demo/briefs/
 brain demo                                   # then, from the brainer's pane:
-hw demo hello --brief ~/brain/demo/briefs/hello.md --sdd none --no-report --dry-run
-hw demo hello --brief ~/brain/demo/briefs/hello.md --sdd none
+hw demo hello --brief ~/brain/demo/briefs/hello.md --no-report --dry-run
+hw demo hello --brief ~/brain/demo/briefs/hello.md
 ```
 
 The dry run carries `--no-report` because `hw` exits 1 with `HW_INVOKER_PANE UNRESOLVED` outside a

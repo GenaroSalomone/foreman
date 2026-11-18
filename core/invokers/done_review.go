@@ -52,6 +52,10 @@ func (c *Ctx) draftPRGate(receipt, status, project, workdir string, preflight *[
 	return nil
 }
 
+// KnownAccount is whether hw knows `name` as an account: the names `--account` accepts. It mirrors dsp.accountConfigDirOf in the
+// core package (this one cannot import it), and a test there holds the two together.
+func KnownAccount(name string) bool { return name == "default" || name == "personal" }
+
 // reviewAfterDelivery runs `hw review <lane> <task>` once the report is delivered: task 1 of a build that owes the review (a
 // re-task's re-check is the brainer's `hw next` onto the kept reviewer pane). It never changes the report's outcome.
 func (c *Ctx) reviewAfterDelivery(hwBin, receipt, status, project, task string) {
@@ -66,9 +70,17 @@ func (c *Ctx) reviewAfterDelivery(hwBin, receipt, status, project, task string) 
 			env = append(env, kv)
 		}
 	}
-	if rc := c.run(runOpts{stdout: c.Stdout, stderr: c.Stderr, env: env}, hwBin, "review", project, task); rc != 0 {
-		c.printf(c.Stdout, "THE REPORT IS DELIVERED AND SAFE, but the independent review was NOT dispatched (hw review exit %d; review_owed=1 stands in the receipt). Brainer: run `hw review %s %s` once the cause above is fixed.\n", rc, project, task)
+	// the review runs on the account the build ran on (the dispatch's `account` receipt): `hw review`'s own default is the lane's
+	args := []string{"review", project, task}
+	if account := receiptValue(receipt, "account"); KnownAccount(account) {
+		args = append(args, "--account", account)
+	} else if account != "" { // the receipt is the executor's to write: a value hw would refuse on its command line is not carried
+		c.errf("the receipt names account %q, which hw does not know: the review runs on the lane's own account.\n", account)
+	}
+	review := "hw " + strings.Join(args, " ")
+	if rc := c.run(runOpts{stdout: c.Stdout, stderr: c.Stderr, env: env}, hwBin, args...); rc != 0 {
+		c.printf(c.Stdout, "THE REPORT IS DELIVERED AND SAFE, but the independent review was NOT dispatched (hw review exit %d; review_owed=1 stands in the receipt). Brainer: run `%s` once the cause above is fixed.\n", rc, review)
 		return
 	}
-	c.printf(c.Stdout, "independent review dispatched by `hw review %s %s`.\n", project, task)
+	c.printf(c.Stdout, "independent review dispatched by `%s`.\n", review)
 }

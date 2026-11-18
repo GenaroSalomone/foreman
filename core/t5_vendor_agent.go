@@ -1,12 +1,10 @@
 package main
 
 // Train T5, area B: the permissions and the vendor's command line.
-// bin/project-spaces.sh: hw_permissions_file, hw_permissions_resolve; bin/hw: _build_agent_args, _free_channel_port.
+// bin/project-spaces.sh: hw_permissions_file, hw_permissions_resolve; bin/hw: _build_agent_args.
 
 import (
-	"net"
 	"os"
-	"strconv"
 	"strings"
 )
 
@@ -19,18 +17,6 @@ func vdSpaceCut(s string) string {
 		}
 		return r
 	}, s)
-}
-
-// vdEnvSet is `${VAR+x} = x`: set in the environment, even empty.
-func (d *dsp) vdEnvSet(k string) bool {
-	if _, ok := d.envOver[k]; ok {
-		return true
-	}
-	if d.getenv(k) != "" {
-		return true
-	}
-	_, ok := os.LookupEnv(k)
-	return ok
 }
 
 // permissionsResolve is hw_permissions_resolve: sets permissions/permissionsSrc, false (with permissionsErr) when
@@ -63,44 +49,6 @@ func (d *dsp) permissionsResolve(flag string) bool {
 	return false
 }
 
-// vdFreePort is _free_channel_port: the port the kernel picks for 127.0.0.1:0.
-func vdFreePort() string {
-	l, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		return ""
-	}
-	defer l.Close()
-	return strconv.Itoa(l.Addr().(*net.TCPAddr).Port)
-}
-
-// vdJqAgentDefined is `jq -e --arg a NAME '.agent[$a]' FILE >/dev/null 2>&1`: true when the last result of the
-// last value is neither null nor false; an unreadable file, a syntax error, or an index that errors is false.
-func vdJqAgentDefined(path, name string) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	vals, perr := parseStream(data)
-	if perr != nil {
-		return false
-	}
-	ok := false // no output at all is exit 4
-	for _, v := range vals {
-		agent, good := v.get("agent")
-		if !good {
-			ok = false
-			continue
-		}
-		r, good := agent.get(name)
-		if !good {
-			ok = false
-			continue
-		}
-		ok = r.truthy() // # MUTATION-ANCHOR: 844-B36
-	}
-	return ok
-}
-
 // vdValidEffort is the `low|medium|high|xhigh|max` pattern.
 func vdValidEffort(e string) bool {
 	switch e {
@@ -110,13 +58,13 @@ func vdValidEffort(e string) bool {
 	return false
 }
 
-// vdEffortAnyVendor is every level --effort takes on ANY vendor: vdValidEffort's five, codex's `ultra` (this file's
-// codex arm) and pi's `off`|`minimal` (t6_pi.go piBuildArgs). It exists for one reading: what may follow a `:` in a model
+// vdEffortAnyVendor is every level --effort takes on ANY vendor: vdValidEffort's five and pi's `off`|`minimal`
+// (t6_pi.go piBuildArgs). It exists for one reading: what may follow a `:` in a model
 // id. Anything else after the colon is the model's (`:batch`, `:free`, `:8b` — measured 2026-11-08 in projects.json and in
 // `pi --list-models`), and refusing it would be a false refusal.
 func vdEffortAnyVendor(e string) bool {
 	switch e {
-	case "ultra", "off", "minimal":
+	case "off", "minimal":
 		return true
 	}
 	return vdValidEffort(e)
@@ -147,10 +95,6 @@ func effortRefusal(agent, level string) string {
 	switch {
 	case level == "":
 		return ""
-	case agent == "codex":
-		if !vdValidEffort(level) && level != "ultra" { // # MUTATION-ANCHOR: 844-B65
-			return "codex --effort must be one of: low medium high xhigh max ultra (got: " + level + ")"
-		}
 	case agent == "pi":
 		switch level {
 		case "off", "minimal", "low", "medium", "high", "xhigh", "max":
@@ -195,9 +139,6 @@ func modelEffortSuffixRefusal(model, where string) string {
 func (d *dsp) buildAgentArgs() {
 	d.agentArgs = ""
 	d.modelPinned = ""
-	d.opencodeExecutorConfig = ""
-	d.opencodeEffortOverlay = ""
-	d.opencodePrimaryAgent = ""
 	perm := orDefaultStr(d.permissions, "skip")
 	switch d.agent {
 	case "claude":
@@ -212,7 +153,7 @@ func (d *dsp) buildAgentArgs() {
 			case d.model == "fable" || d.model == "opus" || d.model == "sonnet" || d.model == "haiku": // # MUTATION-ANCHOR: 844-B39
 			case strings.HasPrefix(d.model, "claude-"): // # MUTATION-ANCHOR: 844-B40
 			case strings.Contains(d.model, "/"): // # MUTATION-ANCHOR: 844-B41
-				d.die("that is a provider/model id, which is opencode's form, not claude's (got: " + d.model + "). Use an alias (opus, sonnet, haiku, fable) or a full claude-* name — or launch it with --agent opencode.")
+				d.die("that is a provider/model id, which is pi's form, not claude's (got: " + d.model + "). Use an alias (opus, sonnet, haiku, fable) or a full claude-* name — or launch it with --agent pi.")
 			default:
 				d.warn("claude model '" + d.model + "' is not recognized by hw; availability is unverified, passing it to the vendor unchanged.") // # MUTATION-ANCHOR: 844-B42
 			}
@@ -225,80 +166,6 @@ func (d *dsp) buildAgentArgs() {
 			}
 			d.agentArgs += " --effort " + d.effort // # MUTATION-ANCHOR: 844-B45
 		}
-	case "opencode":
-		if d.model != "" {
-			if !strings.Contains(d.model, "/") { // # MUTATION-ANCHOR: 844-B46
-				d.die("opencode needs provider/model, not a bare alias (got: " + d.model + "). Try: opencode models")
-			}
-			d.agentArgs += " --model " + d.model // # MUTATION-ANCHOR: 844-B47
-		}
-		d.opencodeExecutorConfig = d.vdLane(d.proj, "opencode_config_dir")
-		if d.opencodeExecutorConfig != "" && !isFile(d.opencodeExecutorConfig+"/plugin/deny-repo-writes.js") { // # MUTATION-ANCHOR: 844-B48
-			d.die("lane " + d.proj + " names opencode_config_dir " + d.opencodeExecutorConfig + ", but it has no plugin/deny-repo-writes.js — the executor would run unguarded. Re-run install.sh for this lane, or remove the field from projects.json")
-		}
-		d.opencodeAgentPort = vdFreePort()
-		if perm == "skip" { // # MUTATION-ANCHOR: 844-B49
-			d.agentArgs += " --auto"
-		}
-		d.agentArgs += " --port " + d.opencodeAgentPort // # MUTATION-ANCHOR: 844-B50
-		var defAgent, role string
-		switch {
-		case d.sdd == "none" && (strings.HasSuffix(d.model, "/gpt-5.6-sol") || strings.Contains(d.model, "/gpt-5.6-sol-")): // # MUTATION-ANCHOR: 844-B51
-			defAgent, role = "sol-orchestrator", "Sol orchestration primary; delegates economical work"
-		case d.sdd == "none" && (strings.HasSuffix(d.model, "/gpt-6-astra") || strings.Contains(d.model, "/gpt-6-astra-")): // # MUTATION-ANCHOR: 844-B52
-			defAgent, role = "astra-orchestrator", "Astra orchestration primary; delegates economical work"
-		default:
-			defAgent, role = "direct-worker", "direct worker; no orchestration"
-		}
-		ocAgent := defAgent
-		if d.vdEnvSet("HW_OPENCODE_AGENT") { // # MUTATION-ANCHOR: 844-B53
-			ocAgent = d.env("HW_OPENCODE_AGENT")
-			role = "explicit HW_OPENCODE_AGENT override" // # MUTATION-ANCHOR: 844-B54
-		}
-		home := d.env("HOME")
-		if ocAgent != "" { // # MUTATION-ANCHOR: 844-B55
-			ocConf := home + "/.config/opencode/opencode.json"
-			if vdJqAgentDefined(ocConf, ocAgent) {
-				d.agentArgs += " --agent " + ocAgent
-				d.opencodePrimaryAgent = ocAgent // # MUTATION-ANCHOR: 844-B56
-				d.info("opencode → --agent " + ocAgent + " (" + role + ")")
-			} else {
-				d.warn("opencode wanted --agent " + ocAgent + " (" + role + "), but it is not defined in " + ocConf) // # MUTATION-ANCHOR: 844-B57
-				d.warn("continuing without --agent — opencode will use its configured default_agent")
-			}
-		} else {
-			d.info("opencode → no --agent (HW_OPENCODE_AGENT is explicitly empty)")
-		}
-		d.opencodeEffortOverlay = ""
-		if d.effort != "" {
-			msg := effortRefusal(d.agent, d.effort)
-			if msg != "" { // # MUTATION-ANCHOR: 844-B58
-				d.die(msg)
-			}
-			if d.opencodePrimaryAgent == "" { // # MUTATION-ANCHOR: 844-B59
-				d.die("--effort needs a named, resolved primary to attach it to, but none is being passed to opencode (either HW_OPENCODE_AGENT is explicitly empty, or '" + ocAgent + "' is not defined in " + home + "/.config/opencode/opencode.json — see the warning above). Fix the agent name, unset the override, or drop --effort.")
-			}
-			if strings.Trim(d.opencodePrimaryAgent, "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-") != "" { // # MUTATION-ANCHOR: 844-B60
-				d.die("--effort cannot carry agent name '" + d.opencodePrimaryAgent + "': the overlay needs a name of [A-Za-z0-9._-] only, to survive the --here flag list and the crash restore. Rename the agent or drop --effort.")
-			}
-			d.opencodeEffortOverlay = `{"agent":{"` + d.opencodePrimaryAgent + `":{"reasoningEffort":"` + d.effort + `"}}}` // # MUTATION-ANCHOR: 844-B61
-		}
-	case "codex":
-		if perm == "ask" { // # MUTATION-ANCHOR: 844-B62
-			d.agentArgs += " -a on-request"
-		}
-		if d.model != "" {
-			if strings.Contains(d.model, "/") { // # MUTATION-ANCHOR: 844-B63
-				d.die("codex needs a bare model id, not opencode's provider/model form (got: " + d.model + "). Use --model " + d.model[strings.LastIndex(d.model, "/")+1:] + " with --agent codex.")
-			}
-			d.agentArgs += " --model " + d.model // # MUTATION-ANCHOR: 844-B64
-		}
-		if d.effort != "" {
-			if msg := effortRefusal(d.agent, d.effort); msg != "" {
-				d.die(msg)
-			}
-			d.agentArgs += " -c model_reasoning_effort=" + d.effort // # MUTATION-ANCHOR: 844-B66
-		}
 	case "pi":
 		d.piBuildArgs(perm) // t6_pi.go
 	}
@@ -306,11 +173,5 @@ func (d *dsp) buildAgentArgs() {
 	if d.agentArgs != "" {
 		d.info("agent args: " + d.agentArgs)
 	}
-	// THE CHEAP EXPLORER (lib/hw/explorer.sh), AFTER the line above so it stays the flags the operator chose.
-	switch d.agent {
-	case "codex":
-		d.agentArgs += d.explorer().codexArgs()
-	}
-	d.agentArgs = strings.TrimPrefix(d.agentArgs, " ")
 	d.explorerResolve()
 }

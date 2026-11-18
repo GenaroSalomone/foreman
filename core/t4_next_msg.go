@@ -56,13 +56,12 @@ type nextMsgEnv struct {
 }
 
 // nextMessage is _next_message: the facts of this re-task, rendered by the same renderer as the launch's prompt.
-// sdd is the framework mode the re-task sets ("" on a dry run, which sends no entry line).
-func (a *app) nextMessage(s *nextState, nextSeq, sdd string) string {
-	return renderPrompt(a.nextPromptFacts(s, nextSeq, sdd))
+func (a *app) nextMessage(s *nextState, nextSeq string) string {
+	return renderPrompt(a.nextPromptFacts(s, nextSeq))
 }
 
 // nextPromptFacts reads what the RUN knew: its env and its receipt.
-func (a *app) nextPromptFacts(s *nextState, nextSeq, sdd string) *promptFacts {
+func (a *app) nextPromptFacts(s *nextState, nextSeq string) *promptFacts {
 	e := nextMsgEnv{brief: s.brief, workdir: s.wtdir, reviewMode: nextReviewMode(s.brief), plugins: nextPluginsDeclared(s.brief), rundir: s.rundir}
 	r := e.rundir
 	if v, rc := a.nextRunEnv(r, "ENGRAM_PROJECT", false); rc == 0 {
@@ -81,7 +80,7 @@ func (a *app) nextPromptFacts(s *nextState, nextSeq, sdd string) *promptFacts {
 		e.session = ""
 	}
 	f := a.nextEnvFacts(e)
-	f.retask, f.retaskSeq, f.sdd, f.briefText = true, nextSeq, sdd, s.text
+	f.retask, f.retaskSeq, f.briefText = true, nextSeq, s.text
 	// the run's HW_TASK is task 1's name; task N is named by its own brief (a bare text keeps the run's) and saves under its own topic_key
 	if s.brief != "" {
 		if n := strings.TrimSuffix(nextBasename(s.brief), ".md"); n != "" {
@@ -91,10 +90,6 @@ func (a *app) nextPromptFacts(s *nextState, nextSeq, sdd string) *promptFacts {
 	f.task += "-t" + nextSeq
 	f.secrets = a.nextSecrets(s.brief)
 	f.requestedBy, f.authorizes = s.requestedBy, s.authorizes
-	if sdd != "" {
-		f.sddEntry = nextFrameworkEntry(sdd)
-	}
-	f.entryLine = sddEntryRetaskText(f)
 	return f
 }
 
@@ -109,7 +104,7 @@ func nextRunningModel(rundir string) string {
 
 // nextEnvFacts is the preamble's facts of a re-task, from the run's env as nextPromptFacts read it.
 func (a *app) nextEnvFacts(e nextMsgEnv) *promptFacts {
-	f := &promptFacts{lane: e.proj, task: e.task, operator: a.nextOperator(), binDir: a.nextBinDir(), brief: e.brief, label: e.engram, session: e.session,
+	f := &promptFacts{lane: e.proj, task: e.task, binDir: a.nextBinDir(), brief: e.brief, label: e.engram, session: e.session,
 		specialists: nextSpecialists(e.workdir), vendor: e.vendor, portWeb: e.portWeb,
 		build: nextIsBuild(e.brief), reviewMode: e.reviewMode, plugins: e.plugins}
 	if f.vendor == "" {

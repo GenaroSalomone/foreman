@@ -27,9 +27,7 @@ tools:". A named MCP tool (deferred ones too) is callable without it.
 
 Scanned: every lane's product checkout (main checkout only, never .worktrees)
 and brain/<lane> `.claude/agents`, brain/_agents (probed under both accounts),
-and the account agent dirs. OpenCode agents (`.opencode/agent`) are read
-statically: a permission key `engram_<tool>` must be a tool the engram proxy
-serves, and a key naming the retired plugin is dead.
+and the account agent dirs.
 
 Exit 0 clean (warnings do not count), 3 something broken, 1 unreadable (the
 oracle could not run for an agent: unverified is not clean).
@@ -53,21 +51,19 @@ CACHE_TTL = 900
 
 
 def frontmatter(path):
-    """-> (name, tools|None, tools_line, opencode_permission_keys[(line,key)])"""
+    """-> (name, tools|None, tools_line)"""
     try:
         lines = open(path, encoding="utf-8").read().split("\n")
     except OSError:
         return None
     if not lines or lines[0].strip() != "---":
         return None
-    name, tools, tline, perms = None, None, 0, []
-    in_perm = False
+    name, tools, tline = None, None, 0
     for i, ln in enumerate(lines[1:], start=2):
         if ln.strip() == "---":
             break
         m = re.match(r"^(name|tools):\s*(.*)$", ln)
         if m:
-            in_perm = False
             if m.group(1) == "name":
                 name = m.group(2).strip().strip("'\"")
             else:
@@ -84,19 +80,9 @@ def frontmatter(path):
                             break
                         tools.append(m2.group(1).strip("'\""))
             continue
-        if re.match(r"^permission:\s*$", ln):
-            in_perm = True
-            continue
-        if in_perm:
-            if re.match(r"^\S", ln):
-                in_perm = False
-                continue
-            m = re.match(r"^\s+['\"]?([A-Za-z0-9_*.-]+)['\"]?\s*:", ln)
-            if m:
-                perms.append((i, m.group(1)))
     if name is None:
         name = os.path.splitext(os.path.basename(path))[0]
-    return name, tools, tline, perms
+    return name, tools, tline
 
 
 def enabled_plugins(config_dir):
@@ -245,14 +231,14 @@ def main():
     # targets: (lane, file, realpath, cwd, account|None for "both accounts", stamp)
     targets, seen = [], {}
 
-    def add(lane, path, cwd, accounts, kind="claude"):
+    def add(lane, path, cwd, accounts):
         rp = os.path.realpath(path)
         for acc in accounts:
-            k = (rp, cwd, acc, kind)
+            k = (rp, cwd, acc)
             if k in seen:
                 continue
             seen[k] = 1
-            targets.append({"lane": lane, "file": path, "real": rp, "cwd": cwd, "account": acc, "kind": kind})
+            targets.append({"lane": lane, "file": path, "real": rp, "cwd": cwd, "account": acc})
 
     def md_files(d):
         try:
@@ -276,8 +262,6 @@ def main():
         if co and os.path.isdir(co):
             for f in md_files(os.path.join(co, ".claude", "agents")):
                 add(lane, f, co, [acc])
-            for f in md_files(os.path.join(co, ".opencode", "agent")):
-                add(lane, f, co, [acc], "opencode")
         d = os.path.join(brain, lane)
         for f in md_files(os.path.join(d, ".claude", "agents")):
             add(lane, f, d, [acc])
@@ -289,7 +273,6 @@ def main():
                 add("brain", f, brain, [acc])
 
     oracle = Oracle(claude, brain, home, a.cached)
-    engram_tools = set()
     # a `_agents` file reached by name needs a project dir that holds it
     stage = {}
 
@@ -308,7 +291,7 @@ def main():
     def work(t):
         fm = frontmatter(t["real"])
         t["fm"] = fm
-        if t["kind"] != "claude" or fm is None or fm[1] is None:
+        if fm is None or fm[1] is None:
             t["res"] = None
             return
         cwd = staged_cwd(t)
@@ -328,36 +311,20 @@ def main():
         fm = t["fm"]
         if fm is None:
             continue
-        name, tools, tline, perms = fm
-        if t["kind"] == "opencode":
-            continue
+        name, tools, tline = fm
         if tools is None:
             continue
         if t["res"] is None:
             unreadable.append(t)
             continue
         actual, servers = t["res"]["tools"], t["res"]["servers"]
-        engram_tools |= {n[len("mcp__engram__"):] for n in actual if n.startswith("mcp__engram__")}
         for tool in tools:
             miss = tool.startswith("mcp__") and re.sub(r"\(.*\)$", "", tool) not in actual
             sess = oracle.session(staged_cwd(t), cfg[t["account"]]) if miss else {"tools": []}
             cls = classify(tool, tools, actual, servers or sess.get("servers", []), t["plugins"], sess["tools"])
             if cls:
                 rows.append({"lane": t["lane"], "path": t["file"], "line": tline, "agent": name, "tool": tool,
-                             "class": cls, "account": t["account"], "kind": "claude"})
-    for t in targets:  # OpenCode, static: needs the engram toolset the claude probes saw
-        if t["kind"] != "opencode" or not t["fm"]:
-            continue
-        for ln, key in t["fm"][3]:
-            cls = None
-            if "plugin" in key and "engram" in key:  # MUTATION-ANCHOR: 193-M07
-                cls = "plugin apagado"
-            elif key.startswith("engram_") and engram_tools and key[len("engram_"):] not in engram_tools \
-                    and "*" not in key:
-                cls = "desconocida"
-            if cls:
-                rows.append({"lane": t["lane"], "path": t["file"], "line": ln, "agent": t["fm"][0], "tool": key,
-                             "class": cls, "account": t["account"], "kind": "opencode"})
+                             "class": cls, "account": t["account"]})
     oracle.save()
     shutil.rmtree(oracle.tmp, ignore_errors=True)
 
@@ -382,9 +349,9 @@ def main():
                   % (lane, ", ".join(agents), lane))
     else:
         for r in shown:
-            print("%-5s %-18s %s:%d  %-20s %-44s %s%s" % (
+            print("%-5s %-18s %s:%d  %-20s %-44s %s" % (
                 "FAIL" if r["class"] in BROKEN else "warn", r["lane"], r["path"], r["line"], r["agent"],
-                r["tool"], r["class"], " [opencode]" if r["kind"] == "opencode" else ""))
+                r["tool"], r["class"]))
         for t in unreadable:
             print("????  %-18s %s  sin verificar: `claude --agent` no devolvió init" % (t["lane"], t["file"]))
         if not shown and not unreadable:

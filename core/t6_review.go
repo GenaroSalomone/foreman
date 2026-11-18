@@ -1,6 +1,6 @@
 package main
 
-// `hw review <lane> <task> [--dry-run] [--here] [--at <sha>]`: the independent review of a build (design: brain/archive/setup/
+// `hw review <lane> <task> [--dry-run] [--here] [--at <sha>] [--account <name>]`: the independent review of a build (design: brain/archive/setup/
 // review-by-default-design/design.md §2, §3, §6 «Brief 1», §8 C1 C3 S1 S2). It measures the build's diff, picks the
 // tier, writes the reviewer's brief from docs/REVIEW-BRIEF.md and dispatches a fresh claude opus executor on a branch
 // cut at the reviewed SHA. It is a brainer verb: an executor reaches only its `--dry-run`.
@@ -12,7 +12,9 @@ package main
 //
 // What the build's receipt gains: review_head and review_tier always, review_run (the reviewer's brief) when one was
 // dispatched. `--at <sha>` is the exception: a blind review of a past head, for benchmarking, records nothing in the build's
-// receipt, so its verdict can never satisfy `hw done`'s merge gate. review_owed=1 is the build dispatch's (t5l_env.go): a failed `hw review` leaves it standing, so the
+// receipt, so its verdict can never satisfy `hw done`'s merge gate. `--account <name>` is the dispatch's own flag, carried as it
+// is: the reviewer's account is chosen, checked for parity and printed in the manifest by the one code path every dispatch uses
+// (t5_vendor_account.go), and without it the reviewer takes the lane's default. review_owed=1 is the build dispatch's (t5l_env.go): a failed `hw review` leaves it standing, so the
 // absence of a verdict is never read as "nothing owed" (C1).
 
 import (
@@ -245,24 +247,41 @@ type reviewPlan struct {
 	at                                      bool // --at: a past head; the build's receipt is not touched
 }
 
-const reviewUsage = "hw review <lane> <task> [--dry-run] [--here] [--no-report] [--at <sha>]"
+const reviewUsage = "hw review <lane> <task> [--dry-run] [--here] [--no-report] [--at <sha>] [--account <name>]"
+
+// reviewValuedNeeds is what each value-taking flag of `hw review` wants, for the refusal that names it.
+var reviewValuedNeeds = map[string]string{"--at": "a commit", "--account": "a name"}
+
+// reviewValuedFlag reads args[i] as one of reviewValuedNeeds' flags, spelled `--flag v` or `--flag=v`: the flag, its value
+// ("" when none follows) and the index of the last argument it consumed.
+func reviewValuedFlag(args []string, i int, x string) (flag, v string, next int, ok bool) {
+	for flag = range reviewValuedNeeds {
+		switch {
+		case x == flag && i+1 < len(args):
+			return flag, args[i+1], i + 1, true
+		case x == flag:
+			return flag, "", i, true
+		case strings.HasPrefix(x, flag+"="):
+			return flag, strings.TrimPrefix(x, flag+"="), i, true
+		}
+	}
+	return "", "", i, false
+}
 
 func (a *app) cmdReview() int {
 	dry, here, noReport := false, false, false
-	at := ""
+	at, account := "", ""
 	var pos []string
 	for i := 0; i < len(a.args); i++ {
 		x := a.args[i]
-		switch {
-		case x == "--at" || strings.HasPrefix(x, "--at="):
-			if x == "--at" && i+1 < len(a.args) {
-				i++
-				at = a.args[i]
-			} else {
-				at = strings.TrimPrefix(x, "--at=")
+		if flag, v, next, ok := reviewValuedFlag(a.args, i, x); ok {
+			if i = next; v == "" || strings.HasPrefix(v, "-") {
+				a.die("hw review: " + flag + " needs " + reviewValuedNeeds[flag] + " (usage: " + reviewUsage + ")")
 			}
-			if at == "" || strings.HasPrefix(at, "-") {
-				a.die("hw review: --at needs a commit (usage: " + reviewUsage + ")")
+			if flag == "--at" {
+				at = v
+			} else {
+				account = v
 			}
 			continue
 		}
@@ -319,9 +338,14 @@ func (a *app) cmdReview() int {
 	if err := os.WriteFile(path, []byte(brief), 0o666); err != nil {
 		a.die("hw review: cannot write the reviewer's brief " + path + ": " + err.Error())
 	}
-	args := []string{p.lane, p.rtask, "--agent", "claude", "--model", "opus", "--effort", "high", "--base", p.rbase, "--brief", path}
+	// --fresh always: a reviewer is a fresh session by contract (docs/REVIEW-BRIEF.md), and without it the dispatch may re-task a kept
+	// pane of the lane (a prior reviewer, the builder) that runs on another account, and refuse with a remedy this verb cannot take
+	args := []string{p.lane, p.rtask, "--agent", "claude", "--model", "opus", "--effort", "high", "--base", p.rbase, "--brief", path, "--fresh"}
 	if !noReport { // --keep-pane needs a report to chain after, so a no-report rehearsal drops it
 		args = append(args, "--keep-pane", "--why", "the re-check: the brainer re-tasks this reviewer with hw next after the builder's one fix round (review-by-default design §3.4)")
+	}
+	if account != "" { // the dispatch parses it, verifies parity (or refuses) and prints the manifest's account line
+		args = append(args, "--account", account)
 	}
 	if here {
 		args = append(args, "--here")
@@ -336,10 +360,18 @@ func (a *app) cmdReview() int {
 	cmd := exec.Command(a.c.brain+"/bin/hw", args...)
 	cmd.Stdout, cmd.Stderr = a.out, a.err
 	if err := cmd.Run(); err != nil {
-		if p.at { // a past head never touches the build's receipt: do not claim anything about it
-			a.die("the reviewer's dispatch failed (" + err.Error() + "): this was a review of a past head, so the build's receipt is untouched and nothing was recorded. Fix the cause above and run `hw review " + p.lane + " " + p.task + " --at " + p.head + "` again.")
+		retry := "`hw review " + p.lane + " " + p.task
+		if p.at {
+			retry += " --at " + p.head
 		}
-		a.die("the reviewer's dispatch failed (" + err.Error() + "): review_owed=1 still stands in the build's receipt and nothing else was recorded. Fix the cause above and run `hw review " + p.lane + " " + p.task + "` again.")
+		if account != "" { // the retry must run the reviewer where this one was asked to run, not on the lane's default
+			retry += " --account " + account
+		}
+		retry += "`"
+		if p.at { // a past head never touches the build's receipt: do not claim anything about it
+			a.die("the reviewer's dispatch failed (" + err.Error() + "): this was a review of a past head, so the build's receipt is untouched and nothing was recorded. Fix the cause above and run " + retry + " again.")
+		}
+		a.die("the reviewer's dispatch failed (" + err.Error() + "): review_owed=1 still stands in the build's receipt and nothing else was recorded. Fix the cause above and run " + retry + " again.")
 	}
 	if dry {
 		return 0
@@ -416,6 +448,11 @@ func (a *app) reviewPlan(laneArg, task, at string) *reviewPlan {
 	p.buildRunDir = a.reviewRunDir(p.wt)
 
 	base, how := a.reviewBaseOf(checkout, lane, p.head, p.buildBrief, p.buildRunDir)
+	if p.at && base == p.head { // a merged head with no receipt fork point: base..head is empty, so measure the commit against its first parent
+		if par, ok := gitRun(checkout, nil, "rev-parse", "--verify", "--quiet", p.head+"^1^{commit}"); ok {
+			base, how = strings.TrimSpace(string(par)), "first parent of --at "+p.head+" — it is already in the lane's base"
+		}
+	}
 	if base == "" {
 		a.die("hw review: no base to measure " + p.branch + " against (no review_base in its receipt and no merge-base with " + prefix + a.c.t.get(lane, "base") + ")")
 	}

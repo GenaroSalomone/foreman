@@ -30,7 +30,7 @@
 #
 # Run alone:  bash setup/tests/680-actualizar-es-un-comando.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
-unset HW_BRAIN_ROOT HW_PROJECTS_JSON CLAUDE_CONFIG_DIR OPENCODE_CONFIG_DIR OPENCODE_EXECUTOR_CONFIG \
+unset HW_BRAIN_ROOT HW_PROJECTS_JSON CLAUDE_CONFIG_DIR \
       FOREMAN_VERSION FOREMAN_INSTALL_CMD FOREMAN_INSTALLED_FROM FOREMAN_UPGRADE_TARGET \
       FOREMAN_NO_UPDATE_CHECK FOREMAN_LATEST_URL FOREMAN_TARBALL_BASE
 SUBJECT="${SUBJECT_ROOT:-$ROOT}"
@@ -174,7 +174,7 @@ for needle in "dry run" "target     v2.0.0" "recorded   v1.0.0" "--bin-dir $BINX
   case "$uout" in *"$needle"*) ;; *) fail "--dry-run does not say '$needle': $uout" ;; esac
 done
 [ "$sum0" = "$(tree_sum)" ] && [ "$ls0" = "$(ls "$TMP" | sort)" ] || fail "--dry-run changed something"
-case "$uout" in *"--operator"*|*"--min-model"*|*"--requested-by"*|*"--vendor"*|*"--model "*) fail "--dry-run replays a rule the lane's row owns: $uout" ;; esac
+case "$uout" in *"--operator"*|*"--min-model"*|*"--requested-by"*) fail "--dry-run replays a rule the lane's row owns: $uout" ;; esac
 pass "--dry-run names the target, the download and every recorded flag, and changes nothing"
 
 # ── 4. upgrade: newest release, same flags, --check, In short, a new record ──

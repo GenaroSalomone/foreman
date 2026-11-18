@@ -8,22 +8,8 @@ import (
 	"hwcore/internal/mux"
 )
 
-// vendorHasNativeTransport is invoker_vendor_has_native_transport.
-func vendorHasNativeTransport(v string) bool {
-	switch v {
-	case "", "claude", "codex", "pi":
-		return false
-	}
-	return true
-}
-
-// route is invoker_route: the vendor's native route, or herdr.
+// route is invoker_route: the brainer's pane is a herdr pane or an hc terminal.
 func (c *Ctx) route() string {
-	v := c.get("HW_EXECUTOR_VENDOR")
-	if v != "" && v == c.get("HW_INVOKER_VENDOR") && vendorHasNativeTransport(v) &&
-		c.get("HW_INVOKER_SESSION") != "" && c.get("HW_INVOKER_ENDPOINT") != "" {
-		return v
-	}
 	if mux.IsHCAddress(c.get, c.get("HW_INVOKER_PANE")) {
 		return "hc"
 	}
@@ -37,87 +23,10 @@ func (c *Ctx) channelSend() string { return c.BinDir + "/channel-send" }
 func (c *Ctx) deliver(message, reportState string) int {
 	route := c.route()
 	o := runOpts{stdin: c.Stdin, stdout: c.Stdout, stderr: c.Stderr}
-	if route == "herdr" || route == "hc" {
-		if reportState != "" {
-			return c.run(o, c.channelSend(), "--report", "--report-state", reportState, route, c.get("HW_INVOKER_PANE"), "-", message)
-		}
-		return c.run(o, c.channelSend(), "--report", route, c.get("HW_INVOKER_PANE"), "-", message)
+	if reportState != "" {
+		return c.run(o, c.channelSend(), "--report", "--report-state", reportState, route, c.get("HW_INVOKER_PANE"), "-", message)
 	}
-	return c.run(o, c.channelSend(), route, c.get("HW_INVOKER_SESSION"), c.get("HW_INVOKER_ENDPOINT"), message)
-}
-
-type sender struct{ vendor, session, endpoint string }
-
-// resolveSender is invoker_resolve_sender: the pane's own native address, live.
-func (c *Ctx) resolveSender(named string) sender {
-	pane := named
-	if pane == "" && mux.Backend(c.get) != mux.HC { // an app terminal's HERDR_PANE_ID is its launcher's pane, never its own
-		pane = c.get("HERDR_PANE_ID")
-	}
-	s := sender{}
-	if named == "" {
-		s.vendor = c.get("HW_EXECUTOR_VENDOR")
-	}
-	if pane == "" {
-		return s
-	}
-	info, _ := c.out("herdr", "agent", "get", pane)
-	doc, _ := decodeDoc(info)
-	if v, ok := jqPath(doc, "result", "agent", "agent_session", "value"); ok {
-		s.session = jqRawString(v)
-	}
-	if s.vendor == "" {
-		if v, ok := jqPath(doc, "result", "agent", "agent"); ok {
-			s.vendor = jqRawString(v)
-		}
-	}
-	switch s.vendor {
-	case "opencode":
-		process, _ := c.out("herdr", "pane", "process-info", "--pane", pane)
-		if port := opencodePort(process); port != "" {
-			s.endpoint = "http://127.0.0.1:" + port
-		}
-	case "claude", "codex", "pi":
-		s.endpoint = "-"
-	}
-	return s
-}
-
-// opencodePort is the jq of invoker_resolve_sender: the --port of the first
-// foreground process whose argv has "opencode".
-func opencodePort(process string) string {
-	doc, ok := decodeDoc(process)
-	if !ok {
-		return ""
-	}
-	fg, ok := jqPath(doc, "result", "process_info", "foreground_processes")
-	list, isList := fg.([]any)
-	if !ok || !isList {
-		return ""
-	}
-	for _, p := range list {
-		pm, _ := p.(map[string]any)
-		argv, _ := pm["argv"].([]any)
-		has := false
-		for _, a := range argv {
-			if a == "opencode" {
-				has = true
-			}
-		}
-		if !has {
-			continue
-		}
-		for i, a := range argv {
-			if a == "--port" {
-				if i+1 < len(argv) && argv[i+1] != nil {
-					return jqRawString(argv[i+1])
-				}
-				return ""
-			}
-		}
-		return ""
-	}
-	return ""
+	return c.run(o, c.channelSend(), "--report", route, c.get("HW_INVOKER_PANE"), "-", message)
 }
 
 // bashQ is bash's printf %q.
@@ -168,23 +77,14 @@ func octal3(n int) string {
 // replyCommand is invoker_reply_command: the command line the brainer runs to
 // answer, and (with a hold file) the pending-reply fact it will honour.
 func (c *Ctx) replyCommand(logicalID, intent, holdFile string) (string, error) {
-	rulingFlag := ""
 	switch intent {
-	case "answer":
-	case "ruling":
-		rulingFlag = "--ruling "
+	case "answer", "ruling":
 	default:
 		return "", die("internal: unknown reply intent %s", intent)
 	}
-	s := c.resolveSender("")
-	var route, target, endpoint string
-	if vendorHasNativeTransport(s.vendor) && s.session != "" && s.endpoint != "" {
-		route, target, endpoint = s.vendor, s.session, s.endpoint
-	} else {
-		route, target, endpoint = "herdr", c.get("HERDR_PANE_ID"), "-"
-		if mux.Backend(c.get) == mux.HC {
-			route, target = "hc", c.selfAddress()
-		}
+	route, target, endpoint := "herdr", c.get("HERDR_PANE_ID"), "-"
+	if mux.Backend(c.get) == mux.HC {
+		route, target = "hc", c.selfAddress()
 	}
 	if holdFile != "" {
 		if !strings.HasPrefix(holdFile, "/") {
@@ -198,15 +98,6 @@ func (c *Ctx) replyCommand(logicalID, intent, holdFile string) (string, error) {
 		}
 	}
 	cs := bashQ(c.channelSend())
-	if route == "opencode" {
-		if logicalID == "" {
-			return "", die("internal: OpenCode reply command needs a stable envelope id")
-		}
-		if holdFile != "" {
-			return cs + " " + rulingFlag + "--require processed --id " + bashQ(logicalID) + " --reply-hold " + bashQ(holdFile) + " " + bashQ(route) + " " + bashQ(target) + " " + bashQ(endpoint) + ` "<your answer>"`, nil
-		}
-		return cs + " " + rulingFlag + "--require processed --id " + bashQ(logicalID) + " " + bashQ(route) + " " + bashQ(target) + " " + bashQ(endpoint) + ` "<your answer>"`, nil
-	}
 	if intent == "ruling" {
 		if holdFile != "" {
 			return cs + " --ruling --reply-hold " + bashQ(holdFile) + " " + bashQ(route) + " " + bashQ(target) + " " + bashQ(endpoint) + ` "<your ruling>"`, nil

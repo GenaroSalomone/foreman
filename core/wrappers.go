@@ -1,7 +1,7 @@
 package main
 
-// The small runtime wrappers of bin/, as verbs of hw-core: browser-close, brain-archive, secret-unlock, opencode-auto,
-// codex-channel-session-hook, stall-watch and hw-reconcile (ported 2026-11-10, bash-justify-or-port and bash-port-rest). Each is a port of the bash it replaced — same stdout, stderr, exit status and on-disk effects.
+// The small runtime wrappers of bin/, as verbs of hw-core: browser-close, brain-archive, secret-unlock,
+// stall-watch and hw-reconcile (ported 2026-11-10, bash-justify-or-port and bash-port-rest). Each is a port of the bash it replaced — same stdout, stderr, exit status and on-disk effects.
 // 0.7.0 removed those bash bodies: bin/<tool> is a shim that execs `hw-core <tool> "$@"`, and a HW_IMPL_<TOOL> or `<tool>=bash`
 // word is said once and never chooses an implementation.
 //
@@ -30,13 +30,11 @@ type wenv struct {
 }
 
 var wrapperTools = map[string]func(*wenv, []string) int{
-	"browser-close":              bcRun,
-	"brain-archive":              baRun,
-	"secret-unlock":              suRun,
-	"opencode-auto":              oaRun,
-	"codex-channel-session-hook": chRun,
-	"stall-watch":                swRun,
-	"hw-reconcile":               hrRun,
+	"browser-close": bcRun,
+	"brain-archive": baRun,
+	"secret-unlock": suRun,
+	"stall-watch":   swRun,
+	"hw-reconcile":  hrRun,
 }
 
 func isWrapperTool(name string) bool { _, ok := wrapperTools[name]; return ok }

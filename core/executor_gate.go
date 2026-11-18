@@ -4,7 +4,7 @@ package main
 // bin/hw:13347-13400), in Go. `hw` exports HW_TASK and HW_RUN into every executor, so their presence is the caller's
 // role. What an executor runs: done on its OWN task (done-invoker), executor-turn-end, receipt, status, handle, suite,
 // human-boundary, review-range/-delta, output, help, and the rest of the list below. What it does not: another task's
-// done, next, ruling, unstick, reap/sweep --apply, preview, revive, a dispatch, and the operator's
+// done, next, ruling, reap/sweep --apply, preview, revive, a dispatch, and the operator's
 // HW_DONE_ALLOW_BRAIN_LEAK exit. An `env -u HW_TASK -u HW_RUN` gets past THIS check by design (not a sandbox); the brain
 // guard still refuses that spelling. The brainer path sets neither variable.
 //
@@ -92,8 +92,6 @@ func (a *app) executorGate(argv []string) {
 		a.executorRefuse("next", "is re-tasked by its brainer, not by itself")
 	case "ruling":
 		a.executorRefuse("ruling", "does not rule on another run")
-	case "unstick":
-		a.executorRefuse("unstick", "does not restart another pane")
 	case "reap":
 		if hasApply() {
 			a.executorRefuse("reap --apply", "does not remove worktrees")

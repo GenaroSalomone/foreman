@@ -24,5 +24,5 @@ labels: bug
 - foreman (`./install.sh --version`):
 - OS and shell (`bash --version`):
 - herdr:
-- Agent (Claude Code / OpenCode / Codex) and version:
+- Agent (Claude Code / pi) and version:
 - git, jq, python3:

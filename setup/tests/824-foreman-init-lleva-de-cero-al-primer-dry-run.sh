@@ -40,7 +40,7 @@
 #
 # Run alone:  bash setup/tests/824-foreman-init-lleva-de-cero-al-primer-dry-run.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
-unset HW_BRAIN_ROOT HW_PROJECTS_JSON CLAUDE_CONFIG_DIR OPENCODE_CONFIG_DIR OPENCODE_EXECUTOR_CONFIG
+unset HW_BRAIN_ROOT HW_PROJECTS_JSON CLAUDE_CONFIG_DIR
 [ -f "$ROOT/scripts/init.sh" ] || fail "scripts/init.sh is not in the tree — there is no \`init\` to test"
 
 # ── the world: stubs ahead of a copy of PATH that has no herdr, claude, engram or brew ──

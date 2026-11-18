@@ -486,8 +486,8 @@ func splitUnescapedPipes(l string) []string {
 
 // pluginVendored says whether a plugin review piece (`plugin:piece`, or a bare piece from an older receipt) belongs to a plugin
 // the brain vendors in setup/vendor/plugins: the directory holds a .claude-plugin/plugin.json, and a bare name is a skill or an
-// agent one of them ships. nil (nothing protected) when the run's own `plugins` receipt says its vendor loads none (codex,
-// opencode: "NOT APPLIED — …"): there a skip is the only honest exit, and a fresh dispatch would load nothing either.
+// agent one of them ships. nil (nothing protected) when the run's own `plugins` receipt says its vendor loads none (pi:
+// "NOT APPLIED — …"): there a skip is the only honest exit, and a fresh dispatch would load nothing either.
 func (c *Ctx) pluginVendored(receipt string) func(string) bool {
 	if strings.HasPrefix(receiptValue(receipt, "plugins"), "NOT APPLIED") { // # MUTATION-ANCHOR: 1150-G20
 		return nil

@@ -34,18 +34,11 @@ func (r *reapApplyRun) artifactsDirFor(proj, wd string) string {
 // runReported is _run_reported: the newest run of the directory carries its current task's done marker, was not reopened
 // and is not a BLOCKED report still waiting for a ruling.
 func (r *reapApplyRun) runReported(dir string) bool {
-	newest := ""
-	for _, rd := range reapApplyGlob(dir + "/.hw/2[0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*") {
-		if !isDir(rd) {
-			continue
-		}
-		if newest == "" || rd > newest {
-			newest = rd
-		}
-	}
-	if newest == "" {
+	ids := RunIDs(dir + "/.hw")
+	if len(ids) == 0 {
 		return false
 	}
+	newest := dir + "/.hw/" + ids[0]
 	if !isFile(reapApplyDoneMarker(newest)) {
 		return false
 	}

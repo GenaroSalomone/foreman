@@ -19,14 +19,13 @@ func (b *brainRun) launch(args []string) int {
 	if b.kind == "" {
 		b.kind = "claude"
 	}
-	// A lane whose vendor is opencode names who runs its EXECUTORS: the brainer is opencode only where the lane ships one.
-	if b.kind == "opencode" && !brFileExists(b.brain+"/"+proj+"/opencode.json") { // # MUTATION-ANCHOR: go-206-M01
+	// A lane whose vendor is a retired one (opencode, codex: what the released install.sh --vendor wrote) names who ran its
+	// EXECUTORS: the brainer is Claude Code either way, and a dispatch of that vendor is refused by hw.
+	if b.kind == "opencode" || b.kind == "codex" {
 		b.kind = "claude"
 	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
-		case "--opencode", "-o":
-			b.kind = "opencode"
 		case "--claude", "-c":
 			b.kind = "claude"
 		case "--no-cockpit":
@@ -72,7 +71,7 @@ func (b *brainRun) launch(args []string) int {
 				return 64
 			}
 		default:
-			b.errf("unknown flag: %s  (try: --opencode, --claude, --no-cockpit, --resume, --reset, --self, --force)\n", args[i])
+			b.errf("unknown flag: %s  (try: --claude, --no-cockpit, --resume, --reset, --self, --force)\n", args[i])
 			return 64
 		}
 	}
@@ -124,12 +123,6 @@ func (b *brainRun) launch(args []string) int {
 		b.errf("no brainer at %s\n", b.dir)
 		return 1
 	}
-	if b.kind == "opencode" {
-		if !brFileExists(b.dir + "/opencode.json") {
-			b.errf("no opencode brainer at %s (missing opencode.json)\n", b.dir)
-			return 1
-		}
-	}
 
 	// THE ENGRAM LABEL IS PINNED HERE: the lane's `engram` field, `brain` when it has none.
 	b.engramLabel = b.tab.get(proj, "engram")
@@ -141,9 +134,6 @@ func (b *brainRun) launch(args []string) int {
 
 	b.space = b.tab.get(proj, "space") // # MUTATION-ANCHOR: go-1340-M01
 	b.tabLabel = "brainer"
-	if b.kind == "opencode" {
-		b.tabLabel = "brainer:oc"
-	}
 
 	// THE HERRD APP IS A SECOND BACKEND, chosen once (core/internal/mux) and shared
 	// with the turn-end tokens: an herdr-core terminal has no workspace and no tab.
@@ -621,25 +611,6 @@ func cleanJoin(dir, name string) string {
 	// `cd -P "$BRAIN_BIN/.." && pwd` is the physical path of the directory above bin/.
 	d := pyRealpath(dir)
 	return strings.TrimRight(d, "/") + "/" + name
-}
-
-// jqCompact is `jq -nc` of the opencode config: the engram server through the label proxy.
-func jqCompact(_ map[string]any, proxy, label, engramBin string) string {
-	type server struct {
-		Type    string   `json:"type"`
-		Command []string `json:"command"`
-	}
-	doc := struct {
-		MCP struct {
-			Engram server `json:"engram"`
-		} `json:"mcp"`
-	}{}
-	doc.MCP.Engram = server{"local", []string{proxy, "--label", label, "--", engramBin, "mcp", "--tools=agent"}}
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	enc.Encode(doc)
-	return strings.TrimRight(buf.String(), "\n")
 }
 
 // writeEngramMCP writes the claude brainer's --mcp-config the way `jq -n … > file.$$ && mv` does: pretty, with a

@@ -664,6 +664,7 @@ func (t *t3) executorTurnEnd() int {
 	}
 
 	readTurns()
+	t.retireAnsweredHolds(taskDir, t.getenv("HW_TURN_END_PAYLOAD"))
 	turns++
 	t.fs.write(stateDir+"/turns", []byte(strconv.FormatInt(turns, 10)+"\n"), 0o666) // # MUTATION-ANCHOR: 841-T01
 	t.fs.remove(stateDir + "/stalled")                                              // a new turn ends the stall bin/stall-watch marked
