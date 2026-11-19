@@ -514,7 +514,7 @@ if [ -n "$missing" ]; then  # MUTATION-ANCHOR: 1125-M03
       echo
     fi
     echo "Otherwise run it yourself, then push again — any of these verdicts opens the push (the fast gate is all that is required):"
-    echo "  HW_TEST_GATE=fast bash setup/test-hw   (macOS fast gate: the suite the release and main stand on)"
+    echo "  HW_TEST_GATE=fast bash setup/test-hw   (macOS fast gate: the suite a push stands on; a release needs the full run, setup/verify-for-push)"
     echo "  setup/linux/run-suite.sh full   (Linux, in Docker — best effort, when the machine is idle; the release cut accepts the same verdict)"  # MUTATION-ANCHOR: 1125-M02
     echo "  bash setup/verify-for-push      (macOS full; never needed)"
     echo "If you are certain: git push --no-verify"

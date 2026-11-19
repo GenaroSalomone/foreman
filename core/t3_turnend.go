@@ -106,47 +106,25 @@ func t3LiveChildren(payload string) string {
 	vals, _ := parseStream([]byte(payload))
 	var outs []string
 	for _, v := range vals {
-		bt, ok := v.get("background_tasks")
+		tasks, ok := t3RunningTasks(v)
 		if !ok {
 			break
 		}
-		if !bt.truthy() {
-			continue // `// []`
-		}
-		var elems []*jval
-		switch bt.kind {
-		case vArr:
-			elems = bt.arr
-		case vObj:
-			for _, m := range bt.obj {
-				elems = append(elems, m.v)
-			}
-		default:
-			return strings.Join(outs, "\n")
+		if len(tasks) == 0 {
+			continue
 		}
 		var types []*jval
-		n := 0
-		for _, e := range elems {
-			if e.kind != vObj {
-				continue // `.status?` errors are swallowed: "" is not "running"
-			}
-			st, _ := e.get("status")
-			if !(st.kind == vStr && st.s == "running") { // # MUTATION-ANCHOR: 841-C01
-				continue
-			}
-			n++
+		for _, e := range tasks {
 			ty, _ := e.get("type")
 			if !ty.truthy() {
 				ty = jstr("task") // # MUTATION-ANCHOR: 841-C02
 			}
 			types = append(types, ty)
 		}
-		if n == 0 {
-			continue
-		}
+		n := len(tasks)
 		joined, ok := t3UniqueJoin(types)
 		if !ok {
-			return strings.Join(outs, "\n")
+			break // jq stops at the failing join: what it printed before reaches the shell's $(…) like any other end
 		}
 		outs = append(outs, strconv.Itoa(n)+" "+joined)
 	}
@@ -403,10 +381,11 @@ func t3JSONObj(kv [][2]string) string {
 	return b.String()
 }
 
-func (t *t3) publish(state string, turns int64, extraName, extraValue string) {
+// publish reports whether it SENT the label to the pane (false: read-only, no pane, or a ctx it could not read); the hc and herdr calls return no error, so not that the pane took it.
+func (t *t3) publish(state string, turns int64, extraName, extraValue string) bool {
 	backend := mux.Backend(t.getenv)
 	if t.fs.readonly || (backend == mux.Herdr && (t.getenv("HERDR_ENV") != "1" || t.getenv("HERDR_PANE_ID") == "")) {
-		return
+		return false
 	}
 	ctx := t.ctxJSON()
 	proj := t.getenv("HW_PROJECT")
@@ -440,7 +419,7 @@ func (t *t3) publish(state string, turns int64, extraName, extraValue string) {
 			pct, ok1 := c.get("pct")
 			tok, ok2 := c.get("tokens")
 			if !ok1 || !ok2 { // jq errors on `.pct` of a non-object: the whole params are lost
-				return
+				return false
 			}
 			tokens = append(tokens, [2]string{"ctx_pct", t3JSONStr(pct.raw())})    // # MUTATION-ANCHOR: 841-U08
 			tokens = append(tokens, [2]string{"ctx_tokens", t3JSONStr(tok.raw())}) // # MUTATION-ANCHOR: 841-U09
@@ -453,7 +432,7 @@ func (t *t3) publish(state string, turns int64, extraName, extraValue string) {
 		}
 		t3HCLabel(args, 10*time.Second)
 		t.executorCockpitKick()
-		return
+		return true
 	}
 	params := json.RawMessage(t3JSONObj([][2]string{
 		{"pane_id", t3JSONStr(t.getenv("HERDR_PANE_ID"))}, // # MUTATION-ANCHOR: 841-U10
@@ -464,6 +443,7 @@ func (t *t3) publish(state string, turns int64, extraName, extraValue string) {
 	t3HerdrCall(t.getenv("HERDR_SOCKET_PATH"), "pane.report_metadata", params, 10*time.Second)
 	// The cockpit shows this turn end: one debounced write (bin/cockpit-state --kick).
 	t.executorCockpitKick() // # MUTATION-ANCHOR: 841-T08
+	return true
 }
 
 func (t *t3) executorCockpitKick() {
@@ -700,6 +680,11 @@ func (t *t3) executorTurnEnd() int {
 		t.fs.remove(stateDir + "/handback-refused") // # MUTATION-ANCHOR: 841-B04
 		t.publish("ended_awaiting_child", turns, "children_running", children)
 		t.stallWatchStart(stateDir, turns, "a background child ("+t3RunningWhat(t.getenv("HW_TURN_END_PAYLOAD"))+")")
+		// children_running is written here and nowhere else, so a shell that dies without a notification (no new turn, no new
+		// Stop) held the pane at awaiting_child for good: a child watch of its own lowers the claim when the shells are gone, for as long
+		// as the pane awaits them (stall-watch --children; not the alert, so HW_STALL_MIN does not reach it). Only when every child is a
+		// shell: a subagent has no process to see.
+		t.childWatchStart(stateDir, turns, t3WatchedClaude(t.getenv("HW_TURN_END_PAYLOAD")))
 		return 0
 	}
 

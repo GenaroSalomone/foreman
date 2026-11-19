@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -658,7 +659,7 @@ func TestChannelSendSignalOutcomes(t *testing.T) {
 		want   []string
 		rc     int
 	}{
-		{"nothing sent", csNotSent, "", []string{"channel-send: SIGTERM after 0s — THIS IS YOUR CALLER KILLING IT (a Bash/harness timeout), not a channel-send failure. NOTHING WAS SENT to wX:p1 and nothing was lost: retry the identical command.\n"}, 1},
+		{"nothing sent", csNotSent, "", []string{"channel-send: SIGTERM after ", "s — THIS IS YOUR CALLER KILLING IT (a Bash/harness timeout), not a channel-send failure. NOTHING WAS SENT to wX:p1 and nothing was lost: retry the identical command.\n"}, 1},
 		{"nothing sent, with a budget", csNotSent, "540000", []string{"this call was allowed to wait up to 540s for wX:p1 to reach idle, so a caller timeout below 555000 ms will always kill it here."}, 1},
 		{"already delivered", csSent, "", []string{"but wX:p1 ALREADY HAS THIS MESSAGE", "Exiting 0 because the delivery happened."}, 0},
 		{"in flight", csInflight, "", []string{"WHILE THE SEND WAS IN FLIGHT to wX:p1. This CANNOT say whether it landed"}, 5},
@@ -669,12 +670,19 @@ func TestChannelSendSignalOutcomes(t *testing.T) {
 		cc := &chanSend{out: &o, err: &e, getenv: os.Getenv, exitProc: func(rc int) { got = rc }, sleep: func(float64) {}}
 		cc.sent, cc.target, cc.budgetMS, cc.t0 = c.sent, "wX:p1", c.budget, nextEpoch()
 		cc.onSignal("TERM")
+		// the elapsed seconds are two `date +%s` forks apart (nextEpoch), so a loaded machine that crosses a second boundary between them
+		// says "after 1s": the claim is the sentence around the number, and the number itself is only asserted to be one
 		if got != c.rc {
 			t.Errorf("%s: exit %d, want %d", c.name, got, c.rc)
 		}
 		for _, s := range c.want {
 			if !strings.Contains(e.String(), s) {
 				t.Errorf("%s: stderr lacks %q:\n%s", c.name, s, e.String())
+			}
+		}
+		if es := e.String(); strings.Contains(es, "SIGTERM after ") {
+			if i := strings.Index(es, "SIGTERM after "); !regexp.MustCompile(`^SIGTERM after [0-9]+s\b`).MatchString(es[i:]) {
+				t.Errorf("%s: the elapsed seconds are not a number: %q", c.name, es[i:min(i+30, len(es))])
 			}
 		}
 		// a signalled exit speaks the guard too: stdout is a pipe here, and the status is the delivery fact

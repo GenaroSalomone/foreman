@@ -143,10 +143,14 @@ unset _v 2>/dev/null || true
 # deliberate opt-in off, which is the "an arm nobody runs is not coverage"
 # failure `setup/mutation/mutation-coverage` exists to catch — a fix that caused it would
 # be worse than the bug.
+# HW_TEST_LOAD1/NCPU/PROBE are the readings load_scale takes in place of the machine's (below): they are kept so a run of ANY subject can be
+# made under a simulated load, `HW_TEST_LOAD1=30 HW_TEST_NCPU=14 bash setup/tests/<n>-*.sh` (1395 F; swept before, so load_scale read the real
+# machine instead). A simulated load also replaces the live probe, so a subject that scales a timing LIMIT by the load RIGHT NOW (33, 797, 798) asks
+# load_scale_live, which ignores them: a value left in the environment cannot tighten its limit on a busy machine.
 # HW_IMPL and HW_CORE (the binary hw routes to) ARE INPUTS THIS DIRECTORY OWNS: `HW_IMPL=go bash setup/test-hw` runs the whole suite through hw-core
 # (the answer is Go's, which is the default). HW_IMPL no longer chooses for hw, brain, channel-send, ask-invoker or done-invoker (go-060 S3: bash/shadow
 # print one warning per state and Go runs); it still chooses for the small tools (stop hook, hw-secret, ...) until their own cut.
-_HW_TEST_INPUTS=" HW_UNSTICK_BIN HW_SOURCE HW_CHECK_LIVE_REVIEW_DRIFT HW_CHECK_LIVE_REVIEW_BINDING HW_IMPL HW_CORE HW_TEST_TMPROOT "  # MUTATION-ANCHOR: 54-M02
+_HW_TEST_INPUTS=" HW_UNSTICK_BIN HW_SOURCE HW_CHECK_LIVE_REVIEW_DRIFT HW_CHECK_LIVE_REVIEW_BINDING HW_IMPL HW_CORE HW_TEST_TMPROOT HW_TEST_LOAD1 HW_TEST_NCPU HW_TEST_PROBE "  # MUTATION-ANCHOR: 54-M02
 for _v in ${!HW_@}; do  # MUTATION-ANCHOR: 54-M01
   case "$_HW_TEST_INPUTS" in *" $_v "*) continue ;; esac
   unset "$_v" 2>/dev/null || true
@@ -364,7 +368,7 @@ need_invokers() {
     || { printf 'runner: go build of core/cmd/invokers failed\n' >&2; exit 1; }
   export HW_INVOKERS="$TMP/invokers-build/invokers"
 }
-# copy_tracked_tree <src> <dst> — a release ships the TRACKED tree, so a fixture that stands for a
+# copy_tracked_tree <src> <dst> [<glob>] — a release ships the TRACKED tree, so a fixture that stands for a
 # release (or for a published repository) copies that and nothing else. The checkout's untracked
 # load (lane evidence, snapshots, .claude caches, build output) was ~440 MB in the main
 # checkout against ~73 MB in a task worktree, copied again by every subject that took the whole
@@ -372,7 +376,8 @@ need_invokers() {
 # The bytes are the working tree's, so a tracked-but-modified file is kept as it stands and a
 # tracked-but-deleted one is left out. The list: the runner's own `git ls-files` for $ROOT under
 # test-hw (its snapshot has no .git), else `git ls-files` of <src>; a <src> with no tracked set
-# (no git work tree) is copied whole, minus .git and .claude/worktrees, as before.
+# (no git work tree) is copied whole, minus .git and .claude/worktrees, as before. A <glob> (fnmatch, `*` crosses `/`) keeps
+# only the tracked paths it matches: 126 wants the lane agents, not 73 MB.
 copy_tracked_tree() {
   local src dst list
   src="$(cd -P "$1" && pwd)"; dst="$2"; list="$TMP/tracked-list.$$.$RANDOM"
@@ -387,7 +392,7 @@ sys.stdout.buffer.write(b"".join(os.fsencode(p) + b"\0" for p in json.load(open(
     return 0
   fi
   ( cd "$src" && python3 -I -c 'import os,sys  # MUTATION-ANCHOR: 681-M02
-sys.stdout.buffer.write(b"".join(p + b"\0" for p in sys.stdin.buffer.read().split(b"\0") if p and (os.path.islink(p) or os.path.isfile(p))))' < "$list" \
+sys.stdout.buffer.write(b"".join(p + b"\0" for p in sys.stdin.buffer.read().split(b"\0") if p and __import__("fnmatch").fnmatch(os.fsdecode(p), sys.argv[1]) and (os.path.islink(p) or os.path.isfile(p))))' "${3:-*}" < "$list" \
       | tar --null -T - -cf - ) | tar -xf - -C "$dst"
   rm -f "$list"
 }
@@ -403,6 +408,14 @@ hw_lib_beside() {
   local d="$1/../lib/hw"
   rm -rf "$d"; mkdir -p "$d"; cp -R "$ROOT"/lib/hw/. "$d/"
   (cd "$d" && pwd)
+}
+
+# copy_core <src-core> <dst-core>: a fixture copy of core/ WITHOUT dist/ — the gitignored release binaries (82M in a main checkout) are no
+# source, and `cp -R` then `rm -rf dist` pays the copy first. Entries are copied one by one so dist is never read. A fixture that must RUN
+# hw-core links or builds the one binary it needs (setup/build-core --native); none of these copies does.
+copy_core() {
+  mkdir -p "$2"; local e
+  for e in "$1"/* "$1"/.[!.]*; do [ -e "$e" ] || continue; [ "${e##*/}" = dist ] || cp -R "$e" "$2/"; done
 }
 
 # THE SECOND CUT OF THE HERDR SWEEP ABOVE, here because it needs $TMP.
@@ -476,6 +489,9 @@ export HW_AGENT_TOOLS=off
 # The suite's safe root is named BEFORE HOME is faked: contract_world_root (contract-hw/world.sh) reads
 # ${HW_TEST_TMPROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/hw-test-<uid>}, and with the fake HOME the worlds landed under the fake HOME's cache dir.
 export HW_TEST_TMPROOT="${HW_TEST_TMPROOT:-${XDG_CACHE_HOME:-$HOME/.cache}/hw-test-$(id -u)}"
+# A subject never prunes the real root: the runner that started it already did, and a subject that runs a nested test-hw (440, 131) or is run
+# alone must not do it again from inside a test (R1 of the 2026-11-19 review). A subject that WANTS the prune names a root of its own and clears this (1401).
+export HW_TEST_PRUNE_DONE=1
 export HOME="$TMP/home"
 mkdir -p "$HOME"
 export XDG_CONFIG_HOME="$HOME/.config"
@@ -508,6 +524,8 @@ FIXTURES="$ROOT/setup/fixtures"
 _brain_rel="$(jq -r 'if .root then .root + "/brain" else empty end' "$ROOT/projects.json" 2>/dev/null || true)"
 _brain_rel="${_brain_rel:-brain-under-test}"
 export HW_BRAIN_ROOT="$HOME/${_brain_rel#\~/}"
+# The agents root under the home (projects.json `root`), where `work/<lane>/<task>` sits: a fixture names it from here, never as a literal.
+AGENTS_HOME="${HW_BRAIN_ROOT%/brain}"
 export HW_PROJECTS_JSON="$ROOT/projects.json"
 
 # lane_harness <hw> <out.sh> <fn>... — the named functions extracted from <hw>,
@@ -540,6 +558,11 @@ json.dump(t, open(sys.argv[2], "w"), indent=2)
 PY
 }
 
+# lane_account <lane> [<table.json>] — the account a lane declares ("default" when it declares none), read from the table the
+# subject runs against; other_account <acct> — the one account that is not it. A fixture that names `personal` or `default`
+# for a lane as a literal goes red the day projects.json moves the lane (setup, 2026-11-17: 800, 806, 810).
+lane_account() { jq -r --arg l "$1" '.lanes[$l].account // "default"' "${2:-$HW_PROJECTS_JSON}"; }
+other_account() { if [ "$1" = personal ]; then echo default; else echo personal; fi; }
 # go_anchor_held <id> <core/file.go> <what it holds> — a claim whose body was bash and is Go now is HELD by a Go mutant, which
 # setup/tests/848-* kills in process; this proves the three facts that make that true without paying the build again: the
 # anchor is on one line of the Go file, setup/mutation/mutation-anchors.tsv names that file for it, and a mutant row
@@ -881,10 +904,6 @@ PYREC
 # Use as the extra body of a stub: `stub "$R/setup/test-hw" test-hw "$FAST_VERDICT_STUB; echo '3 tests passed  (TRACKED only — x)'"`.
 FAST_VERDICT_STUB='if [ "${HW_TEST_GATE:-}" = fast ] && [ "${CUT_STUB_NO_FAST_VERDICT:-}" != 1 ]; then t="$(git rev-parse --verify -q "HEAD^{tree}" 2>/dev/null)" && d="$(git rev-parse --git-common-dir 2>/dev/null)/hw-push-verified" && mkdir -p "$d" && printf "commit=%s\ntree=%s\nsource=head\ngate=fast\nimpl=go\nheadline=3 tests passed\nhost=stub\n" "$(git rev-parse HEAD)" "$t" > "$d/$t.fast"; fi'
 
-# FAST_RELEASE_RED_STUB — beside FAST_VERDICT_STUB, for a stubbed setup/test-hw: with CUT_STUB_RED_RELEASE=1 the RELEASE's fast gate (the one run in the
-# candidate, where setup/release/cut is) is red while the export's (no setup/release/cut there) stays green: both are the same stub.
-FAST_RELEASE_RED_STUB='[ "${CUT_STUB_RED_RELEASE:-}" != 1 ] || [ ! -f setup/release/cut ] || { echo "stub release fast gate is red"; exit 7; }'
-
 # mutate_anchor <id> <file> <replacement>
 #
 # A MUTANT IS ANCHORED ON A MARKER THE SOURCE DECLARES, NEVER ON ITS PROSE.
@@ -1002,3 +1021,29 @@ load_scale() {
   [ "$s" -le "$cap" ] || s="$cap"
   printf '%s' "$s"
 }
+
+# seed_full_recorded <repo> — the FULL-suite verdict the release cut now requires for its candidate's tree (setup/release/cut, gate_full_recorded; the brainer's
+# per-batch run writes it in real life): a macOS one (no platform=linux, so the cut never reads it AS the suite — 1120d), for the repo's HEAD tree, unless a file
+# for that tree is there already. A fixture that exercises the cut's other gates calls it before every cut; 1120 and 1396 hold the refusal itself.
+seed_full_recorded() { # <repo> [<impl>]
+  local R="$1" t common impl="${2:-}"
+  t="$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$R" rev-parse 'HEAD^{tree}')" || return 1
+  common="$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$R" rev-parse --git-common-dir)" || return 1
+  case "$common" in /*) ;; *) common="$R/$common" ;; esac
+  mkdir -p "$common/hw-push-verified"
+  [ -e "$common/hw-push-verified/$t" ] || printf 'commit=seeded\ntree=%s\ngate=full\nhost=a-mac.local\nheadline=1 tests passed  (TRACKED only — a fixture)\n%s' "$t" "${impl:+impl=$impl$'\n'}" > "$common/hw-push-verified/$t"
+}
+
+# load_scale_live [<cap>] — load_scale of the machine as it is: the injected readings are ignored (setup/tests/733).
+load_scale_live() { HW_TEST_LOAD1= HW_TEST_NCPU= HW_TEST_PROBE= load_scale "$@"; }
+
+# Waits that stretch with the load, shared by the subjects that poll a process (1040, 1131). LS is load_scale's answer, taken once by the subject
+# (`LS="$(load_scale 6)"`); a window is how long an EVENT may take, polled every 0.1 s and left the moment the condition holds.
+#   scaled <s>                  the same seconds, stretched by LS
+#   waitfor_scaled <s> <cmd…>   a window of <s> x LS seconds: for a wait whose EXPIRY is an answer
+#   waitfor_capped <s> <cmd…>   30 s whatever <s> says: the guard of a hang, not an allowance for a slow start (a spawn under a full run's load
+#                               outlasted any scale of 5 s, 2026-11-10); a constant, since every HW_* is swept
+poll_ticks() { local n="$1"; shift; while [ "$n" -gt 0 ]; do "$@" && return 0; sleep 0.1; n=$((n - 1)); done; return 1; }
+scaled() { awk -v s="$1" -v l="${LS:?}" 'BEGIN { printf "%g", s * l }'; }
+waitfor_scaled() { local n=$(($1 * 10 * ${LS:?})); shift; poll_ticks "$n" "$@"; }
+waitfor_capped() { shift; poll_ticks 300 "$@"; }

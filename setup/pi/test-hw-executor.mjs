@@ -20,6 +20,7 @@
 //   plugin-agents     the declared plugins' own agents registered as `plugin:name` (HW_PI_PLUGIN_AGENT_DIRS), the name a
 //                     Claude executor reads from --plugin-dir: `pstack:comment-sicko` was `Unknown agent` before
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 // The policy's product repos, read from the Python guard the adapter asks (setup/guards/deny_repo_writes_ask.py).
 const productRepos = () => JSON.parse(spawnSync("python3", [`${process.env.HW_BRAIN_ROOT}/setup/guards/deny_repo_writes_ask.py`],
@@ -68,6 +69,15 @@ const fakeCtx = (over = {}) => ({
   thinkingLevel: "medium",
 });
 
+// Every scratch directory a mode makes is removed when the process ends (2026-11-19, test-cache-leak): pi-child-*, pi-secret-* and bgsub-*
+// were made with mkdtempSync and never removed, 2,000+ entries of ~/.cache/hw-test-<uid>. `exit` runs for process.exit and a normal end.
+const scratchDirs = [];
+const scratchDir = (prefix) => {
+  const d = mkdtempSync(prefix);
+  scratchDirs.push(d);
+  return d;
+};
+process.on("exit", () => { for (const d of scratchDirs) { try { rmSync(d, { recursive: true, force: true }); } catch { /* best effort */ } } });
 if (mode === "guard") {
   const tc = (toolName, input) => call("tool_call", { type: "tool_call", toolCallId: "t1", toolName, input });
   // The protected roots come from the policy itself (guards.json), so this
@@ -143,9 +153,9 @@ if (mode === "guard") {
   ok(r?.block === true, "a plugin child's write into a product repo is blocked");
   r = await tc("write", { path: "/tmp/pi-test-ok.txt", content: "x" });
   ok(r === undefined, "a plugin child's write outside the protected trees passes");
-  const { mkdtempSync, writeFileSync } = await import("node:fs");
+  const { writeFileSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
-  const dir = mkdtempSync(`${tmpdir()}/pi-child-`);
+  const dir = scratchDir(`${tmpdir()}/pi-child-`);
   writeFileSync(`${dir}/.env`, "SECRET=placeholder\n");
   // the search path is what a recursive grep names, so a relative output line is resolved against it — and the temp
   // path carries `-<digits>-`, which the `path:N:` reader takes for a line number, so a relative line is the honest shape
@@ -154,9 +164,9 @@ if (mode === "guard") {
 } else if (mode === "secret") {
   // THE SECRET READ GUARD (setup/briefs/pi-ro-paridad.md, gap 1). Reads are judged by what they NAME; nothing here
   // touches a real secret: the paths are probes under a scratch directory and the fake "values" are placeholders.
-  const { mkdtempSync, writeFileSync, symlinkSync, mkdirSync } = await import("node:fs");
+  const { writeFileSync, symlinkSync, mkdirSync } = await import("node:fs");
   const { tmpdir, homedir, userInfo } = await import("node:os");
-  const scratch = mkdtempSync(`${tmpdir()}/pi-secret-`);
+  const scratch = scratchDir(`${tmpdir()}/pi-secret-`);
   const home = userInfo().homedir;
   writeFileSync(`${scratch}/.env`, "PLACEHOLDER=not-a-secret\n"); writeFileSync(`${scratch}/a.db`, ""); writeFileSync(`${scratch}/key.pem`, "");
   const tc = (toolName, input, cwd = scratch) => call("tool_call", { type: "tool_call", toolCallId: "t1", toolName, input }, { cwd });
@@ -553,10 +563,10 @@ if (mode === "guard") {
   }
 } else if (mode === "bg-subagents") {
   // can a background subagent start here? (backgroundSubagentsStatus: the receipt row pi_background_subagents)
-  const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
+  const { mkdirSync, writeFileSync, readFileSync, existsSync } = await import("node:fs");
   const { join } = await import("node:path");
   const { tmpdir } = await import("node:os");
-  const root = mkdtempSync(join(tmpdir(), "bgsub-"));
+  const root = scratchDir(join(tmpdir(), "bgsub-"));
   const pkg = (dir, json) => { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, "package.json"), JSON.stringify(json)); return dir; };
   const chord = (host) => pkg(join(host, "node_modules", "@earendil-works", "chord"), { name: "@earendil-works/chord", version: "1.5.0" });
   const { backgroundSubagentsStatus: status } = mod;

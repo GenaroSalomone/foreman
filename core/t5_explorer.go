@@ -263,10 +263,30 @@ func (d *dsp) checkTopTierDecision() {
 	if d.modelWhy != "" || briefFmValue("decision", d.brief) != "" {
 		return
 	}
-	if strings.HasPrefix(d.modelSrc, "default") { // hw chose it, not the operator: say so (review of consult-role-build, R2)
-		d.die("hw's default for kind " + d.taskKind + " is " + d.model + ", the top tier, and no open decision is named. The top tier is for an uncertainty: the brief needs a `decision:` line naming what is undecided (or --model-why \"<the open decision>\"), or pass --model sonnet. NOTHING was built.")
+	// Who chose the model (modelSrc) and the way out (the floor), composed once. A floor at the top tier refuses a bare
+	// --model sonnet whatever chose the model, so its way out is --below-floor-why (review of consult-role-build, R2/R7).
+	head := "this task is declared kind=" + d.taskKind + " and " + d.model + " is the top tier, with no open decision named. The top tier is for an uncertainty: a consultant is kind: design + asked: investigate + decision: <what is undecided>, and a task with nothing undecided runs on sonnet."
+	lower := "or launch with --model sonnet"
+	who, named := "", "Name it with a decision: line in the brief's frontmatter (or --model-why \"<the open decision>\")"
+	switch {
+	case strings.HasPrefix(d.modelSrc, "default"):
+		who, lower = "hw's default for kind "+d.taskKind, "or pass --model sonnet"
+	case strings.HasPrefix(d.modelSrc, "floor of "):
+		who = d.proj + "'s floor"
+	case strings.HasPrefix(d.modelSrc, "lane default for "):
+		who, lower = d.proj+"'s lane default", "or pass --model sonnet"
 	}
-	d.die("this task is declared kind=" + d.taskKind + " and " + d.model + " is the top tier, with no open decision named. The top tier is for an uncertainty: a consultant is kind: design + asked: investigate + decision: <what is undecided>, and a task with nothing undecided runs on sonnet. NOTHING was built. Name it with a decision: line in the brief's frontmatter (or --model-why \"<the open decision>\"), or launch with --model sonnet.")
+	if who != "" {
+		head = who + " is " + d.model + ", the top tier, and no open decision is named. The top tier is for an uncertainty:"
+		named = "the brief needs a `decision:` line naming what is undecided (or --model-why \"<the open decision>\")"
+	}
+	if floor := d.projectModelFloor(d.proj); floor != "" && modelIsTopTier(floor) {
+		lower = "or, if this task really must run lower, --model sonnet with --below-floor-why \"<reason>\""
+	}
+	if who == "" { // the generic wording keeps its order: what was refused, then the way out
+		d.die(head + " NOTHING was built. " + named + ", " + lower + ".")
+	}
+	d.die(head + " " + named + ", " + lower + ". NOTHING was built.")
 }
 
 // explorerFor is the explorer's source for a re-task or a revive, which hold no dispatch state: the brain's root and

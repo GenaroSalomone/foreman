@@ -1819,9 +1819,12 @@ const brAwkVerify = `
 // brAwkVerify also reads but which name sections about tests to WRITE as often as to run), and a line starting with
 // None / Ninguno / Ninguna / N/A makes the section legal (an audit writes «None: it reads, it does not change»).
 const brAwkVerifySection = `
+    NR == 1 && /^---[ \t]*$/ { fm = 1; next }
+    fm { if (/^(---|\.\.\.)[ \t]*$/) fm = 0; next }
     /^[ \t]*` + "```" + `/ { fence = !fence; next }
     !fence && /^#+[ \t]/ {
       insec = 0
+      if (!titled) { titled = 1; if ($0 ~ /^#[ \t]/) next } # the document's own title names its task, and a task may be called ...-verification
       if (tolower($0) ~ /(^|[^a-z])(verification|verificaci|verificar|how to verify)/) { insec = 1; found = 1; if (head == "") head = $0 }
       next
     }

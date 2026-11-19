@@ -351,6 +351,7 @@ func (r *reapApplyRun) cmdReap() int {
 							}
 							retKB = r.duKB(wd)
 						}
+						a.reapBrowsersOfDir(wd) // a browser of a run in this directory dies with it, whatever profile its launcher picked
 						if removeWithRunTmps(a.getenv, wd, r.archiveRoot()+"/"+proj+"/"+reapApplyBasename(wd), a.warn, a.info, func() bool { return r.rmWorkdir(wd) }) {
 							totalRemoved++
 							if r.wdRetAge != "" {

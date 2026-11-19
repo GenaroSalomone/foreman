@@ -76,8 +76,9 @@ func bcRun(w *wenv, args []string) int {
 	note := func(m string) { w.errf("browser-close: %s\n", m) }
 
 	session := ""
+	run, runSet := "", false
 	profile := w.getenv("HW_BROWSER_PROFILE")
-	settle := "1500"
+	settle, settleSet := "1500", false
 	for len(args) > 0 {
 		switch args[0] {
 		case "--session":
@@ -90,11 +91,16 @@ func bcRun(w *wenv, args []string) int {
 				return die("--profile needs a name or path")
 			}
 			profile, args = args[1], args[2:]
+		case "--run":
+			if len(args) < 2 {
+				return die("--run needs a run id")
+			}
+			run, runSet, args = args[1], true, args[2:]
 		case "--settle-ms":
 			if len(args) < 2 {
 				return die("--settle-ms needs a number")
 			}
-			settle, args = args[1], args[2:]
+			settle, settleSet, args = args[1], true, args[2:]
 		case "-h", "--help":
 			w.outf("%s", bcHelp)
 			return 0
@@ -104,6 +110,17 @@ func bcRun(w *wenv, args []string) int {
 	}
 	if settle == "" || strings.Trim(settle, "0123456789") != "" {
 		return die("--settle-ms must be a whole number of milliseconds (got: " + settle + ")")
+	}
+
+	if runSet { // every browser the run started, wherever its launcher put it: browser_reap.go
+		if session != "" {
+			return die("--run closes every browser of a run; it does not take --session")
+		}
+		ms := int64(3000)
+		if settleSet {
+			ms, _ = bcSettleMillis(settle)
+		}
+		return bcRunMode(w, run, time.Duration(ms)*time.Millisecond)
 	}
 
 	ab := w.getenv("BROWSER_CLOSE_AGENT_BROWSER")
@@ -350,3 +367,60 @@ func (w *wenv) bcSleep(secs string) int {
 
 func bcIsDir(p string) bool  { fi, err := os.Stat(p); return err == nil && fi.IsDir() }
 func bcExists(p string) bool { _, err := os.Stat(p); return err == nil }
+
+// bcRunMode is `browser-close --run <id>`: close every browser process that carries the run's marker (browser_reap.go), by pid,
+// and say what was closed. Exit 0 closed (or none), 1 a browser outlived the settle window, 3 the run still has a live
+// process of its own, so nothing was signalled and the browsers are named.
+func bcRunMode(w *wenv, run string, settle time.Duration) int {
+	if !RunIDPattern.MatchString(run) {
+		w.errf("browser-close: --run takes a run id (YYYYMMDD-HHMMSS-PID), got: %s\n", run)
+		return 1
+	}
+	h := bcHost()
+	rep, err := h.reapRun(run, settle)
+	if err != nil {
+		w.errf("browser-close: could not read the process table: %v\n", err)
+		return 1
+	}
+	return brPrint(w.outf, w.errf, rep, settle)
+}
+
+// bcHost is the process table `--run` reads: the real one, unless a test replaced it.
+var bcHost = realBrHost
+
+// brPrint is the report of one run's browser close for `browser-close --run`; it returns the exit code. The hw close paths
+// (reapBrowsersOfDir) print the same brLine through the app's own info/warn, because for them a survivor is a warning, never a failure.
+func brPrint(out, errf func(string, ...any), rep brReport, settle time.Duration) int {
+	for _, b := range rep.closed {
+		out("closed browser of run %s: %s\n", rep.run, brLine(b))
+	}
+	if len(rep.held) > 0 {
+		errf("browser-close: run %s still has live process(es) of its own, so no browser was signalled:\n", rep.run)
+		for _, p := range rep.held {
+			errf("browser-close:   pid %d: %s\n", p.pid, brClip(p.cmd))
+		}
+		errf("browser-close: its browsers are named, not killed: the run is still alive.\n")
+		return 3
+	}
+	if len(rep.survived) > 0 {
+		for _, b := range rep.survived {
+			errf("browser-close: still alive %dms after SIGTERM and SIGKILL: %s\n", settle.Milliseconds(), brLine(b))
+		}
+		errf("browser-close: DO NOT relaunch into the same profile.\n")
+		return 1
+	}
+	if len(rep.closed) == 0 {
+		out("no browser of run %s is alive\n", rep.run)
+	} else {
+		out("closed and verified: no process carrying run %s's marker is left\n", rep.run)
+	}
+	return 0
+}
+
+// brClip keeps a command line to one readable line: the head of an environment-laden `ps eww` text is the command itself.
+func brClip(s string) string {
+	if len(s) > 120 {
+		return s[:120] + "…"
+	}
+	return s
+}

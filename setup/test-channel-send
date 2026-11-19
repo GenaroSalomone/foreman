@@ -68,7 +68,8 @@ chmod +x "$TMP/no-live-hc/hc"
 export PATH="$TMP/no-live-hc:$PATH"
 # TRIPWIRE-END (setup/tests/1365 sources this file up to here)
 
-pass() { printf 'ok - %s\n' "$1"; }
+# The tally lives in a file, not a variable: a pass reached from a subshell still counts.
+pass() { printf 'ok - %s\n' "$1"; printf x >> "$TMP/pass.count"; }
 
 HARNESS="$TMP/invoker-harness"
 MOCK_BIN="$HARNESS/mock-bin"
@@ -379,3 +380,7 @@ esac
   exit 1
 }
 pass "channel-send: no case reached for the live herdr-core (the hc tripwire stayed quiet)"
+
+# THE CLOSING SENTINEL: the one line only a runner that reached its end prints. A runner that exits 0 half-way leaves every `ok` it
+# printed green but never says this, and setup/tests/54 (C05) requires it in both of its runs and checks the count against the ok lines.
+printf 'done - test-channel-send reached its end (%s ok)\n' "$(wc -c < "$TMP/pass.count" | tr -d ' ')"

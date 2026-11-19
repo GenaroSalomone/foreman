@@ -155,7 +155,7 @@ _fg_judged() { # <subject file name> — 0 when it is a fast subject (or has no 
 # named `browser.sh` instead of `13-browser.sh` is not matched, never runs, and
 # takes its assertions with it — the suite stays green with less coverage,
 # which is the exact failure this whole file exists to make impossible. So
-# every *.sh in tests/ is either _common.sh or numbered, and anything else is a
+# every *.sh in tests/ is _common.sh, _guard.sh or numbered, and anything else is a
 # hard error rather than a silent skip.
 #
 # TWO DIGITS OR MORE, since 2026-09-08. The glob was exactly `[0-9][0-9]-` and
@@ -180,16 +180,15 @@ fi
 ALL=("$TESTS"/*.sh)
 shopt -u nullglob
 [ "${#FILES[@]}" -gt 0 ] || { printf 'not ok - runner: no subject files in %s\n' "$TESTS" >&2; exit 1; }
-if [ "${#ALL[@]}" -ne "$(( ${#FILES[@]} + 1 ))" ]; then
-  for f in "${ALL[@]}"; do
-    case "$(basename "$f")" in
-      _common.sh|[0-9][0-9]*-*.sh) ;;
-      *) printf 'not ok - runner: %s is in tests/ but the NN[N]-<subject>.sh glob does not match it, so it never runs\n' \
-           "$(basename "$f")" >&2 ;;
-    esac
-  done
-  exit 1
-fi
+# the two libraries a subject sources are the only unnumbered files: _common.sh, and _guard.sh (the one way out of the test-run guard: 1131, 1368, 1400)
+_stray=0
+for f in "${ALL[@]}"; do
+  case "${f##*/}" in
+    _common.sh|_guard.sh|[0-9][0-9]*-*.sh) ;;
+    *) printf 'not ok - runner: %s is in tests/ but the NN[N]-<subject>.sh glob does not match it, so it never runs\n' "${f##*/}" >&2; _stray=1 ;;
+  esac
+done
+[ "$_stray" = 0 ] || exit 1
 [ -f "$TESTS/_common.sh" ] || { printf 'not ok - runner: tests/_common.sh is missing\n' >&2; exit 1; }
 
 # ── RETIRED SUBJECTS: listed in setup/suite-data/retired-subjects.txt, run by NO gate ──
@@ -1841,7 +1840,31 @@ PY
 fi
 JOB_TOTAL="${#JOB_PATH[@]}"
 
-JOBDIR="$(mktemp -d "${TMPDIR:-/tmp}/hw-test-jobs.XXXXXX")"
+# THE SUITE'S TEMP ROOT IS THE RUN'S OWN, AND EVERY JOB GETS A TMPDIR OF ITS OWN (test-cache-leak, 2026-11-19). ~/.cache/hw-test-<uid> held
+# 129 GB because each subject made its entries in one shared TMPDIR and cleaned them with its own trap: a subject killed with KILL, or one whose
+# own `trap … EXIT` replaced the cleanup, left them. A job's TMPDIR is $JOBDIR/t<idx>: made before the job, removed after it whatever its exit,
+# and $JOBDIR itself goes in the EXIT trap (the runner outlives a KILLed job). What no run owns — an entry of a killed RUNNER, a contract
+# world (its root is fixed, the goldens count its bytes) — is setup/hw-test-prune's: older than 24 h and held by no process, run below.
+# On macOS a TMPDIR under /var/folders is cleaned by dirhelper, so the run's directory is made in the suite's root instead (tests/_common.sh).
+# The suite's root is named ONCE, here, by hw-test-prune (the one place that owns the rule) and exported: every job, subject and nested runner
+# reads HW_TEST_TMPROOT instead of working it out again.
+[ -n "${HW_TEST_TMPROOT:-}" ] || [ ! -x "$HERE/hw-test-prune" ] || { _pr="$(bash "$HERE/hw-test-prune" --print-root 2>/dev/null)" && [ -n "$_pr" ] && export HW_TEST_TMPROOT="$_pr"; }
+_job_base="${TMPDIR:-/tmp}"
+if [ "$(uname -s)" = Darwin ] && [ -n "${HW_TEST_TMPROOT:-}" ]; then
+  case "$(cd -P "$_job_base" 2>/dev/null && pwd)" in
+    /private/var/folders/*/T|/private/var/folders/*/T/*) _job_base="$HW_TEST_TMPROOT" ;;
+  esac
+fi
+JOBDIR="$(mktemp -d "$_job_base/hw-test-jobs.XXXXXX")"
+# The jobs' Go cache is the shared one whatever their TMPDIR is (a cache under a job's TMPDIR would be cold and removed with it).
+JOB_GOCACHE="${GOCACHE:-}"
+[ -n "$JOB_GOCACHE" ] || ! type gocache_default >/dev/null 2>&1 || JOB_GOCACHE="$(gocache_default)"
+# Only the OUTERMOST runner prunes: a subject (tests/_common.sh) and a runner started under one carry HW_TEST_PRUNE_DONE, so the nested runner of
+# 440 and 131 never prunes the real root (R1 of the 2026-11-19 review).
+if [ -z "${HW_TEST_PRUNE_DONE:-}" ] && [ -x "$HERE/hw-test-prune" ]; then
+  bash "$HERE/hw-test-prune" ${HW_ARTIFACTS:+--list "$HW_ARTIFACTS/hw-test-pruned.txt"} || true
+  export HW_TEST_PRUNE_DONE=1
+fi
 
 # ── WHERE THE WALL CLOCK WENT: HW_TEST_TIMINGS=<file> ───────────────────────
 #
@@ -2115,6 +2138,9 @@ _run_job() {
   local idx="$1" f="${JOB_PATH[$1]}" kind="${JOB_KIND[$1]}"
   local rc=0 cov_rc=0 parse_rc=0 started ended wall_ms=0 cpu_ms=0 first_ms=0 rerun_rc=0 retried=0 first_rc=0
   set +e
+  local jt="$JOBDIR/t$idx"
+  mkdir -p "$jt" && export TMPDIR="$jt"
+  [ -z "$JOB_GOCACHE" ] || export GOCACHE="$JOB_GOCACHE"
   started=""; ended=""
   if [ "$kind" = subject ]; then
     # A SUBJECT THAT DOES NOT PARSE IS NOT A SUBJECT THAT PASSED, and until
@@ -2196,6 +2222,7 @@ _run_job() {
   # A subject that never ran because it did not parse timed nothing, and 0 is
   # the honest answer there rather than the duration of the parse check.
   if [ -z "$started" ] || [ -z "$ended" ]; then started=0; ended=0; fi
+  chmod -R u+w "$jt" 2>/dev/null; rm -rf "$jt"
   printf 'parse_rc=%s\nrc=%s\ncov_rc=%s\nelapsed=%s\nwall_ms=%s\ncpu_ms=%s\nfirst_ms=%s\nrerun_rc=%s\nretried=%s\nfirst_rc=%s\nstarted_at=%s\nended_at=%s\n' \
     "$parse_rc" "$rc" "$cov_rc" "$((ended - started))" "$wall_ms" "$cpu_ms" "$first_ms" "$rerun_rc" "$retried" "$first_rc" "$started" "$ended" > "$JOBDIR/$idx.status.part"
   mv -f "$JOBDIR/$idx.status.part" "$JOBDIR/$idx.status"

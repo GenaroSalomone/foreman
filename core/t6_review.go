@@ -349,6 +349,10 @@ func (a *app) cmdReview() int {
 	}
 	if here {
 		args = append(args, "--here")
+	} else {
+		// the reviewer's brief is asked: investigate, which defaults a dispatch to worktree none (e38cf7ec0); the reviewer must
+		// check `git rev-parse HEAD` == the reviewed SHA and done-invoker's head gate reads the workdir HEAD, so it needs a checkout
+		args = append(args, "--worktree", "new")
 	}
 	if noReport {
 		args = append(args, "--no-report")

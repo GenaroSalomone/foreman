@@ -462,27 +462,21 @@ loop:
 			"for `hw next` and expiry closes it automatically.\n" +
 			"A failed close leaves the pane open and a `close-failed` file (and `close.log`) beside the\n" +
 			"run's done marker — this report is delivered and safe and only the close failed, NOT lost."
-	case chainingLease || legacyKeep:
-		kept := "the legacy keep-pane contract, and nothing expires it"
-		if chainingLease {
-			kept = "its bounded chaining lease, which closes it when it expires"
-		}
-		head = "[executor BLOCKED — " + project + ":" + task + ", pane " + herdrPane + "]"
-		tail = "Partial output: " + nfiles + " file(s) in " + artifacts + "\n\n" +
-			"It stopped rather than working around the blocker, which is correct. Decide\n" +
-			"whether this is yours to unblock or " + c.operator() + "'s.\n" +
-			"The pane is kept by " + kept + ". It is NOT marked waiting for a ruling, so\n" +
-			"`hw ruling` will not resume it: re-task it with `hw next`, or close it with\n" +
-			"`hw done " + project + " " + task + " --blocked`."
 	default:
 		head = "[executor BLOCKED and waiting — " + project + ":" + task + ", pane " + herdrPane + "]"
+		reapNote := "`hw reap`\ncloses it after " + c.or("HW_BLOCKED_WAIT_HOURS", "24") + "h (HW_BLOCKED_WAIT_HOURS)"
+		expiry := "unanswered, " + reapNote + "."
+		if chainingLease {
+			expiry = "unanswered, its bounded chaining lease closes it when it expires (or " + reapNote + ", if that comes first); `hw next` re-tasks it."
+		} else if legacyKeep {
+			expiry = "unanswered, " + reapNote + "; `hw next` re-tasks it."
+		}
 		tail = "Partial output: " + nfiles + " file(s) in " + artifacts + "\n\n" +
 			"It stopped rather than working around the blocker, which is correct. Decide\n" +
 			"whether this is yours to unblock or " + c.operator() + "'s.\n" +
 			"The pane and its session are KEPT, waiting: `hw ruling " + herdrPane + " \"<the unblock>\"`\n" +
 			"resumes THIS task in the same session, and it reports again with its own\n" +
-			"done-invoker. `hw done " + project + " " + task + " --blocked` closes it now; unanswered, `hw reap`\n" +
-			"closes it after " + c.or("HW_BLOCKED_WAIT_HOURS", "24") + "h (HW_BLOCKED_WAIT_HOURS)."
+			"done-invoker. `hw done " + project + " " + task + " --blocked` closes it now; " + expiry
 	}
 
 	envelope := c.envelopePrefix() + ":done"
@@ -605,6 +599,17 @@ loop:
 		}
 		return c.run(runOpts{stdin: c.Stdin, stdout: c.Stdout, stderr: c.Stderr}, hwBin, hwArgs...)
 	}
+	// A blocked report waits for a ruling whatever kind the task is and whether a lease or the legacy keep holds the pane: the
+	// executor prompt promises it, and the lease only decides how long the pane lives. Written once, before the keep/close
+	// branches: a lease that cannot start falls back to `hw done --blocked`, which retires the marker as it closes.
+	if status == "blocked" {
+		waiting := "since=" + itoa(int(c.Now().Unix())) + "\n" +
+			"pane=" + herdrPane + "\nproject=" + project + "\ntask=" + task + "\nenvelope=" + envelope + "\n"
+		if err := os.WriteFile(stateDir+"/blocked-waiting", []byte(waiting), 0o666); err != nil {
+			return notClosed("THE REPORT IS DELIVERED AND SAFE — %s — but %s/blocked-waiting could not be written, so `hw ruling` cannot resume this task. The pane is still open at %s. Do NOT re-run done-invoker.", receiptNote, stateDir, herdrPane)
+		}
+		c.cockpitKick()
+	}
 	if chainingLease {
 		lrc := c.run(runOpts{stdin: c.Stdin, stdout: c.Stdout, stderr: c.Stderr}, hwBin, "chaining-lease-start")
 		if lrc != 0 {
@@ -628,12 +633,6 @@ loop:
 	}
 
 	if status == "blocked" {
-		waiting := "since=" + itoa(int(c.Now().Unix())) + "\n" +
-			"pane=" + herdrPane + "\nproject=" + project + "\ntask=" + task + "\nenvelope=" + envelope + "\n"
-		if err := os.WriteFile(stateDir+"/blocked-waiting", []byte(waiting), 0o666); err != nil {
-			return notClosed("THE REPORT IS DELIVERED AND SAFE — %s — but %s/blocked-waiting could not be written, so `hw ruling` cannot resume this task and nothing will expire it. The pane is still open at %s. Do NOT re-run done-invoker.", receiptNote, stateDir, herdrPane)
-		}
-		c.cockpitKick()
 		c.printf(c.Stdout, "brainer notified via %s (blocked, %s file(s)); %s; pane KEPT, waiting: `hw ruling %s \"<the unblock>\"` resumes this task, `hw reap` closes it after %sh unanswered.\n",
 			route, nfiles, receiptNote, herdrPane, c.or("HW_BLOCKED_WAIT_HOURS", "24"))
 		return nil

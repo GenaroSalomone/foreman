@@ -74,15 +74,13 @@ func swPaneAlive(w *wenv) bool {
 
 func swStamp(t time.Time) string { return t.Format("2006-01-02T15:04:05") }
 
-// swRun is bin/stall-watch <run-state-dir> <turn-count> <what-it-waits-on>.
+// swRun is bin/stall-watch <run-state-dir> <turn-count> <what-it-waits-on>, or bin/stall-watch --children <run-state-dir> <turn-count>
+// <claude-pid> (swChildWatch).
 func swRun(w *wenv, args []string) int {
-	arg := func(i int) string {
-		if i < len(args) {
-			return args[i]
-		}
-		return ""
+	if len(args) > 0 && args[0] == "--children" {
+		return swChildWatch(w, args[1:])
 	}
-	state, turns, what := arg(0), arg(1), arg(2)
+	state, turns, what := swArg(args, 0), swArg(args, 1), swArg(args, 2)
 	if what == "" {
 		what = "a legal wait"
 	}
@@ -94,12 +92,7 @@ func swRun(w *wenv, args []string) int {
 		dir = w.getenv("HOME") + "/.cache/hw"
 	}
 	alerts := dir + "/stall-alerts.log"
-	poll := 30.0
-	if v := w.getenv("HW_STALL_POLL"); v != "" {
-		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
-			poll = f
-		}
-	}
+	poll := swPoll(w)
 	var limit int64
 	if v := w.getenv("HW_STALL_AFTER_SEC"); v != "" {
 		limit = swInt(v)
@@ -155,6 +148,7 @@ func swRun(w *wenv, args []string) int {
 			}
 			return v
 		}
+		what = swAlertWhat(state, turns, what)
 		msg := "stall: " + or(w.getenv("HW_PROJECT"), "?") + ":" + or(w.getenv("HW_TASK"), "?") + " (pane " + or(pane, "?") +
 			") ended its turn at " + start.Format("15:04") + ", waiting on " + what + ", and has had no new turn for " +
 			strconv.FormatInt(mins, 10) + " min (HW_STALL_MIN=" + strconv.FormatInt(limit/60, 10) +
@@ -186,4 +180,85 @@ func swAppend(path, line string) {
 	}
 	f.WriteString(line)
 	f.Close()
+}
+
+// swChildGone lowers the claim that a turn awaits a child whose shells are gone: the pane's turn_state is the unreported end of a turn
+// and children_running is empty, which is what `channel-send --ruling`, `hw ruling` and the cockpit read as a pane to deliver to. A
+// turn that ended since (the count moved) is the truth, and is left alone.
+func swChildGone(w *wenv, state, turns string) {
+	if swDigits(state+"/turns") != turns {
+		return
+	}
+	n, err := strconv.ParseInt(turns, 10, 64)
+	if err != nil {
+		return
+	}
+	getenv := func(k string) string {
+		if k == "HW_CORE_BIN_DIR" {
+			if v := w.getenv(k); v != "" {
+				return v
+			}
+			return w.ownDir()
+		}
+		return w.getenv(k)
+	}
+	t := &t3{app: &app{getenv: getenv}, fs: newFsx(getenv)}
+	if t.publish("ended_unreported", n, "children_running", "") { // the mark is written only once the claim is really lowered
+		os.WriteFile(state+"/child-gone", []byte(turns+"\n"), 0o644)
+	}
+}
+
+// swAlertWhat is what the stall alert of this turn says it waits on: <what> as the hook named it, unless the child watch lowered the claim for this
+// turn (swChildGone), when that child is gone and naming its shell would send the reader after a process that no longer exists.
+func swAlertWhat(state, turns, what string) string {
+	if b, err := os.ReadFile(state + "/child-gone"); err == nil && strings.TrimSpace(string(b)) == turns {
+		return "nothing: the background child it waited on is gone"
+	}
+	return what
+}
+
+// swArg is argument i, or "" past the end.
+func swArg(args []string, i int) string {
+	if i < len(args) {
+		return args[i]
+	}
+	return ""
+}
+
+// swPoll is the seconds between two looks (HW_STALL_POLL, 30).
+func swPoll(w *wenv) float64 {
+	if v := w.getenv("HW_STALL_POLL"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil && f >= 0 {
+			return f
+		}
+	}
+	return 30
+}
+
+// swChildWatch is `stall-watch --children <run-state-dir> <turn-count> <claude-pid>`: THE CHILD THE TURN WAITS ON MAY DIE UNSEEN. A
+// shell that ends without a notification starts no turn, so nothing publishes again and the pane read awaiting_child for as long as it
+// lived (t1c1, 2026-11-18: 20+ min, through an interrupt; `channel-send --ruling` refused it and `hw ruling` queued with no turn end
+// coming). The hook names the claude process; when it had background shells at this turn end and has none now, the claim is lowered
+// (swChildGone). One that had none to see (a claude that names its shells otherwise) is never lowered. It ends with the wait (a new
+// turn, the report) or with claude; it is no alert, so it outlives the stall watcher's and HW_STALL_MIN does not reach it.
+func swChildWatch(w *wenv, args []string) int {
+	state, turns := swArg(args, 0), swArg(args, 1)
+	pid, _ := strconv.Atoi(swArg(args, 2))
+	if st, err := os.Stat(state); err != nil || !st.IsDir() || turns == "" || pid <= 1 || t3ShellKids(t3ProcTable(), pid) <= 0 {
+		return 0
+	}
+	poll := swPoll(w)
+	for {
+		time.Sleep(time.Duration(poll * float64(time.Second)))
+		if swDigits(state+"/turns") != turns || swReported(state) {
+			return 0
+		}
+		switch t3ShellKids(t3ProcTable(), pid) {
+		case -1: // claude itself is gone: nobody is left to rule, and the stall watcher's alert is its own
+			return 0
+		case 0: // MUTATION-ANCHOR: s6-sw-childgone
+			swChildGone(w, state, turns)
+			return 0
+		}
+	}
 }

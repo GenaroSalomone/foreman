@@ -106,6 +106,7 @@ printf '# h650 — a temporary lane for setup/tests/650\n' > "$BRAIN/$LANE/CLAUD
 cat > "$BRAIN/$LANE/briefs/$TASK.md" <<'EOF'
 ---
 requested_by: "setup/tests/650, a disposable live probe"
+kind: explore
 asked: investigate
 ---
 # h650-probe — BRIEF-650-MARKER
@@ -198,6 +199,8 @@ printf '%s' "$out" | jq -e '.result.agent.interactive_ready == true' >/dev/null 
 waitfile "$TMP/ev/started" 10 && grep -q "^brainer $BRAINER" "$TMP/ev/started" \
   || fail "650 the brainer pane did not run the fake claude — refusing to go on (a real one would spend)"
 
+# The probe brief is `kind: explore`: a build owes the independent review and CHAINS by default (core/t5.go, 2026-11-12), so
+# its pane would outlive the report on purpose, and this subject is about the close.
 # ── the dispatch, through the real hw ───────────────────────────────────────
 export HERDR_ENV=1 HERDR_SOCKET_PATH="$SOCK" HERDR_PANE_ID="$BRAINER"
 # No session id is published (see the fake), so hw's wait for one is cut short;

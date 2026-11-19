@@ -62,13 +62,36 @@ func doneRunGate(dir string, secs int64, cmd string, env []string) (string, int)
 	c.WaitDelay = 2 * time.Second // a survivor holding the output pipe must not hold hw done
 	err := c.Run()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-		return bashSub(buf.String() + "\nhw done: the verification outlived its " + strconv.FormatInt(secs, 10) + " s ceiling (HW_VERIFY_TIMEOUT_SECONDS): its process group and every descendant were killed\n"), 124
+		return bashSub(buf.String() + "\nhw done: the verification outlived its " + strconv.FormatInt(secs, 10) + " s ceiling (HW_VERIFY_TIMEOUT_SECONDS): its process group and every descendant were killed\n" + doneCeilingWaited(cmd, buf.String())), 124
 	}
 	rc := doneExit(err)
 	if errors.Is(err, exec.ErrWaitDelay) { // it exited by itself and only a descendant still held the pipe: the command's own status stands
 		rc = c.ProcessState.ExitCode()
 	}
 	return bashSub(buf.String()), rc
+}
+
+// doneCeilingWaited says what the killed command was doing, so a timeout reads as the work it was and not as a hang: the command,
+// the last line it printed, and — for the fast gate with nothing to select — why that is the whole gate (MEASURED 2026-11-18: an
+// empty `git diff` makes setup/gate-select answer `all`, and the whole fast gate takes 8-12 min, more behind a suite slot).
+func doneCeilingWaited(cmd, out string) string {
+	last := ""
+	for _, l := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if strings.TrimSpace(l) != "" {
+			last = strings.TrimSpace(l)
+		}
+	}
+	if len(last) > 200 {
+		last = last[:200] + "…"
+	}
+	w := "hw done: it was still running `" + cmd + "`; its last output line was: " + last + "\n"
+	if last == "" {
+		w = "hw done: it was still running `" + cmd + "` and had printed nothing (a gate waiting for a suite slot or lock prints nothing)\n"
+	}
+	if strings.Contains(cmd, "setup/test-hw") {
+		w += "hw done: setup/test-hw with no changed paths (an empty `git diff`, a merged branch) runs the WHOLE fast gate, 8-12 minutes uncontended; that is slow work, not a hang\n"
+	}
+	return w
 }
 
 // doneCeiling is HW_VERIFY_TIMEOUT_SECONDS as a number of seconds. Anything that is not a positive integer (`15m`, `abc`, a

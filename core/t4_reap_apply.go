@@ -176,6 +176,7 @@ func (r *reapApplyRun) reapWorktree(proj, main, wt, branch, base string) bool {
 	if r.agentsBlock { // # MUTATION-ANCHOR: 865-G41
 		reapApplyGitRC(wt, "checkout", "--", "AGENTS.md")
 	}
+	a.reapBrowsersOfDir(wt) // a browser of a run in this worktree dies with it, whatever profile its launcher picked
 	transcriptDir := dest // beside the archived outputs, or where they would go
 	if transcriptDir == "" {
 		transcriptDir = r.archiveRoot() + "/" + proj + "/" + reapApplyBasename(wt)

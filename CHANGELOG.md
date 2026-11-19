@@ -4,6 +4,35 @@ All notable changes to this project are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
 [Semantic Versioning](https://semver.org/) with pre-release labels.
 
+## [1.1.0-rc.1] — 2026-11-19
+
+### Added
+- `browser-close --run <run-id>` closes every browser a run started, found by the run's own marker (`HW_RUN` or its per-run
+  `TMPDIR`) in the process environment, so a lane script that picked its own profile and namespace no longer escapes. It lists
+  what it closed by pid and profile, and signals nothing while the run still has a live process of its own (exit 3).
+- `hw status` names a browser that is still alive for a run that is already closed ("browsers alive for closed runs").
+
+### Changed
+- The release cut now checks a FULL-suite verdict recorded outside it instead of running a suite of its own: a `gate=full` verdict (macOS from `setup/verify-for-push` or Linux from `run-suite.sh full`, any platform) for the exact tree, its docs-only cover, or the release-notes cover of an ancestor's. Covered, the cut skips the fast gate (a full run contains it) and says so; not covered, `test-hw` goes red (`REFUSED: no FULL-suite verdict`) naming the subjects no green verdict vouches for. Before, the cut passed on the fast gate alone, which runs only the subjects of 1.7 s or less, so the 1.0.0 cut shipped with 816, 821 and 842 red. The cut's fast-gate reuse, notes-over-`.fast` cover, Linux incremental run and own fast run are gone.
+- `setup/release-standard.md` and the cut checklist say the new rule: the full run is the brainer's, once per merged batch (`setup/verify-for-push`), and a release needs it on the merge tree first.
+
+### Fixed
+- `hw done`, the close `done-invoker` starts and `hw reap --apply` now take the run's browsers with them. Before, the headed
+  Chrome for Testing windows of a lane's QA script outlived their executor for days.
+- Subjects 816 and 821 (the contract and anchors of receipt/log/handle/help) were retired and ran in no gate, so their drift went unseen; they run in the full suite again.
+- An ambient `HW_TEST_ONLY`, `HW_TEST_RESULTS` or `HW_TEST_CHANGED` can no longer turn the export's fast gate (the cut's one suite) into a partial run.
+- `hw review` no longer refuses the brief it just wrote when the reviewed task's name contains "verification" (for example `hw-done-900s-verification`). The generated title `# Independent review of <lane>:<task> @ <sha>` was read as a Verification section with no runnable command; the dispatch check now skips a level-1 document title. A `## Verification` heading still counts, first or not.
+- `hw done`'s verification timeout now says what it waited for: the command, its last output line, and why `setup/test-hw` with no changed paths (an empty `git diff`, a merged branch) runs the whole fast gate, 8-12 minutes, rather than a hang.
+- A branch merged into the lane's own base ref (`base_ref_prefix` + `base`, not a hard-coded `origin/`) is still skipped by `hw done`'s verification, and one merged only into a local base of a lane that reads `origin/` is verified.
+- `hw review` skips front matter before looking for the brief's title, so a comment line there no longer hides the title from the Verification check.
+- `hw done` no longer spends its whole 900 s verification ceiling on a task that has nothing left to verify. A clean checkout whose HEAD is already an ancestor of the lane's base (merged by `setup/merge-task` or a PR) is receipted `verify_run skipped — merged`, and a task with no checkout of its own (reaped) is receipted `not run — … holds no checkout of this task` instead of running the gate against the lane's main checkout. An unmerged branch is still verified.
+- A build that reports `done-invoker --blocked` while its pane is kept (chaining lease or legacy keep) is now marked waiting for a ruling, so `hw ruling` resumes it as the executor prompt promises; the lease only decides how long the pane lives. The blocked report names whichever clock fires first (the lease's expiry or `hw reap`).
+- A chaining lease that expires and closes the pane of a blocked task now ends the wait (`blocked-waiting` becomes `blocked-closed`) the way `hw done` does, so `hw status` and the cockpit stop offering a ruling to a closed pane.
+- The top-tier refusal on explore/audit/design now names the real source of the model when a lane floor or a lane default chose it («<lane>'s floor is opus» / «<lane>'s lane default is opus») instead of saying the task «is declared» top tier, and for a floor it points at `decision:` / `--model-why` or `--model sonnet` with `--below-floor-why`, never a bare `--model sonnet` the floor would refuse.
+- `hw review` now dispatches the reviewer with `--worktree new` (not under `--here`). The reviewer's brief says `asked: investigate`, which since the investigate default means `worktree none`: the reviewer got no checkout, so its `git rev-parse HEAD` check could not pass and `done-invoker`'s head gate read the workdir HEAD as `<unreadable>` and refused the close.
+- The suite's temp root (`~/.cache/hw-test-<uid>`) no longer fills up: `setup/test-hw` gives each job its own `TMPDIR` and removes it after the job, whatever its exit (a KILLed subject, or one whose own `trap … EXIT` drops `$TMP`, leaves nothing); a contract world is removed when its case gets TERM or INT; the pi driver and the test-built `hw-core` remove their scratch directories.
+- New `setup/hw-test-prune`, run by `setup/test-hw` at the start of a run: removes entries older than 24 h that no live process holds (versioned `*.vN` caches are kept) and says how many.
+
 ## [1.0.0] — 2026-11-18
 
 The release candidate 1.0.0-rc.4, promoted with no change.

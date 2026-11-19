@@ -255,8 +255,7 @@ func (d *doneRun) run(proj, task string) int {
 	d.verifyAtClose(d.newestRundir(proj, task), wt, proj, task)
 	d.verifySecs = doneNow() - v0
 	d.brainLeakAtClose(proj, wt, branch)
-	if rundir != "" && isFile(doneTaskDir(rundir)+"/blocked-waiting") {
-		os.Rename(doneTaskDir(rundir)+"/blocked-waiting", doneDirname(doneTaskDir(rundir)+"/blocked-waiting")+"/blocked-closed")
+	if rundir != "" && endBlockedWait(doneTaskDir(rundir)) {
 		a.info("it had reported BLOCKED and was waiting for a ruling; closing it ends the wait")
 	}
 	d.cancelLease(rundir)
@@ -311,6 +310,8 @@ func (d *doneRun) run(proj, task string) int {
 	if rundir != "" {
 		doneTool("", nil, d.binDir+"/cockpit-state", "--kick", "--rundir", rundir)
 	}
+	// the pane is closed: every browser the run started goes with it, even one a lane script put in its own profile and namespace
+	a.reapBrowsersOfDir(wt)
 
 	if d.x.get(proj, "repoless") == "1" {
 		d.repoless(proj, wt)

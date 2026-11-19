@@ -78,7 +78,7 @@ settle() { # <label>
     *) sleep 0.5 ;;
   esac
 }
-want_work="$(jq -r '.work' "$BH/projects.json" | sd '^~' "$TMP/home")"
+want_work="$( . "$ROOT/bin/project-spaces.sh"; lane_config_load "$BH" >/dev/null; printf '%s' "$WORK" )"  # the bash lane table's rule (work, else root + /work), not a copy of it here
 export_line="pane run wX:p1 export HW_COCKPIT_WORK=$want_work"
 check_export() {  # <label> <what>
   grep -qxF -- "$export_line" "$TMP/calls-$1" \

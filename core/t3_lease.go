@@ -174,6 +174,16 @@ func (t *t3) leaseLockTake(rundir string) (string, bool) {
 	return lock, true
 }
 
+// endBlockedWait ends a task's wait for a ruling when its pane is closed: `blocked-waiting` becomes `blocked-closed`, so
+// `hw status` and the cockpit stop offering a ruling to a pane that is gone. hw done and a lease's expiry both close through it.
+func endBlockedWait(taskdir string) bool {
+	if !isFile(taskdir + "/blocked-waiting") {
+		return false
+	}
+	os.Rename(taskdir+"/blocked-waiting", taskdir+"/blocked-closed")
+	return true
+}
+
 func (t *t3) leaseExpire() int {
 	if len(t.args) != 3 {
 		t.die("internal chaining-lease-expire needs rundir token task")
@@ -198,6 +208,7 @@ func (t *t3) leaseExpire() int {
 		// OLD: this fell to "cleanup=no-owned-container" and an expired --keep-pane terminal stayed open for ever.
 		if t.closeHCRun(proj, task, own) { // MUTATION-ANCHOR: lease-hc-close
 			t.fs.appendTo(lease, []byte("cleanup=closed\n"), 0o666)
+			endBlockedWait(mkTaskDir(rundir))
 			release()
 			return 0
 		}
@@ -216,6 +227,7 @@ func (t *t3) leaseExpire() int {
 	}
 	if t.closeHerdrObject(kind, id, "closed expired chaining "+kind+" "+id, kind+" "+id+" already gone") { // # MUTATION-ANCHOR: 841-L05
 		t.fs.appendTo(lease, []byte("cleanup=closed\n"), 0o666) // # MUTATION-ANCHOR: 841-E03
+		endBlockedWait(mkTaskDir(rundir))
 		release()
 		return 0
 	}

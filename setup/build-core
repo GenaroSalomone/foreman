@@ -93,7 +93,10 @@ if [ "$VERIFY" = 1 ]; then
   other="$(mktemp -d "${TMPDIR:-/tmp}/hw-core-verify.XXXXXX")"
   trap 'rm -rf "$other"' EXIT
   # a second build from a COPY of the sources, in another directory: the build path must not matter
-  cp -R "$SRC" "$other/core"; SRC="$other/core"; rm -rf "$SRC/dist"
+  # dist/ (the release binaries, 82M in a main checkout) is never copied: entries one by one, not cp -R then rm
+  mkdir -p "$other/core"
+  for e in "$SRC"/* "$SRC"/.[!.]*; do [ -e "$e" ] || continue; [ "${e##*/}" = dist ] || cp -R "$e" "$other/core/"; done
+  SRC="$other/core"
   build_all "$other/out"
   if cmp -s "$OUT/SHA256SUMS" "$other/out/SHA256SUMS"; then
     echo "build-core: reproducible — a second build from a copy at another path gave the same sha256 for every target"

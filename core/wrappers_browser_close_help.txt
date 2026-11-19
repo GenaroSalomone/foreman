@@ -5,10 +5,19 @@ still open and why.
   browser-close                       # close every session, verify
   browser-close --session <name>      # close one, verify
   browser-close --profile <path>      # a profile path to verify is released
+  browser-close --run <run-id>        # EVERY browser the run started (see below)
 
 With no --profile it checks $HW_BROWSER_PROFILE, which hw sets per task. Do
 NOT pass a bare profile NAME: a name resolves to
 ~/.agent-browser/profiles/<name>, which every task in the project shares.
+
+--run closes by the run's marker, not by namespace or profile: every agent-browser
+daemon and Chrome process whose environment carries HW_RUN=<run-id> (or that run's
+per-run TMPDIR) — a lane script that picked its own AGENT_BROWSER_PROFILE and
+NAMESPACE included. It lists what it closed by pid and profile, signals nothing
+that lacks the marker, and signals nothing while a non-browser process of the run
+is still alive (exit 3, named). Exit 0 closed or none, 1 a browser outlived the
+settle window. `hw done` and `hw reap --apply` run it for every run they close.
 
 WHY THIS EXISTS.
 

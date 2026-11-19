@@ -1,0 +1,76 @@
+#!/usr/bin/env bash
+# hw-test-prune — the suite's safety net for its own temp root (test-cache-leak, 2026-11-19).
+#
+# ~/.cache/hw-test-<uid> is the suite's TMPDIR on macOS (setup/tests/_common.sh). A subject killed with KILL, a `go test` cut by a
+# timeout, a wrapper that died before its trap: each leaves its entry, and nothing removed it (129 GB, 13,640 entries).
+# This removes the entries of the root that are OLDER THAN 24 h and that NO LIVE PROCESS HOLDS, and says what it removed.
+#
+#   hw-test-prune [--root DIR] [--hours N] [--list FILE] [--dry-run]
+#
+# An entry is held when a live process has a file inside it open or its working directory there (one `lsof -Fn` over every process,
+# filtered to the root; a failing lsof means NOTHING is removed, it never guesses). An entry younger than --hours (its mtime) is never touched, held or not. The shared, versioned caches (*.v<N>: hw-go-cache.v2, hw-mutant-bins.v1, verdicts.v1) are not entries: it has its own trim (setup/gocache.sh).
+# --list FILE writes "<KB>\t<path>" for every entry it removes (or would remove, with --dry-run) BEFORE removing any, and the removal
+# stays blind to what is inside an entry: nothing is read, so a pi-secret-* directory is never opened. Exit 0; prints one summary line.
+set -u
+ROOT_DIR=""; HOURS=24; LIST=""; DRY=0; PRINT_ROOT=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --root) ROOT_DIR="$2"; shift 2 ;;
+    --hours) HOURS="$2"; shift 2 ;;
+    --list) LIST="$2"; shift 2 ;;
+    --dry-run) DRY=1; shift ;;
+    --print-root) PRINT_ROOT=1; shift ;;
+    *) printf 'hw-test-prune: unknown argument %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+case "$HOURS" in ''|*[!0-9]*) printf 'hw-test-prune: --hours wants a whole number\n' >&2; exit 2 ;; esac
+[ "$HOURS" -ge 1 ] || { printf 'hw-test-prune: --hours must be at least 1\n' >&2; exit 2; }
+if [ -z "$ROOT_DIR" ]; then
+  ROOT_DIR="${HW_TEST_TMPROOT:-${XDG_CACHE_HOME:-${HOME:-}/.cache}/hw-test-$(id -u)}"
+fi
+if [ "$PRINT_ROOT" = 1 ]; then  # the suite's root, made: test-hw puts its run's directory here (the one definition of it besides tests/_common.sh)
+  mkdir -p "$ROOT_DIR" && chmod 700 "$ROOT_DIR" && cd -P "$ROOT_DIR" && pwd; exit
+fi
+[ -d "$ROOT_DIR" ] || { printf 'hw-test-prune: no %s: nothing to prune\n' "$ROOT_DIR"; exit 0; }
+ROOT_DIR="$(cd -P "$ROOT_DIR" && pwd)"
+case "$ROOT_DIR" in /|/tmp|/private/tmp|"${HOME:-/nonexistent}") printf 'hw-test-prune: refusing %s as a root\n' "$ROOT_DIR" >&2; exit 2 ;; esac
+
+# One prune at a time per root: a second one (another run's start) does not wait, it leaves the work to the first. The lock is a symlink
+# to the holder's pid, so taking it and naming the holder are ONE atomic step (a mkdir plus a pid file left a window with no pid).
+LOCK="$ROOT_DIR/.hw-test-prune.lock"
+if ! ln -s "$$" "$LOCK" 2>/dev/null; then
+  _lp="$(readlink "$LOCK" 2>/dev/null)"
+  if [ -n "$_lp" ] && kill -0 "$_lp" 2>/dev/null; then printf 'hw-test-prune: another prune (pid %s) is running: skipped\n' "$_lp"; exit 0; fi
+  rm -f "$LOCK"; ln -s "$$" "$LOCK" 2>/dev/null || { printf 'hw-test-prune: could not take the lock\n' >&2; exit 0; }
+fi
+HELD="$(mktemp "${TMPDIR:-/tmp}/hw-prune-held.XXXXXX")" || { rm -f "$LOCK"; exit 0; }
+CAND="$(mktemp "${TMPDIR:-/tmp}/hw-prune-cand.XXXXXX")" || { rm -f "$LOCK" "$HELD"; exit 0; }
+trap 'rm -f "$LOCK" "$HELD" "$HELD.raw" "$CAND"' EXIT
+
+command -v lsof >/dev/null 2>&1 || { printf 'hw-test-prune: no lsof: nothing removed\n'; exit 0; }
+# The set of top-level entries a live process holds: every `n<path>` line (open file, cwd, txt) under the root, cut to its first component.
+lsof -nP -w -Fn > "$HELD.raw" 2>/dev/null || true
+if [ ! -s "$HELD.raw" ]; then rm -f "$HELD.raw"; printf 'hw-test-prune: lsof listed nothing: nothing removed\n'; exit 0; fi
+awk -v r="$ROOT_DIR/" 'substr($0,1,1)=="n" && index($0, "n" r)==1 { p=substr($0, length(r)+2); sub(/\/.*/, "", p); if (p != "") print p }' "$HELD.raw" | sort -u > "$HELD"
+rm -f "$HELD.raw"
+
+# Candidates: top-level entries whose mtime is older than HOURS, skipping the shared Go cache and the lock.
+find "$ROOT_DIR" -mindepth 1 -maxdepth 1 -mmin "+$((HOURS * 60))" ! -name '*.v[0-9]' ! -name 'hw-go-cache*' ! -name '.hw-test-prune.lock' -print 2>/dev/null \
+  | awk -v r="$ROOT_DIR/" -v hf="$HELD" 'FILENAME==hf { h[$0]=1; next } { n=substr($0, length(r)+1); if (!(n in h)) print }' "$HELD" - > "$CAND"
+total="$(wc -l < "$CAND" | tr -d ' ')"
+held="$(wc -l < "$HELD" | tr -d ' ')"
+if [ -n "$LIST" ]; then
+  tr '\n' '\0' < "$CAND" | xargs -0 du -sk -- > "$LIST" 2>/dev/null
+fi
+if [ "$DRY" = 1 ]; then
+  printf 'hw-test-prune: would remove %s entries older than %s h from %s (%s held by a live process, kept)\n' "$total" "$HOURS" "$ROOT_DIR" "$held"
+  exit 0
+fi
+removed=0
+while IFS= read -r p; do
+  chmod -R u+w -- "$p" 2>/dev/null
+  rm -rf -- "$p" 2>/dev/null
+  [ -e "$p" ] || [ -L "$p" ] || removed=$((removed + 1))
+done < "$CAND"
+printf 'hw-test-prune: removed %s of %s entries older than %s h from %s (%s held by a live process, kept)\n' "$removed" "$total" "$HOURS" "$ROOT_DIR" "$held"
+exit 0

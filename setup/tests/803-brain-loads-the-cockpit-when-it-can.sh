@@ -61,7 +61,7 @@ run 2.1.291 demo; need_started "2.1.291"
 pass "803: claude 2.1.291 gets --plugin-dir <installed>/cockpit, silently"
 # The mod finds its state file from the pane's environment, and `$WORK` is a shell variable that is never
 # exported: the pane is created with the work root as HW_COCKPIT_WORK (measured live, the mod said "no state path").
-want_work="$(jq -r '.work' "$BH/projects.json" | sed "s#^~#$TMP/home#")"
+want_work="$( . "$ROOT/bin/project-spaces.sh"; lane_config_load "$BH" >/dev/null; printf '%s' "$WORK" )"  # the bash lane table's rule (work, else root + /work), not a copy of it here
 [ -f "$TMP/calls.workspace-create" ] || fail "803: brain created no workspace: $(cat "$TMP/out")"
 grep -qx -- "HW_COCKPIT_WORK=$want_work" "$TMP/calls.workspace-create" \
   || fail "803: the brainer's pane was not created with HW_COCKPIT_WORK=$want_work: $(tr '\n' ' ' < "$TMP/calls.workspace-create")"

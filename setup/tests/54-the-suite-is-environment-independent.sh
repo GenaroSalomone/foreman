@@ -252,18 +252,20 @@ if [ -x "$CS_RUNNER" ]; then
   # output for BOTH runs — identical, and free of "not ok" — so both C05 claims
   # passed on nothing. That is the 8f5c8ef shape, and it is the shape the M04
   # arm below was rewritten to remove IN THE SAME COMMIT that added this one.
-  # The floor is deliberately below the current count (measured 38): it exists
-  # to catch a runner that did not run, not to pin a number that legitimately
-  # grows.
-  cs_b_ok="$(printf '%s\n' "$cs_b" | grep -c '^ok ' || true)"
-  cs_a_ok="$(printf '%s\n' "$cs_a" | grep -c '^ok ' || true)"
+  # THE RUNNER SAYS IT REACHED ITS END. A source grep for a floor undercounts (label loops) and lets a runner that exits 0 half-way stay
+  # green, so setup/test-channel-send prints one closing line, "done - ... reached its end (N ok)", and C05 requires it in BOTH runs with N
+  # equal to the ok lines printed and at least one.
+  cs_ok_of() { printf '%s\n' "$1" | grep -c '^ok ' || true; }
+  cs_end_of() { printf '%s\n' "$1" | sed -n 's/^done - test-channel-send reached its end (\([0-9]*\) ok)$/\1/p'; }
+  cs_a_ok="$(cs_ok_of "$cs_a")"; cs_b_ok="$(cs_ok_of "$cs_b")"
+  cs_a_end="$(cs_end_of "$cs_a")"; cs_b_end="$(cs_end_of "$cs_b")"
   case "$cs_b" in
     *"not ok"*) fail "C05 setup/test-channel-send is red for a chained executor: $(printf '%s' "$cs_b" | grep 'not ok' | head -2)" ;;
   esac
-  if [ "${cs_b_ok:-0}" -ge 20 ] && [ "${cs_a_ok:-0}" -ge 20 ]; then
-    pass "C05 and it is GREEN for the chained executor by its own tally ($cs_a_ok ok clean, $cs_b_ok ok polluted), not identically empty"
+  if [ -n "$cs_a_end" ] && [ "$cs_a_end" = "$cs_a_ok" ] && [ -n "$cs_b_end" ] && [ "$cs_b_end" = "$cs_b_ok" ] && [ "$cs_a_ok" -ge 1 ] && [ "$cs_b_ok" -ge 1 ]; then
+    pass "C05 and it is GREEN for the chained executor and reached its end ($cs_a_ok ok clean, $cs_b_ok ok polluted)"
   else
-    fail "C05 setup/test-channel-send reported only $cs_a_ok/$cs_b_ok passing assertions — it did not run, so its identical output proves nothing"
+    fail "C05 setup/test-channel-send did not report reaching its end (ok clean/polluted $cs_a_ok/$cs_b_ok, closing line says '${cs_a_end:-none}'/'${cs_b_end:-none}') — it stopped early or did not run, so its identical output proves nothing"
   fi
 else
   fail "C05 setup/test-channel-send is not executable, so the second runner's contract is unchecked"

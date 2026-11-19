@@ -54,7 +54,7 @@ CHECKS="$ROOT/setup/tests/_cockpit_writer_checks.py"
 TMP="$(mktemp -d "${TMPDIR:-/tmp}/t797.XXXXXX")"
 trap 'rm -rf "$TMP"' EXIT
 
-out="$(HW_TIMING_SCALE="$(load_scale 3)" python3 -I "$CHECKS" "$ROOT/bin" 2>&1)" || { printf '%s\n' "$out" >&2; fail "797: the writer's checks failed on the real tree (above)"; }
+out="$(HW_TIMING_SCALE="$(load_scale_live 3)" python3 -I "$CHECKS" "$ROOT/bin" 2>&1)" || { printf '%s\n' "$out" >&2; fail "797: the writer's checks failed on the real tree (above)"; }
 printf '%s\n' "$out"
 pass "797: the writer says what is on disk — classes, caps, atomic write, debounce, loop, ctx, cut, timing"
 

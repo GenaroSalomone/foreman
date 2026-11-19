@@ -84,7 +84,7 @@ def main(budgets_path, ceilings_path):
         s = float(v["seconds"])
         limit = ceil.get(name, JOB_MAX)
         if s > JOB_MAX and s > limit:  # MUTATION-ANCHOR: 965-M01
-            bad.append("%s measured %.0fs, over %.0fs%s: cut it into jobs of at most %.0fs (the cheapest split: by case range, as tests/contract-hw/shard.sh does for 870)"
+            bad.append("%s measured %.0fs, over %.0fs%s: cut it into jobs of at most %.0fs (the cheapest split: by case range)"
                        % (name, s, limit, " (its ceiling)" if name in ceil else "", JOB_MAX))
     for name in sorted(ceil):
         if name not in files or float(files[name]["seconds"]) <= JOB_MAX:

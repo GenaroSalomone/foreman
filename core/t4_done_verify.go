@@ -166,21 +166,47 @@ func (d *doneRun) docsCover(wd, common, tree string) (string, bool) {
 	return bashSub(out), true
 }
 
-// verifyShortcut is _verify_shortcut: a clean checkout already measured is decided from disk.
-func (d *doneRun) verifyShortcut(rundir, wd, pin string) bool {
-	if d.getenv("HW_VERIFY_FRESH") != "" {
-		return false
-	}
-	if !doneExists(wd + "/.git") {
-		return false
+// cleanHead is HEAD's commit when wd is a checkout with nothing uncommitted and the run is not asked to start over
+// (HW_VERIFY_FRESH): the one meaning of "clean checkout" every decision made from disk in place of the gate shares.
+func (d *doneRun) cleanHead(wd string) (string, bool) {
+	if d.getenv("HW_VERIFY_FRESH") != "" || !doneExists(wd+"/.git") {
+		return "", false
 	}
 	headOut, rc := doneGit(wd, "rev-parse", "--verify", "-q", "HEAD^{commit}")
 	head := bashSub(headOut)
 	if rc != 0 || head == "" {
-		return false
+		return "", false
 	}
 	dirty, rc := doneGit(wd, "status", "--porcelain", "--untracked-files=normal")
 	if rc != 0 || bashSub(dirty) != "" {
+		return "", false
+	}
+	return head, true
+}
+
+// verifyMerged: a clean HEAD already an ancestor of the lane's base was gated by the merge that put it there (setup/merge-task, a PR).
+// Re-running the pinned gate measured nothing new: with no diff left, the gate's selector answers `all` and the WHOLE fast gate runs
+// (8-12 min, past the 900 s ceiling: receipt exit 124, 2026-11-18). Only ancestry counts — an unmerged branch is still verified.
+// The ref is the lane's canonical one, base_ref_prefix + base (a lane with no prefix: local `main`; one with `origin/`: `origin/develop`), never a stale sibling.
+func (d *doneRun) verifyMerged(rundir, wd, proj, head string) bool {
+	base := d.c.t.get(proj, "base")
+	if base == "" {
+		base = "main"
+	}
+	ref := d.c.t.get(proj, "base_ref_prefix") + base
+	if _, rc := doneGit(wd, "merge-base", "--is-ancestor", head, ref); rc != 0 {
+		return false
+	}
+	d.receiptInto(rundir, "verify_run", "skipped — merged: "+head+" is already in "+ref,
+		"git merge-base --is-ancestor "+head+" "+ref+" in "+wd+", and git status is clean; the merge was the gate, the pinned verification was not run")
+	d.info("verification skipped — this branch is already merged into " + ref + "; nothing here claims more than that")
+	return true
+}
+
+// verifyShortcut is _verify_shortcut: a clean checkout already measured, or already merged, is decided from disk.
+func (d *doneRun) verifyShortcut(rundir, wd, proj, pin string) bool {
+	head, ok := d.cleanHead(wd)
+	if !ok {
 		return false
 	}
 	base, _ := doneReceiptLast(rundir+"/receipt.jsonl", "review_base")
@@ -191,6 +217,9 @@ func (d *doneRun) verifyShortcut(rundir, wd, pin string) bool {
 		d.receiptInto(rundir, "verify_run", "skipped — no change since dispatch ("+base+")",
 			"HEAD == review_base recorded at dispatch and git status is clean in "+wd+"; the pinned verification was not run")
 		d.info("verification skipped — no change since dispatch (" + base + "); nothing here claims more than that")
+		return true
+	}
+	if d.verifyMerged(rundir, wd, proj, head) {
 		return true
 	}
 	lines, ok := doneFileLines(pin)
@@ -300,13 +329,6 @@ func doneBashArith(s string) int64 {
 // verifyAtClose is _verify_at_close: the brief's pinned verification, run here, its exit and hash receipted.
 func (d *doneRun) verifyAtClose(rundir, workdir, vproj, vtask string) {
 	a := d.app
-	verifydir := workdir
-	if d.worktreeIsWorkdir(vproj) && !doneExists(workdir+"/.git") {
-		verifydir = d.c.checkout(vproj)
-		if verifydir == "" {
-			verifydir = d.c.brain
-		}
-	}
 	rundir = strings.TrimSuffix(rundir, "/")
 	if rundir == "" || !isDir(rundir) {
 		return
@@ -326,12 +348,20 @@ func (d *doneRun) verifyAtClose(rundir, workdir, vproj, vtask string) {
 		a.warn("nothing here says the work was checked — the report is the only claim there is")
 		return
 	}
-	if !isDir(verifydir) {
-		d.receiptInto(rundir, "verify_run", "not run — "+verifydir+" does not exist", "test -d "+verifydir+" at hw done")
-		a.warn("NOT VERIFIED: " + verifydir + " is gone, so the pinned verification could not run")
+	if d.worktreeIsWorkdir(vproj) && !doneExists(workdir+"/.git") {
+		// This lane's task checkout IS its work dir, and it holds none (reaped). The pinned gate would have to run in the lane's main
+		// checkout, which measures main, not the task: it used to burn the whole ceiling to say nothing.
+		d.receiptInto(rundir, "verify_run", "not run — "+workdir+" holds no checkout of this task",
+			"hw done found no .git in "+workdir+"; verifying the lane's main checkout would measure main, not the task")
+		a.warn("NOT VERIFIED: " + workdir + " holds no checkout of this task, so there is nothing of it to verify (the lane's main checkout is not the task)")
 		return
 	}
-	if verifydir == workdir && d.verifyShortcut(rundir, workdir, pin) { // # MUTATION-ANCHOR: 861-G26
+	if !isDir(workdir) {
+		d.receiptInto(rundir, "verify_run", "not run — "+workdir+" does not exist", "test -d "+workdir+" at hw done")
+		a.warn("NOT VERIFIED: " + workdir + " is gone, so the pinned verification could not run")
+		return
+	}
+	if d.verifyShortcut(rundir, workdir, vproj, pin) { // # MUTATION-ANCHOR: 861-G26
 		a.info("measured: hw receipt " + vproj + " " + vtask)
 		return
 	}
@@ -433,12 +463,12 @@ func (d *doneRun) verifyAtClose(rundir, workdir, vproj, vtask string) {
 			a.warn("this was also said at dispatch, where the brief could still be edited for free")
 		}
 		a.info("verifying: " + cmd)
-		out, rc := d.runPinned(verifydir, doneCeiling(secs), cmd, extraEnv)
+		out, rc := d.runPinned(workdir, doneCeiling(secs), cmd, extraEnv)
 		os.WriteFile(log, []byte(out+"\n"), 0o666)
 		sum := sha256.Sum256([]byte(out))
 		d.receiptInto(rundir, "verify_run",
 			"exit "+strconv.Itoa(rc)+"  sha256 "+hex.EncodeToString(sum[:])+"  "+cmd,
-			"hw done ran: (cd "+verifydir+" && "+toS+" bash -c '"+cmd+"'); output in "+log)
+			"hw done ran: (cd "+workdir+" && "+toS+" bash -c '"+cmd+"'); output in "+log)
 		if rc == 0 { // # MUTATION-ANCHOR: 861-G29
 			a.ok("VERIFIED  exit 0  " + cmd)
 		} else {

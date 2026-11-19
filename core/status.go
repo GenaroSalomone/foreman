@@ -161,6 +161,7 @@ func (a *app) statusTable(project string, all bool) (int, []orphanLine) {
 	limits, orphans, cleanup := s.reportTasks(out)
 	s.reportCleanup(out, cleanup)
 	s.reportOrphans(out, orphans)
+	s.reportBrowsers(out)
 	if p := a.getenv("HW_STATUS_ORPHANS_JSON"); p != "" && a.getenv("HW_CORE_READONLY") == "" {
 		s.writeOrphansJSON(p, orphans)
 	}
@@ -1347,4 +1348,57 @@ func (s *statusRun) reportCaveats(out *bufio.Writer, limits map[string]bool) {
 	pl("  " + c.dim + "(environment, dev servers and --model intact). A cold restart resumes the" + c.z)
 	pl("  " + c.dim + "agents only, from .hw/<run>/env; the dev servers come back as bare shells." + c.z)
 	pl("")
+}
+
+// reportBrowsers names a browser that is still alive for a run that is already closed — the 1d22h case of 2026-11-05. A browser
+// is attributed to a run by the marker in its environment (browser_reap.go); the run counts as closed when its done marker
+// or closed-by-hand mark is on disk, or when no work directory on the board holds a run directory of that name any more, and in
+// both cases only when no non-browser process of the run is alive. A run that is still open is never listed: its browsers are its own. Prints nothing when there is nothing to say.
+func (s *statusRun) reportBrowsers(out *bufio.Writer) {
+	byRun, err := bcHost().allBrowserRuns()
+	if err != nil || len(byRun) == 0 {
+		return
+	}
+	closed := map[string]string{}
+	known := map[string]bool{}
+	for _, t := range s.d.tasks {
+		for _, r := range s.rd.runsOf(t.workdir) {
+			known[r.name] = true
+			switch {
+			case r.done:
+				closed[r.name] = "it has a done marker"
+			case r.closed != nil:
+				closed[r.name] = "it was closed by hand"
+			}
+		}
+	}
+	var runs []string
+	h := bcHost()
+	for run := range byRun {
+		if h.runAlive(run) { // a reported run whose executor still sits in its pane has live browsers of its own
+			continue
+		}
+		if _, ok := closed[run]; ok {
+			runs = append(runs, run)
+		} else if !known[run] {
+			closed[run] = "no work directory on the board holds its run directory any more"
+			runs = append(runs, run)
+		}
+	}
+	if len(runs) == 0 {
+		return
+	}
+	sort.Strings(runs)
+	c := s.colour
+	pl := func(l string) { out.WriteString(l + "\n") }
+	pl("\n" + c.b + "browsers alive for closed runs" + c.z + "  " + c.dim + "— a close should have taken them with it" + c.z)
+	for _, run := range runs {
+		for _, b := range byRun[run] {
+			if !b.root {
+				continue
+			}
+			pl("  " + c.warn + "!" + c.z + " run " + run + ": " + c.warn + brLine(b) + c.z)
+		}
+		pl("      " + c.dim + closed[run] + "; close them with `browser-close --run " + run + "`" + c.z)
+	}
 }
