@@ -1,6 +1,6 @@
-# foreman 1.1.0-rc.1
+# foreman 1.1.0
 
-foreman 1.1.0 closes a run's browsers with it and makes the release cut stand on a full suite run, not the fast gate.
+foreman 1.1.0 is the stable promotion of 1.1.0-rc.1, with no code change. It closes a run's browsers with it and makes the release cut stand on a full suite run, not the fast gate.
 
 ## In short
 
@@ -13,7 +13,7 @@ foreman 1.1.0 closes a run's browsers with it and makes the release cut stand on
 
 ## What changed
 
-18 changes since 1.0.0.
+18 changes since 1.0.0 (1.1.0-rc.1 folded in).
 
 ### Added
 - `browser-close --run <run-id>` closes every browser a run started, found by the run's own marker (`HW_RUN` or its per-run
@@ -50,7 +50,7 @@ foreman 1.1.0 closes a run's browsers with it and makes the release cut stand on
   goes back. Every limit a user can hit is in
   [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md).
 
-## Upgrading from 1.0.0
+## Upgrading from 1.1.0-rc.1
 
 Run `foreman-setup upgrade --brain DIR`. A brain installed before `upgrade`
 existed has no record of its flags yet: run your install command once more,
