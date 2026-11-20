@@ -20,11 +20,55 @@ import (
 // ── the removal ────────────────────────────────────────────────────────────────
 
 func (r *reapApplyRun) archiveDest(proj, wt string) string { // _reap_archive_dest: a path that does not exist yet
-	d := r.archiveRoot() + "/" + proj + "/" + reapApplyBasename(wt)
+	return uniqueDest(r.archiveRoot()+"/"+proj+"/"+reapApplyBasename(wt), reapApplyDate("+%Y%m%d-%H%M%S", "20060102-150405"))
+}
+
+func uniqueDest(d, stamp string) string {
 	if reapApplyExists(d) {
-		d += "." + reapApplyDate("+%Y%m%d-%H%M%S", "20060102-150405")
+		d += "." + stamp
 	}
 	return d
+}
+
+// archiveClosedDest: a path that does not exist yet, <archive>/<lane>/<date>/<task>, so the prune can read an age from the date.
+func (r *reapApplyRun) archiveClosedDest(proj, wt string) string {
+	return uniqueDest(r.archiveRoot()+"/"+proj+"/"+reapApplyDate("+%Y-%m-%d", "2006-01-02")+"/"+reapApplyBasename(wt), reapApplyDate("+%H%M%S", "150405"))
+}
+
+// archiveClosed copies what git does not hold of a closed task's worktree into dest: the diff of its tracked files against HEAD
+// (HW-UNCOMMITTED.diff, binary-safe), its untracked files, and the ignored ones git cannot rebuild — each copy verified. A tree with
+// nothing of the three has nothing to archive (its commits are on the branch) and dest is not made. False: it could not be done.
+func (r *reapApplyRun) archiveClosed(wt, dest string) bool {
+	diff, _, rc := reapApplyGit(wt, "diff", "HEAD", "--binary")
+	if rc != 0 {
+		return false
+	}
+	listed, _, rc := reapApplyGit(wt, "ls-files", "-z", "--others", "--exclude-standard", "--directory") // a wholly untracked directory is ONE entry
+	if rc != 0 {
+		return false
+	}
+	var entries []string
+	for _, f := range strings.Split(listed, "\x00") {
+		if f = strings.TrimSuffix(f, "/"); f != "" {
+			entries = append(entries, f)
+		}
+	}
+	for _, rel := range reapApplyLines(r.irreplaceable(wt)) {
+		if strings.Contains(rel, " (") { // an entry that could not be read is never archived, so the tree is never removed
+			return false
+		}
+		entries = append(entries, rel)
+	}
+	if diff == "" && len(entries) == 0 {
+		return true
+	}
+	if reapApplyRC("mkdir", "-p", dest) != 0 {
+		return false
+	}
+	if diff != "" && os.WriteFile(dest+"/HW-UNCOMMITTED.diff", []byte(diff), 0o600) != nil {
+		return false
+	}
+	return r.archiveEntries(wt, dest, entries)
 }
 
 // archiveEntries is _reap_archive_entries (and `hw done`'s doneArchiveEntries, which is the same function): each copy is
@@ -148,9 +192,21 @@ func (r *reapApplyRun) reapWorktree(proj, main, wt, branch, base string) bool {
 	dest := ""
 	r.archiveDir = ""
 	switch r.verdict { // # MUTATION-ANCHOR: 865-G18
-	case "safe", "archivable":
+	case "safe", "archivable", "closed":
 	default:
 		return false
+	}
+	if r.verdict == "closed" { // what was not committed goes to <archive>/<lane>/<date>/<task>, verified, before anything is removed
+		dest = r.archiveClosedDest(proj, wt)
+		if !r.archiveClosed(wt, dest) {
+			r.rmWorkdir(dest)
+			a.warn("kept " + reapApplyBasename(wt) + " — the copy of its uncommitted work into " + dest + " could not be verified, so nothing was removed")
+			return false
+		}
+		if reapApplyExists(dest) {
+			r.archiveDir = dest
+			a.ok("archived the uncommitted work of " + reapApplyBasename(wt) + " → " + dest)
+		}
 	}
 	if r.verdict == "archivable" {
 		entries := r.archive
@@ -181,14 +237,25 @@ func (r *reapApplyRun) reapWorktree(proj, main, wt, branch, base string) bool {
 	if transcriptDir == "" {
 		transcriptDir = r.archiveRoot() + "/" + proj + "/" + reapApplyBasename(wt)
 	}
-	if !removeWithRunTmps(r.a.getenv, wt, transcriptDir, a.warn, a.info, func() bool { return reapApplyGitRC(main, "worktree", "remove", wt) == 0 }) {
+	if r.deadLock {
+		reapApplyGitRC(main, "worktree", "unlock", wt)
+	}
+	rm := []string{"worktree", "remove"}
+	if r.verdict == "closed" || branch == "" || branch == "detached" { // what was archived; a detached cache tree
+		rm = append(rm, "--force")
+	}
+	if !removeWithRunTmps(r.a.getenv, wt, transcriptDir, a.warn, a.info, func() bool { return reapApplyGitRC(main, append(rm, wt)...) == 0 }) {
 		a.warn("could not remove " + wt + " — run it by hand and read what git says")
 		return false
 	}
 	a.ok("removed " + reapApplyBasename(wt))
-	if r.deleteBranch(main, branch, base) {
+	switch {
+	case r.verdict == "closed": // a branch is never deleted for this: its commits are all that is left of the work
+		a.info("kept " + branch)
+	case branch == "" || branch == "detached":
+	case r.deleteBranch(main, branch, base):
 		a.info("deleted " + branch)
-	} else {
+	default:
 		a.warn("kept " + branch + " — git refused a safe delete, so something is not merged after all")
 	}
 	r.reapDB(proj, main, wt, dest)

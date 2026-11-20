@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 func (r *reapApplyRun) regenerable() string {
@@ -23,6 +24,7 @@ func (r *reapApplyRun) disposition(main, wt, branch, base string) {
 	}
 	r.set("", "")
 	r.evidence = ""
+	r.deadLock = false
 
 	occ := r.occ.of(wt)
 	if !occ.observed { // # MUTATION-ANCHOR: 865-G07
@@ -38,14 +40,29 @@ func (r *reapApplyRun) disposition(main, wt, branch, base string) {
 		return
 	}
 	if lock, ok := r.lockReason(main, wt); ok { // # MUTATION-ANCHOR: 865-G10
-		reason := ""
-		if lock != "" {
-			reason = " (" + lock + ")"
+		if deadHwLock(lock) { // hw's own lock, with nobody in the tree (the gate above), is its executor's leftover: the rest of the verdict decides
+			r.deadLock = true
+		} else {
+			reason := ""
+			if lock != "" {
+				reason = " (" + lock + ")"
+			}
+			r.set("locked", "locked"+reason+" — hw locks a worktree while its executor lives, and an idle one is invisible to lsof; `hw done` unlocks its own, `git worktree unlock` any other")
+			return
 		}
-		r.set("locked", "locked"+reason+" — hw locks a worktree while its executor lives, and an idle one is invisible to lsof; `hw done` unlocks its own, `git worktree unlock` any other")
-		return
 	}
 	if branch == "" || branch == "detached" {
+		if expiredCacheTree(r.a.getenv, wt, time.Now()) {
+			real, _ := reapApplyPwdP(wt)
+			cwds, rc := reapApplyOut("lsof", "-a", "-d", "cwd", "-Fn")
+			cwds = bashSub(cwds)
+			if unread := rc != 0 && cwds == ""; unread || processInside(cwds, real) {
+				r.set("detached", cacheTreeInUse(unread))
+				return
+			}
+			r.set("safe", "detached tree under the cache, made over "+itoa(int(detachedTreeTTL/time.Hour))+"h ago — a gate, cut or triage base run's; no branch, nothing to merge")
+			return
+		}
 		r.set("detached", "no branch — a detached worktree is not something this tool decides about")
 		return
 	}
@@ -67,7 +84,7 @@ func (r *reapApplyRun) disposition(main, wt, branch, base string) {
 		return o
 	})
 	if status := bashSub(statusOut); status != "" { // # MUTATION-ANCHOR: 865-G11
-		r.set("dirty", itoa(strings.Count(status, "\n")+1)+" uncommitted tracked change(s)")
+		r.setClosable("dirty", wt, itoa(strings.Count(status, "\n")+1)+" uncommitted tracked change(s)")
 		return
 	}
 	if !r.branchMerged(main, branch, base) { // # MUTATION-ANCHOR: 865-G12
@@ -79,7 +96,7 @@ func (r *reapApplyRun) disposition(main, wt, branch, base string) {
 		} else {
 			n = "?"
 		}
-		r.set("unmerged", branch+" has "+n+" commit(s) not in "+base)
+		r.setClosable("unmerged", wt, branch+" has "+n+" commit(s) not in "+base)
 		return
 	}
 	keep := bashSub(r.irreplaceable(wt))
@@ -124,6 +141,15 @@ func (r *reapApplyRun) disposition(main, wt, branch, base string) {
 	} else {
 		r.set("safe", "merged into "+base+", clean, nothing ignored that git cannot rebuild")
 	}
+}
+
+// setClosable is a dirty or unmerged verdict: it is `closed` (archived, then removed; the branch stays) when the task reported.
+func (r *reapApplyRun) setClosable(verdict, wt, why string) {
+	if closedTaskAt(wt, time.Now()) {
+		r.set("closed", closedWhy(why))
+		return
+	}
+	r.set(verdict, why)
 }
 
 // lockReason is _wt_lock_reason: the reason a worktree is locked (maybe empty), and whether it is locked at all.

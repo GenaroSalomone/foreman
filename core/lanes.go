@@ -51,7 +51,7 @@ var laneFields = []string{"product_repo", "hw_aliases", "brain_aliases", "space"
 	"checkout", "checkout_var", "base", "base_ref_prefix", "branch", "worktree_root", "worktree", "ports",
 	"hint_aliases", "build", "agents_from", "deps", "db", "devserver", "reap", "sweep", "brain_guard", "brief_note", "qa_target",
 	"model_floor", "model_pins", "subagent_model", "pi_subagent_models", "requested_by", "suite_lock", "org",
-	"review_default", "review_post", "opencode_config_dir"} // opencode_config_dir: RETIRED (OpenCode left hw), accepted and ignored for one release; bin/project-spaces.sh agrees
+	"review_default", "review_post", "ui_paths", "opencode_config_dir"} // opencode_config_dir: RETIRED (OpenCode left hw), accepted and ignored for one release; bin/project-spaces.sh agrees
 
 var laneSub = map[string][]string{
 	"model_floor": {"tier", "accepts"},
@@ -258,6 +258,20 @@ func loadTable(file, home string) (*table, []string) {
 	if len(badrp) > 0 {
 		return bad("review_post is pr-description or none: " + strings.Join(badrp, ", "))
 	}
+	badui := collect("ui_paths", func(v *jval) bool {
+		if v.kind != vArr {
+			return false
+		}
+		for _, e := range v.arr {
+			if e.kind != vStr || e.s == "" || strings.Contains(e.s, ",") {
+				return false
+			}
+		}
+		return true
+	})
+	if len(badui) > 0 {
+		return bad("ui_paths is a list of non-empty paths or globs, with no comma: " + strings.Join(badui, ", "))
+	}
 	badart := collect("artifacts", inList("deny", "default", "personal"))
 	if len(badart) > 0 {
 		return bad("artifacts is deny or an account (default, personal): " + strings.Join(badart, ", "))
@@ -436,9 +450,9 @@ func loadTable(file, home string) (*table, []string) {
 		}
 		t.piRosterName = v.s
 	}
-	t.retArtifact, t.retBackup, t.retBuild = "30", "60", "7"
+	t.retArtifact, t.retBackup, t.retBuild = "14", "60", "7"
 	if r := field(root, "retention"); r != nil {
-		t.retArtifact = orDefault(field(r, "artifact_retention_days"), "30")
+		t.retArtifact = orDefault(field(r, "artifact_retention_days"), "14")
 		t.retBackup = orDefault(field(r, "backup_retention_days"), "60")
 		t.retBuild = orDefault(field(r, "build_output_days"), "7")
 	}
@@ -474,6 +488,7 @@ func loadTable(file, home string) (*table, []string) {
 		l.f["org"] = str("org", "")
 		l.f["review_default"] = joinStrs(field(v, "review_default"), ",")
 		l.f["review_post"] = str("review_post", "none")
+		l.f["ui_paths"] = joinStrs(field(v, "ui_paths"), ",")
 		if p := field(v, "product_repo"); p != nil && p.kind == vBool && p.b {
 			l.f["product_repo"] = "1"
 		}

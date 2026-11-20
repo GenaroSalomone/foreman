@@ -103,6 +103,7 @@ func (a *app) cmdStatusFull() int {
 	outbox := a.startJob(one, nil, func(b *app) int { return b.outboxQuiet(project) })
 	worktrees := a.startJob(one, []string{"--quiet"}, (*app).cmdWorktrees)
 	agentTools := a.startJob(one, nil, func(b *app) int { return b.agentToolsQuiet(project) })
+	throughput := a.startJob(one, nil, (*app).throughputQuiet)
 	var tabs, hygiene, rules, decisions, briefs *heldJob
 	if project == "" {
 		tabs = a.startJob(one, nil, (*app).tabsQuiet)
@@ -119,7 +120,7 @@ func (a *app) cmdStatusFull() int {
 	}
 	a.orphansQuiet(orphans)
 	a.vaultQuiet()
-	for _, j := range []*heldJob{release, gate, outbox, agentTools} {
+	for _, j := range []*heldJob{release, gate, outbox, agentTools, throughput} {
 		if rc := a.replay(j); rc != 0 {
 			return rc
 		}

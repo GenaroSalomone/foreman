@@ -28,7 +28,9 @@
 # resolves to, and hangs up for anything else. That is what makes the first test
 # real rather than decorative: delete the resolve step and the request carries
 # the name as a pane_id, the server hangs up, and the test fails.
-hr="$TMP/hrpc"; mkdir -p "$hr"
+# Short private dir, not $TMP: an executor's TMPDIR pushes the socket past the 104-byte sun_path cap.
+hr="$(mktemp -d /tmp/hr.XXXXXX)"
+trap 'rc=$?; rm -rf "$hr"; _hw_exit "$rc"' EXIT
 cat > "$hr/fake-herdr.py" <<'FAKEHERDR'
 import json, os, socket, sys, threading
 sys.path.insert(0, os.environ["HW_TEST_PYLIB"])

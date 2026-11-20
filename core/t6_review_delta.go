@@ -166,6 +166,8 @@ func (a *app) reviewRoute(p *reviewPlan, account string) {
 			p.retaskWhy = "the reviewer's chaining lease is " + st
 		case len(missing) > 0:
 			p.retaskWhy = "the delta's pieces need plugins the reviewer was not launched with: " + strings.Join(missing, ", ")
+		case has(p.list, reviewQAItem) && len(receiptValues(rundir, "web_port")) == 0:
+			p.retaskWhy = "the delta runs qa, and the reviewer was launched with no dev server (no web_port in its receipt)"
 		case a.nextAgentGet(pane) == "":
 			p.retaskWhy = "pane " + pane + " does not answer"
 		default:
@@ -206,7 +208,8 @@ func reviewMissingPlugins(list, loaded []string) []string {
 
 // reviewRetask hands the delta brief to the kept reviewer: its worktree fast-forwards to the head (the gate forbids a reviewer's
 // commits, so it always can), V's review.md is kept beside the one the new review will replace, and `hw next <pane> --brief` delivers.
-// It returns false, with what stopped it already printed, when the dispatch must be a fresh reviewer; a dry run moves nothing.
+// It returns false, with what stopped it already printed, when nothing was handed over and the dispatch must be a fresh reviewer; a
+// `hw next` that fails dies instead (it may have delivered). A dry run moves nothing.
 func (a *app) reviewRetask(p *reviewPlan, brief string, dry bool) bool {
 	rwt := a.workTree(p.lane, p.rwtTask)
 	if !dry {
@@ -230,8 +233,8 @@ func (a *app) reviewRetask(p *reviewPlan, brief string, dry bool) bool {
 	}
 	a.step("re-task  hw " + strings.Join(args, " "))
 	if err := a.reviewRunHW(args); err != nil {
-		a.warn("hw next did not take the delta (" + err.Error() + "): a fresh reviewer takes it instead")
-		return false
+		// hw next may have half-delivered: a fresh reviewer beside it is two reviewers for one round, so nothing more is dispatched
+		a.die("hw next did not take the delta (" + err.Error() + "): the re-task of pane " + p.retask + " failed, so NO other reviewer was dispatched for this round and nothing was recorded. Look at pane " + p.retask + ", then run `hw review " + p.lane + " " + p.task + "` again.")
 	}
 	return true
 }

@@ -49,12 +49,14 @@ verdict_impl_is_current() {
   local v; v="$(grep -m1 '^impl=' "$1" 2>/dev/null || true)"; v="${v#impl=}"
   [ "${v:-go}" = "$(verdict_impl)" ]
 }
-# write_verdict <commit> <tree> <elapsed-seconds> <headline> [<base_tree> <jobs_rerun> <chain_depth> <platform>]
+# write_verdict <commit> <tree> <elapsed-seconds> <headline> [<base_tree> <jobs_rerun> <chain_depth> <platform> <cold>]
 # — the three after the headline make it an incremental verdict, `chain_depth` hops off a recorded real full run
 # (setup/verdict-incremental caps the chain; setup/release/cut accepts only depth 1). `platform` names where the
 # suite ran when it was not this Mac: setup/linux/run-suite.sh writes `linux`, and setup/release/cut accepts only that.
+# `cold` is `1` when the run read no cache at all (HW_TEST_NO_CACHE set and not 0: the job cache, the Go mutant runners and verdict-cache all treat it as cold) and `0`
+# when it could have replayed anything; the release cut accepts a verdict that is not `cold=0` (setup/release/cut verdict_is_cold). No line = not recorded.
 write_verdict() {
-  local commit="$1" tree="$2" elapsed="$3" headline="$4" base_tree="${5:-}" jobs="${6:-}" depth="${7:-1}" platform="${8:-}"
+  local commit="$1" tree="$2" elapsed="$3" headline="$4" base_tree="${5:-}" jobs="${6:-}" depth="${7:-1}" platform="${8:-}" cold="${9:-}"
   local dir cache_file tmp_cache_file
   dir="$(git rev-parse --git-common-dir)/hw-push-verified"
   mkdir -p "$dir"
@@ -70,6 +72,7 @@ write_verdict() {
     echo "host=$(hostname)"
     echo "impl=$(verdict_impl)"
     [ -z "$platform" ] || echo "platform=$platform"
+    [ -z "$cold" ] || echo "cold=$cold"
     if [ -n "$base_tree" ]; then
       # A full verdict that names the run it stands on, `depth` hops from a real full run.
       # setup/release/cut accepts it only at depth 1, while `chain` still proves that.
@@ -307,5 +310,7 @@ if [ -n "$only_file" ]; then
 else
   headline="$(printf '%s\n' "$out" | grep -E '^[0-9]+ tests passed' | tail -1 || true)"
 fi
-write_verdict "$commit" "$tree" "$elapsed" "$headline" "$base_tree" "${_jobs:-}" "$chain_depth"
+# A COLD VERDICT IS A RUN THAT READ NO CACHE, NOT ONE THAT HAPPENED TO HIT NONE: the Go mutant runners replay per-anchor verdicts from the same store, which a job count does not see.
+case "${HW_TEST_NO_CACHE:-0}" in 0) _cold=0 ;; *) _cold=1 ;; esac
+write_verdict "$commit" "$tree" "$elapsed" "$headline" "$base_tree" "${_jobs:-}" "$chain_depth" "" "$_cold"
 echo "verify-for-push: PASSED${only_file:+ (INCREMENTAL on $base_tree)} in ${elapsed}s — cached for tree $tree. setup/hooks/pre-push will now let this exact tree through instantly." >&2

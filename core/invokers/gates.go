@@ -147,14 +147,20 @@ func DesignGate(artifactsRoot, boundary string) error {
 	return nil
 }
 
+// QAPiece is the reviewer's `qa` piece (core/t5_review.go reviewQAPiece): the lane's qa-tester agent, which no review-skip: releases.
+const QAPiece = "qa-tester"
+
 // PluginSkipGate refuses a `review-skip: <skill>` for a plugin the brain vendors in setup/vendor/plugins (vendored: nil when
 // there is none to protect). A declared plugin that did not run is never accepted as skipped: the closing's own words used to
 // say "a skill that is not among your available skills is not installed", so an executor whose pane was launched without the
 // plugin wrote exactly that and closed (MEASURED 2026-11-10, a lane pane (w7H:p1VT), task 4: thermo, pstack,
-// blast-radius and comment-sicko, "not installed", accepted). The honest exit for a plugin that cannot run is --blocked.
+// blast-radius and comment-sicko, "not installed", accepted). The honest exit for a plugin that cannot run is --blocked. A reviewer's qa-tester is never skipped either.
 func PluginSkipGate(skills, summary string, vendored func(skill string) bool) error {
 	var refused []string
 	for _, sk := range strings.Split(skills, ",") {
+		if sk == QAPiece && reviewSkipped(summary, sk) {
+			return die("%s", "this review owes qa, and the report skips "+QAPiece+" with review-skip:. qa is the screen check of a UI build: it is proved by the Agent call to "+QAPiece+" in your transcript, never skipped. If it cannot run (no HTTP 200 on $HW_PORT_WEB, a failed browser launch, no qa-tester among your agents), close with done-invoker --blocked naming what stopped it. NOTHING was sent or marked.")
+		}
 		if sk != "" && vendored != nil && reviewSkipped(summary, sk) && vendored(sk) { // # MUTATION-ANCHOR: 1150-G18
 			refused = append(refused, sk)
 		}

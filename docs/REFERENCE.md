@@ -25,7 +25,7 @@ Jump to: [Commands](#commands) · [`--sdd`](#--sdd) · [Model tiers](#delegating
 | `hw preflight --json -- <hw argv>` | Read-only verdict on a dispatch you have not run: `{"level":"ok\|warn\|block","rules":[…]}`. Two rules today: an `--account` other than the lane's, and a release cut holding the suite. Exits 0 whatever the level; only a malformed call exits 1. |
 | `brain relaunch (--all\|<lane>…) [--dry-run]` | Reopen idle Claude Code brainers with the cockpit, keeping each one's conversation, pane and account. A working pane is skipped and named. |
 | `brain restore [<lane>…] [--dry-run]` | After a reboot, resume each lane's last conversation (the newest transcript under the lane's directory, in the lane's own account) into its `brain-<lane>` herdr-core terminal. A lane whose terminal already runs claude, or that has no transcript, is skipped and named. Runs from an app terminal, or from any shell when the herdr server is off and the core answers. |
-| `hw reap [<lane>]` | List merged worktrees and task branches that are safe to remove. `--apply` removes them, archiving `.artifacts`/`qa-report` to `archive/<lane>/<task>/` beside the work directory first. Dirty, unmerged or occupied work is never removed. Also lists executors kept after a `--blocked` report and left unanswered for 24h; `--apply` closes them. |
+| `hw reap [<lane>]` | List merged worktrees and task branches that are safe to remove. `--apply` removes them, archiving `.artifacts`/`qa-report` to `archive/<lane>/<task>/` beside the work directory first. A worktree whose hw lock outlived its dead executor, and a detached tree under the cache over 24h old, are removed too; the dirty or unmerged worktree of a task that reported over 24h ago is removed after its uncommitted diff, untracked and unrebuildable ignored files are archived to `archive/<lane>/<date>/<task>/` (its branch stays); archive entries over 30 days are pruned. Occupied work (a live pane or lease), and dirty or unmerged work of a task that has not reported, is never removed. `hw status` starts this in the background, once a day, for a lane over its worktree threshold. Also lists executors kept after a `--blocked` report and left unanswered for 24h; `--apply` closes them. |
 | `hw train add <lane> <task>` | Merge a reported task's branch into `train-<lane>`. Only a `setup/suite-data/test-budgets.json` conflict is resolved; any other is named. |
 | `hw train push <lane>` | Run the full suite on the train, then move `main` to it, keeping uncommitted edits in the checkout. Pushes nothing. |
 
@@ -129,7 +129,7 @@ frozen dead code, and goes when the last two callers in `hw-core` are ported.
 `projects.json` at the brain root is the one place a lane's settings live.
 `hw`, `brain` and the invokers read it once per process, and a lane you add
 there needs no change to `bin/`. An unknown key, or a value of a shape the
-loader checks (`requested_by`, `suite_lock`, `review_default`, `review_post`, `artifacts`, `model_floor`,
+loader checks (`requested_by`, `suite_lock`, `review_default`, `review_post`, `ui_paths`, `artifacts`, `model_floor`,
 `model_pins`, `ports`), makes the whole file fail to load:
 nothing is read from it. Other values are not checked.
 `hw help lanes` prints this table in short form.
@@ -158,6 +158,7 @@ name and `{task}` the task name.
 | `suite_lock` | string | `none` lets `hw suite` and a task's close verification run at once; `lane` serializes them. | `lane` |
 | `review_default` | list | Pieces the independent reviewer of every build in this lane runs besides its tier and the brief's `review:`: `thermo`, `tests`, `ponytail`, `pstack`, `comment-sicko`. `judgment-day` is refused: it is a risk call made per brief. | none |
 | `review_post` | string | `pr-description`: the reviewer writes its findings into one `## Review` section of the build's PR body (never a comment); `none` posts nothing. | `none` |
+| `ui_paths` | list | What this lane's diffs call UI: a `dir/` prefix, a base-name glob (`*.tsx`) or a whole-path glob. A build whose code files touch it gets the reviewer's `qa` (the lane's `qa-tester` on its dev server) by default (added to an explicit `review:` list too), when the lane has both and the brief's `review:` is not `none`. | none: nothing is UI |
 | `checkout` | path | The lane's repository checkout. | none: no checkout |
 | `checkout_var` | string | An upper-case environment variable that overrides `checkout` when set. | none |
 | `base` | string | The branch a task's worktree is built from, and the base a review is measured against. | none |
@@ -189,7 +190,7 @@ live), `lanes` (required),
 `operator` (the person messages tell an agent to leave a decision to),
 `survey_order` (the order `hw reap` and `hw worktrees` walk the lanes),
 `retention` (how long `hw reap` keeps the artifacts of a task that reported and
-its backups: `artifact_retention_days`, 30, and `backup_retention_days`, 60;
+its backups: `artifact_retention_days`, 14, and `backup_retention_days`, 60;
 0 disables a window), `metrics_direct` and `comment`.
 
 ### `brief_note`: one rule for every executor of a lane

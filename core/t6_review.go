@@ -139,9 +139,11 @@ func reviewerPieces(list []string) []string {
 		case "pstack":
 			add("pstack:principle-minimize-reader-load")
 			add("pstack:principle-subtract-before-you-add")
-		case reviewerOnlyItem:
-			add("pstack:" + reviewerOnlyItem)
 		default:
+			if only, ok := reviewerOnlyItems[it]; ok {
+				add(only.piece)
+				continue
+			}
 			for _, q := range reviewSkillsQualified([]string{it}) {
 				add(q)
 			}
@@ -249,6 +251,7 @@ type reviewPlan struct {
 	jd                                      bool
 	list, pieces                            []string
 	extraBrief, extraLane                   []string // what the reviewer's tier adds: the build's review: items, then the lane's review_default ones
+	uiFiles                                 []string // the code files the lane's ui_paths call UI, when they add qa by default (reviewQADefault)
 	post                                    string   // the lane's review_post: pr-description or none
 	rtask, rbranch, rbase                   string
 	briefPath                               string
@@ -358,7 +361,14 @@ func (a *app) cmdReview() int {
 		return 0
 	}
 
+	a.reviewQAGate(p, here) // before anything is claimed
+
 	if !p.at { // a past head is a benchmark, never a round of the build
+		release, owned := a.reviewClaim(p, dry)
+		defer release()
+		if owned {
+			return 0
+		}
 		a.reviewRoundCapCheck(p, liftCap)
 	}
 	// the reviewer's effort follows the tier (plain S: medium, L and S+JD: high, a declared high-risk build is not lowered; a delta's tier is
@@ -411,6 +421,9 @@ func (a *app) cmdReview() int {
 	}
 	if account != "" { // the dispatch parses it, verifies parity (or refuses) and prints the manifest's account line
 		args = append(args, "--account", account)
+	}
+	if has(p.list, reviewQAItem) && a.c.devServerMode(p.lane) == "opt-in" { // qa needs the dev server a lane only starts when asked
+		args = append(args, "--dev-server")
 	}
 	if here {
 		args = append(args, "--here")
@@ -477,7 +490,7 @@ func (a *app) reviewRoundsOf(p *reviewPlan) int {
 // reviewChainOf is the task and the parents its brief's `round_of:` chain names, nearest first, each once (a cycle ends the walk).
 func (a *app) reviewChainOf(lane, task string) []string {
 	var chain []string
-	for ; task != "" && !has(chain, task); task = nextFmValue("round_of", a.reviewBuildBrief(lane, task)) {
+	for ; task != "" && !has(chain, task); task = briefRoundOf(a.reviewBuildBrief(lane, task)) {
 		chain = append(chain, task)
 	}
 	return chain
@@ -598,7 +611,11 @@ func (a *app) reviewPlan(laneArg, task, at string) *reviewPlan {
 		}
 	}
 	p.post = a.c.t.get(lane, "review_post")
-	p.list = reviewTierListWith(p.tier, p.jd, append(slices.Clone(p.extraBrief), p.extraLane...))
+	extra := append(slices.Clone(p.extraBrief), p.extraLane...)
+	if p.uiFiles = a.reviewQADefault(lane, review, p.codeFiles); p.uiFiles != nil {
+		extra = append(extra, reviewQAItem)
+	}
+	p.list = reviewTierListWith(p.tier, p.jd, extra)
 	p.pieces = reviewerPieces(p.list)
 	short := p.head
 	if len(short) > reviewShortLen {
@@ -758,6 +775,9 @@ func (a *app) reviewPrint(p *reviewPlan, dry bool) {
 	if len(p.extraLane) > 0 {
 		a.printf("  + lane       %s's review_default adds %s to the reviewer's tier\n", p.lane, strings.Join(p.extraLane, ", "))
 	}
+	if p.uiFiles != nil {
+		a.printf("  + qa         added by the UI default: the diff touches UI (%s, by %s's ui_paths) and the lane has qa-tester and a dev server: the reviewer looks at the screen\n", p.uiFiles[0], p.lane)
+	}
 	if p.post == reviewPostPR {
 		a.printf("  + post       %s's review_post: the reviewer writes its findings into the PR body's `## Review` section\n", p.lane)
 	}
@@ -887,12 +907,25 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 	}
 	// a slot's value is not rescanned by the replacer below, so the two clauses take their own slots here
 	own := strings.NewReplacer("{{base}}", p.from, "{{head}}", p.head, "{{branch}}", p.branch)
-	agents, post := "", ""
-	if reviewHasAgent(p.pieces) {
+	agents, post, qa, postWhy := "", "", "", ""
+	if has(p.pieces, reviewerOnlyItems[reviewerOnlyItem].piece) { // the agents clause is comment-sicko's report-only contract; qa has its own
 		agents = own.Replace(reviewAgentsPrompt)
 	}
-	if p.post == reviewPostPR {
-		post = own.Replace(reviewPostPrompt)
+	switch {
+	case p.post == reviewPostPR:
+		postWhy = "This lane sets `review_post: pr-description`"
+	case has(p.list, reviewQAItem):
+		postWhy = "This review runs `qa`"
+	}
+	if postWhy != "" {
+		post = own.Replace(strings.Replace(reviewPostPrompt, "{{post_why}}", postWhy, 1))
+	}
+	if has(p.list, reviewQAItem) {
+		cases := briefSections(p.buildBrief, "Do", "Verification")
+		if cases == "" {
+			cases = "(the build brief has no `## Do` or `## Verification` section: take the cases from what it asks for, and say so in `review.md`)"
+		}
+		qa = strings.NewReplacer("{{brain}}", a.c.brain, "{{qa_cases}}", cases).Replace(own.Replace(reviewQAPrompt))
 	}
 	asked := "investigate"
 	rb := p.requestedBy
@@ -905,7 +938,7 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 		"{{lane}}", p.lane, "{{task}}", p.task, "{{head}}", p.head, "{{base}}", p.from,
 		"{{tier}}", reviewTierLabel(p.tier, p.jd), "{{code_lines}}", strconv.Itoa(p.code),
 		"{{build_brief}}", orDefaultStr(p.buildBrief, "(the build had no brief on disk)"),
-		"{{skills}}", strings.TrimRight(skills, "\n"), "{{jd}}", jd, "{{agents}}", agents, "{{post_exception}}", post, "{{functions}}", fns,
+		"{{skills}}", strings.TrimRight(skills, "\n"), "{{jd}}", jd, "{{agents}}", agents, "{{qa}}", qa, "{{post_exception}}", post, "{{functions}}", fns,
 		"{{requested_by}}", strings.ReplaceAll(rb, `"`, `'`), "{{asked}}", asked, "{{model}}", p.model,
 		"{{delta_from}}", p.from, "{{delta_how}}", prior.tHow, "{{prior_head}}", prior.v, "{{prior_verdict}}", prior.verdict, "{{prior_review}}", prior.priorPath(),
 	)
@@ -914,16 +947,6 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 
 // reviewPostPR is the lane's `review_post` that has the reviewer write its findings into the PR.
 const reviewPostPR = "pr-description"
-
-// reviewHasAgent is true when a reviewer's pieces include one launched with the Agent tool.
-func reviewHasAgent(pieces []string) bool {
-	for _, q := range pieces {
-		if reviewPieceIsAgent(q[strings.Index(q, ":")+1:]) {
-			return true
-		}
-	}
-	return false
-}
 
 // reviewAgentsPrompt fills {{agents}}: how a reviewer runs an agent piece (comment-sicko). The agent's own definition edits comments, and
 // a reviewer changes nothing, so the prompt is report-only and the tree is checked after; its findings map to review.md severities here,
@@ -944,7 +967,7 @@ const reviewAgentsPrompt = `The pieces above that name an agent (` + "`pstack:co
 // is the whole text it posts, so it names no skill, plugin or agent (2026-11-19: reviews live only in the PR description).
 const reviewPostPrompt = `## The one thing you write outside ` + "`$HW_ARTIFACTS`" + `
 
-This lane sets ` + "`review_post: pr-description`" + `: it overrides the opening line's "post nothing to GitHub" for this one edit. After ` + "`review.md`" + ` is written, put your findings in the build's pull request **body**, in ONE section titled ` + "`## Review`" + `, replacing that section if the body has it and appending it if not. Never a comment, never a submitted review, never an approval, and no other part of the body changes.
+{{post_why}}: it overrides the opening line's "post nothing to GitHub" for this one edit. After ` + "`review.md`" + ` is written, put your findings in the build's pull request **body**, in ONE section titled ` + "`## Review`" + `, replacing that section if the body has it and appending it if not. Never a comment, never a submitted review, never an approval, and no other part of the body changes.
 
 Write the section as the person who opened the PR would: findings and what was done about them, plain sentences, ` + "`file:line`" + ` for each. It names no skill, plugin, agent or tool, carries no AI attribution and no memory ids. Write it to ` + "`$HW_ARTIFACTS/review-section.md`" + `:
 

@@ -317,7 +317,7 @@ func (d *dsp) dispatchManifest(dir string) {
 	default:
 		dbLine = "none — bin/hw provisions no database for " + d.proj
 	}
-	switch dev := d.c.t.get(d.proj, "devserver"); dev {
+	switch dev := d.c.devServerMode(d.proj); dev {
 	case "always", "opt-in":
 		switch {
 		case !d.wantWT:

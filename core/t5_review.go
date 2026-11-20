@@ -15,7 +15,10 @@ package main
 // dispatch (dsp, lch) and `hw next` (t4_next_*.go) each hand them the brief's declarations.
 
 import (
+	"path"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -42,13 +45,13 @@ func reviewListOf(raw string) ([]string, bool) {
 }
 
 // reviewListMode is the mode a list stands for: judgment-day when it names it (the plugin skills are named beside it), plugins when
-// it names only plugins, none when it is empty. false when an item is neither judgment-day, a plugin with a review skill nor comment-sicko.
+// it names only plugins, none when it is empty. false when an item is neither judgment-day, a plugin with a review skill, comment-sicko nor qa.
 func reviewListMode(items []string) (string, bool) {
 	jd := false
 	for _, it := range items {
 		if it == "judgment-day" || it == "rdd" { // rdd is the retired spelling: it adds the same Judgment Day (design 8 S4)
 			jd = true
-		} else if reviewSkillsOfPlugin(it) == nil && it != reviewerOnlyItem {
+		} else if _, only := reviewerOnlyItems[it]; reviewSkillsOfPlugin(it) == nil && !only {
 			return it, false
 		}
 	}
@@ -65,6 +68,19 @@ func reviewListMode(items []string) (string, bool) {
 // runs it (reviewerPieces) and it loads pstack (reviewPluginsOfList); it is in no plugin's review skills (reviewSkillsOfPlugin),
 // so a build's own close never runs it.
 const reviewerOnlyItem = "comment-sicko"
+
+// reviewQAItem is the list item that has the reviewer look at the screen: it runs the lane's own qa-tester agent (reviewQAPiece, the
+// subagent_type done-invoker proves) against the head it judges. It loads no plugin and is in no plugin's review skills.
+const (
+	reviewQAItem  = "qa"
+	reviewQAPiece = "qa-tester"
+)
+
+// reviewerOnlyItems is each list item a reviewer runs that is not a plugin: the plugin it loads ("" for none) and the piece it proves.
+var reviewerOnlyItems = map[string]struct{ plugin, piece string }{
+	reviewerOnlyItem: {"pstack", "pstack:" + reviewerOnlyItem},
+	reviewQAItem:     {"", reviewQAPiece},
+}
 
 // reviewDefaultItems is what a lane's `review_default` may name: a plugin with a review skill, or comment-sicko. Judgment Day is
 // a risk call the brainer makes per brief, so a lane cannot default to it.
@@ -83,14 +99,14 @@ func reviewItemsOfList(raw string) []string {
 }
 
 // reviewPluginsOfList is the plugin items of a `review:` list: what the brief asks hw to load for its review. comment-sicko loads
-// pstack, once each.
+// pstack, qa loads nothing (qa-tester is the lane's agent), once each.
 func reviewPluginsOfList(raw string) []string {
 	var out []string
 	for _, it := range reviewItemsOfList(raw) {
-		if it == reviewerOnlyItem {
-			it = "pstack"
+		if only, ok := reviewerOnlyItems[it]; ok {
+			it = only.plugin
 		}
-		if !has(out, it) {
+		if it != "" && !has(out, it) {
 			out = append(out, it)
 		}
 	}
@@ -146,7 +162,9 @@ func reviewSkillsOfPlugin(n string) []string {
 }
 
 // reviewPieceIsAgent is true for a review piece that is launched with the Agent tool, not the Skill tool.
-func reviewPieceIsAgent(piece string) bool { return piece == "comment-sicko" }
+func reviewPieceIsAgent(piece string) bool {
+	return piece == reviewerOnlyItem || piece == reviewQAPiece
+}
 
 // reviewSkillsOf is _review_skills_declared: the review pieces of the declared plugins, in the order they are declared,
 // once each.
@@ -218,7 +236,7 @@ func reviewGateOf(raw string, plugins []string, die, warn func(string)) string {
 	if raw == "rdd" {
 		warn("brief declares review: rdd, which is retired (gentle-ai left hw): running review: judgment-day instead")
 	}
-	if mode == "plugins" && len(reviewSkillsOf(plugins)) == 0 {
+	if mode == "plugins" && raw == "plugins" && len(reviewSkillsOf(plugins)) == 0 { // a list's items are checked above; [qa] alone loads no plugin
 		die("the brief declares review: plugins, but its plugins: names no plugin with a review skill (thermo, ponytail, pstack, tests). NOTHING was built.")
 	}
 	return mode
@@ -337,13 +355,39 @@ func (d *dsp) reviewGate() {
 	if reviewBareNone(k == "" || k == "build", d.reviewDeclared(), mode, nextFmValue("review-skip", d.brief)) {
 		d.warn(reviewBareNoneWarning)
 	}
+	if raw := d.reviewRaw(); has(reviewItemsOfList(raw), reviewQAItem) {
+		if miss := d.c.reviewQAMissing(d.proj); miss != "" {
+			d.die("the brief declares review: " + raw + ", but lane " + d.proj + " has " + miss + ": qa runs the lane's qa-tester against its dev server and is never skipped. Drop qa from the list, or give the lane what it lacks. NOTHING was built.")
+		}
+	}
 	if parent := d.roundOf(); parent != "" && d.reviewRaw() == "none" {
 		d.die(roundNoneRefusal("round_of: "+parent) + " NOTHING was built.")
 	}
 }
 
-// roundOf is the `round_of:` of a brief: the parent task whose review this fix round answers.
-func (d *dsp) roundOf() string { return nextFmValue("round_of", d.brief) }
+// roundOf is the parent task whose review this fix round answers: the brief's `round_of:`, or the one briefRoundOf infers.
+func (d *dsp) roundOf() string { return briefRoundOf(d.brief) }
+
+var roundSuffixRe = regexp.MustCompile(`-(r|fix)[0-9]+$`)
+
+// briefRoundOf is the parent a build brief answers: its `round_of:`, else the task its `base: task/<parent>` is cut from (fix briefs
+// do not declare round_of:). A parent named x-fix1 or x-r2 is the family x when x's brief sits beside it.
+func briefRoundOf(brief string) string {
+	if v := nextFmValue("round_of", brief); v != "" {
+		return v
+	}
+	if k := nextFmValue("kind", brief); k != "" && k != "build" {
+		return ""
+	}
+	parent, ok := strings.CutPrefix(nextFmValue("base", brief), "task/")
+	if !ok || parent == "" {
+		return ""
+	}
+	if fam := roundSuffixRe.ReplaceAllString(parent, ""); fam != "" && fam != parent && isFile(filepath.Join(filepath.Dir(brief), fam+".md")) {
+		return fam
+	}
+	return parent
+}
 
 // reviewDeclared is _review_declared: only when the brief DECLARES review:, like plugins.
 func (d *dsp) reviewDeclared() bool { return nextFmValue("review", d.brief) != "" }
@@ -439,11 +483,65 @@ func reviewExtraPlugins(raw string, declared []string) []string {
 }
 
 // reviewLaneDefault is the items of the lane's `review_default`, in the order projects.json lists them.
-func (t *table) reviewLaneDefault(lane string) []string {
-	if v := t.get(lane, "review_default"); v != "" {
+func (t *table) reviewLaneDefault(lane string) []string { return t.getList(lane, "review_default") }
+
+// getList is a lane's list field as the table keeps it (comma-joined), nil when unset.
+func (t *table) getList(lane, field string) []string {
+	if v := t.get(lane, field); v != "" {
 		return strings.Split(v, ",")
 	}
 	return nil
+}
+
+// reviewUIPaths is the lane's `ui_paths` (projects.json): what its diffs call UI.
+func (t *table) reviewUIPaths(lane string) []string { return t.getList(lane, "ui_paths") }
+
+// reviewUIFiles is the files the lane's ui_paths call UI, nil when none: an entry ending in / is a directory prefix (`public/`),
+// an entry with no / a glob on the base name (`*.tsx`), any other a glob on the whole path (`src/app/*/page.tsx`).
+func reviewUIFiles(files, uiPaths []string) []string {
+	var out []string
+	for _, f := range files {
+		if slices.ContainsFunc(uiPaths, func(u string) bool { return uiMatch(f, u) }) {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// uiMatch is one ui_paths entry against one path (reviewUIFiles).
+func uiMatch(f, u string) bool {
+	switch {
+	case strings.HasSuffix(u, "/"):
+		return strings.HasPrefix(f, u)
+	case !strings.Contains(u, "/"):
+		ok, _ := path.Match(u, path.Base(f))
+		return ok
+	}
+	ok, _ := path.Match(u, f)
+	return ok
+}
+
+// devServerMode is how hw starts a dev server for a lane's task: "always", "opt-in" (only when asked: `hw review` asks for its
+// reviewer), or "" when the lane has none. The one place that says which devserver.start values count as a dev server.
+func (c *ctx) devServerMode(lane string) string {
+	if dev := c.t.get(lane, "devserver"); dev == "always" || dev == "opt-in" {
+		return dev
+	}
+	return ""
+}
+
+// reviewQAMissing is what a lane lacks to run `qa`, "" when nothing: the product repo's own qa-tester agent
+// (<checkout>/.claude/agents/qa-tester.md, which the reviewer's worktree carries) and a dev server hw starts for a task
+// (projects.json devserver.start always, or opt-in, which `hw review` opts its reviewer into).
+func (c *ctx) reviewQAMissing(lane string) string {
+	var miss []string
+	if co := c.checkout(lane); co == "" || !isFile(co+"/.claude/agents/"+reviewQAPiece+".md") {
+		miss = append(miss, "no qa-tester agent (looked for "+orDefaultStr(co, "<no checkout>")+"/.claude/agents/"+reviewQAPiece+".md)")
+	}
+	if c.devServerMode(lane) == "" {
+		miss = append(miss, "no dev server (projects.json devserver.start is "+orDefaultStr(c.t.get(lane, "devserver"), "unset")+", not always or opt-in)")
+	}
+	return strings.Join(miss, " and ")
 }
 
 // independentReview is what a build owes at its dispatch: see reviewOwedBy.

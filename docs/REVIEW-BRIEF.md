@@ -33,6 +33,8 @@ Each with the Skill tool under its full name; done-invoker reads your transcript
 
 {{agents}}
 
+{{qa}}
+
 If you run Judgment Day: **a binary (an image, a font, a compiled file) is checked by you, never by a judge.** The diff counts it as
 owed, so open it yourself and write what you saw in `review.md`; keep every binary out of a judge's target paths, since a judge
 cannot judge bytes and a coverage relaunch spent on one is wasted. And write the judges' prompts with **intent, not reassurance**:

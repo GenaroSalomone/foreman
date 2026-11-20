@@ -80,6 +80,14 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md lists the ones in use, this is 
                        line. Other kinds owe none: absent = no review. Another
                        value refuses the dispatch. `rdd` is retired: it warns
                        and runs judgment-day.
+                       qa in the list: the reviewer runs the lane's qa-tester
+                       once on its own dev server, the brief's Do and
+                       Verification as cases, at 375 and 1440, captures in the
+                       PR description's Review section; a failed case blocks.
+                       The dispatch refuses qa in a lane with no qa-tester
+                       (<checkout>/.claude/agents) or no devserver. A diff that
+                       touches the lane's ui_paths (projects.json) gets qa added
+                       to any review: list; only review: none turns it off.
                        A lane's review_default (projects.json) adds pieces to
                        every reviewer of its builds; to change one build's
                        review after dispatch, edit its brief's review: list

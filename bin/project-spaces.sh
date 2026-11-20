@@ -64,7 +64,7 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
         "checkout","checkout_var","base","base_ref_prefix","branch","worktree_root","worktree","ports",
         "hint_aliases","build","agents_from","deps","db","devserver","reap","sweep","brain_guard","brief_note","qa_target",
         "model_floor","model_pins","subagent_model","pi_subagent_models","requested_by","suite_lock","org",
-        "review_default","review_post","opencode_config_dir"]) as $fields  # opencode_config_dir: RETIRED, accepted and ignored for one release (core/lanes.go agrees)
+        "review_default","review_post","ui_paths","opencode_config_dir"]) as $fields  # opencode_config_dir: RETIRED, accepted and ignored for one release (core/lanes.go agrees)
     | ({model_floor: ["tier","accepts"], deps: ["line","contention"], db: ["line","provisioned","no_worktree","no_db_inert"],
         devserver: ["start","line","off"], reap: ["copies","copies_from","max_worktrees","max_disk_pct","max_build_gb"]}) as $sub
     | ([$lanes | to_entries[] | .key as $l | .value | to_entries[] | select($sub[.key] != null) | .key as $f
@@ -85,6 +85,9 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
     | ([$lanes | to_entries[] | .key as $l | select(.value.review_post != null)
         | if (.value.review_post | IN("pr-description", "none")) then empty else "\($l).review_post" end]) as $badrp
     | if ($badrp | length) == 0 then . else error("review_post is pr-description or none: \($badrp | join(", "))") end
+    | ([$lanes | to_entries[] | .key as $l | select(.value.ui_paths != null)
+        | if (.value.ui_paths | type == "array" and all(type == "string" and length > 0 and (contains(",") | not))) then empty else "\($l).ui_paths" end]) as $badui
+    | if ($badui | length) == 0 then . else error("ui_paths is a list of non-empty paths or globs, with no comma: \($badui | join(", "))") end
     | ([$lanes | to_entries[] | .key as $l | select(.value.artifacts != null)
         | if (.value.artifacts | IN("deny", "default", "personal")) then empty else "\($l).artifacts" end]) as $badart
     | if ($badart | length) == 0 then . else error("artifacts is deny or an account (default, personal): \($badart | join(", "))") end
@@ -129,7 +132,7 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
     | if ($badhome | length) == 0 then . else error("a product checkout lives outside the directory of its org: \($badhome | join(", "))") end
     | ((.retention // {}) as $r
        | if ($r | type == "object") and ((($r | keys_unsorted) - ["artifact_retention_days","backup_retention_days","build_output_days"]) | length) == 0
-            and ([$r.artifact_retention_days // 30, $r.backup_retention_days // 60, $r.build_output_days // 7] | all(type == "number" and . >= 0 and . == floor))
+            and ([$r.artifact_retention_days // 14, $r.backup_retention_days // 60, $r.build_output_days // 7] | all(type == "number" and . >= 0 and . == floor))
          then . else error("retention is {artifact_retention_days, backup_retention_days, build_output_days}, each a whole number of days >= 0 (0 disables that window)") end) as $_ret
     | ((.survey_order // []) as $so
        | if ($so | all(. as $n | $names | index([$n]))) then . else error("survey_order names a lane that `lanes` does not have") end
@@ -142,7 +145,7 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
     | "HW_LANES=\($names | join(" ") | @sh)",
       "HW_LANES_SURVEY=\($survey | join("\n") | @sh)",
       "_LC_WORK_DEFAULT=\(.work // (if .root == null then error("no top-level `work`") else .root + "/work" end) | exp | @sh)",
-      "_LC_RETENTION_ARTIFACT_DAYS=\(.retention.artifact_retention_days // 30 | tostring | @sh)",
+      "_LC_RETENTION_ARTIFACT_DAYS=\(.retention.artifact_retention_days // 14 | tostring | @sh)",
       "_LC_RETENTION_BACKUP_DAYS=\(.retention.backup_retention_days // 60 | tostring | @sh)",
       "_LC_RETENTION_BUILD_DAYS=\(.retention.build_output_days // 7 | tostring | @sh)",
       "_LC_OPERATOR_DEFAULT=\(.operator // "the operator" | tostring | @sh)",
@@ -163,6 +166,7 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
           emit($l; "suite_lock"; $v.suite_lock // ""),
           emit($l; "review_default"; ($v.review_default // []) | join(",")),
           emit($l; "review_post"; $v.review_post // "none"),
+          emit($l; "ui_paths"; ($v.ui_paths // []) | join(",")),
           emit($l; "account"; $v.account // "default"),
           emit($l; "artifacts"; $v.artifacts // $v.account // "default"),
           emit($l; "repoless"; if $v.repoless == true then "1" else "" end),

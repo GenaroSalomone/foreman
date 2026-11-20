@@ -20,6 +20,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type reapApplyRun struct {
@@ -42,6 +43,8 @@ type reapApplyRun struct {
 	archiveDir string
 	// WT_AGENTS_BLOCK: the verdict excused a tracked AGENTS.md that is only next dev's block
 	agentsBlock bool
+	// the executor that took the lock is dead (disposition): the removal unlocks first
+	deadLock bool
 	// _WT_PRS_MAIN, _WT_PRS_OK, _WT_PRS
 	prsMain string
 	prsOK   bool
@@ -59,7 +62,7 @@ type reapApplyExtras struct {
 }
 
 func reapApplyLoadExtras(file string) *reapApplyExtras {
-	ex := &reapApplyExtras{copies: map[string][]string{}, copiesFrom: map[string]string{}, retArt: "30", retBak: "60", retBuild: "7"}
+	ex := &reapApplyExtras{copies: map[string][]string{}, copiesFrom: map[string]string{}, retArt: "14", retBak: "60", retBuild: "7"}
 	data, err := os.ReadFile(file)
 	if err != nil {
 		return ex
@@ -70,7 +73,7 @@ func reapApplyLoadExtras(file string) *reapApplyExtras {
 	}
 	root := vals[0]
 	if ret := field(root, "retention"); ret != nil {
-		ex.retArt = orDefault(field(ret, "artifact_retention_days"), "30")
+		ex.retArt = orDefault(field(ret, "artifact_retention_days"), "14")
 		ex.retBak = orDefault(field(ret, "backup_retention_days"), "60")
 		ex.retBuild = orDefault(field(ret, "build_output_days"), "7")
 	}
@@ -188,7 +191,7 @@ func (r *reapApplyRun) blockedWaitHours() string { // _blocked_wait_hours
 
 func (r *reapApplyRun) usage() {
 	a := r.a
-	a.printErr("usage: hw reap [<project>] [--apply] — surveys the lane's git worktrees, its merged task branches no worktree holds, AND the loose work dirs beside them (" + a.c.work + "/<lane>). --apply removes what is safe; a merged worktree whose only ignored content is .artifacts/qa-report/test-results/playwright-report has it copied to " + r.archiveRoot() + "/<lane>/<task>/ and verified first, and a db.provisioned lane's database is pg_dump'ed there before it is dropped. Dirty, unmerged and occupied stay. Retention: a loose work dir whose task REPORTED (done, or blocked and closed) and not occupied is safe once every artifact is older than artifact_retention_days (30), a backup (*.tgz, *.tar.gz, *.tar, or a name containing backup) older than backup_retention_days (60) — both in projects.json under retention, 0 disables a window, HW_ARTIFACT_RETENTION_DAYS/HW_BACKUP_RETENTION_DAYS override; the dry run says «retention: Nd > 30d», and every removal by retention appends a line (time, lane, path, task, age, size, reason) to " + r.logFile() + " (HW_REAP_LOG). A task that never reported or has a live pane is kept at any age. A kept worktree idle past build_output_days (7; 0 disables) has its .next/.turbo freed (dry run lists them with sizes; --apply logs each); never one with a live pane or process in it. It also closes an executor kept after a --blocked report and left unanswered past HW_BLOCKED_WAIT_HOURS (default 24).")
+	a.printErr("usage: hw reap [<project>] [--apply] — surveys the lane's git worktrees, its merged task branches no worktree holds, AND the loose work dirs beside them (" + a.c.work + "/<lane>). --apply removes what is safe; a merged worktree whose only ignored content is .artifacts/qa-report/test-results/playwright-report has it copied to " + r.archiveRoot() + "/<lane>/<task>/ and verified first, and a db.provisioned lane's database is pg_dump'ed there before it is dropped. A worktree whose hw lock outlived its executor (no pane in it) and a detached tree under the cache (a gate, a cut, a triage base) over 24h old are removed too. A dirty or unmerged worktree of a task that reported over 24h ago has its uncommitted diff, untracked and unrebuildable ignored files copied and verified to " + r.archiveRoot() + "/<lane>/<date>/<task>/ first, then is removed; its branch is kept. Occupied (a live pane, a live lease), open and recent ones stay. What reap archived is pruned after 30 days. Retention: a loose work dir whose task REPORTED (done, or blocked and closed) and not occupied is safe once every artifact is older than artifact_retention_days (14), a backup (*.tgz, *.tar.gz, *.tar, or a name containing backup) older than backup_retention_days (60) — both in projects.json under retention, 0 disables a window, HW_ARTIFACT_RETENTION_DAYS/HW_BACKUP_RETENTION_DAYS override; the dry run says «retention: Nd > 14d», and every removal by retention appends a line (time, lane, path, task, age, size, reason) to " + r.logFile() + " (HW_REAP_LOG). A task that never reported or has a live pane is kept at any age. A kept worktree idle past build_output_days (7; 0 disables) has its .next/.turbo freed (dry run lists them with sizes; --apply logs each); never one with a live pane or process in it. It also closes an executor kept after a --blocked report and left unanswered past HW_BLOCKED_WAIT_HOURS (default 24).")
 }
 
 func (a *app) printErr(s string) { a.term.err.Write([]byte(s + "\n")) }
@@ -262,7 +265,7 @@ func (r *reapApplyRun) cmdReap() int {
 				}
 			}
 			r.disposition(main, wt, branch, base)
-			if r.verdict == "safe" || r.verdict == "archivable" { // # MUTATION-ANCHOR: 865-G02
+			if r.verdict == "safe" || r.verdict == "archivable" || r.verdict == "closed" { // # MUTATION-ANCHOR: 865-G02
 				totalSafe++
 				if apply {
 					if r.reapWorktree(proj, main, wt, branch, base) {
@@ -272,6 +275,9 @@ func (r *reapApplyRun) cmdReap() int {
 					a.ok(reapApplyBasename(wt) + "  " + a.cDim + r.why + a.c0)
 					if r.verdict == "archivable" {
 						a.printf("      %sarchive to %s/%s/%s, then remove%s\n", a.cDim, r.archiveRoot(), proj, reapApplyBasename(wt), a.c0)
+					}
+					if r.verdict == "closed" {
+						a.printf("      %sarchive to %s/%s/<date>/%s, then remove — the branch stays%s\n", a.cDim, r.archiveRoot(), proj, reapApplyBasename(wt), a.c0)
 					}
 				}
 				continue
@@ -425,6 +431,28 @@ func (r *reapApplyRun) cmdReap() int {
 			if apply {
 				_ = os.WriteFile(lf, []byte(keepRows), 0o666)
 			}
+		}
+
+		// ── the archive itself: what reap archived is kept archiveKeepDays days ──
+		for _, e := range archiveExpired(r.archiveRoot()+"/"+proj, time.Now()) {
+			totalSafe++
+			if !apply {
+				a.ok(e.path + "  " + a.cDim + e.why() + a.c0)
+				continue
+			}
+			if !r.logReady() {
+				a.warn("kept " + e.path + " — it is past retention but " + r.logFile() + " cannot be written, and a removal by retention is never unlogged")
+				continue
+			}
+			kb := r.duKB(e.path)
+			if !r.rmWorkdir(e.path) {
+				a.warn("could not remove " + e.path + " — run it by hand and read what rm says")
+				continue
+			}
+			totalRemoved++
+			r.wdRetAge, r.wdWhy = itoa(int(e.age)), e.why()
+			r.logRetention(proj, e.path, kb)
+			a.ok("removed " + e.path + "  " + a.cDim + "(" + r.wdWhy + ")" + a.c0)
 		}
 
 		// ── build output: the weight `df` actually gets back ──

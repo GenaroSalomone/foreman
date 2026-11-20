@@ -3,6 +3,8 @@
 
     verdict-cache dir                        where the verdicts live
     verdict-cache key  <job>                 the key of a job (`176-x.sh`, `go-test-core.sh:t4-1`, `go-test-core.sh:+a,b`), or `never`
+    verdict-cache stamp <subject>            the digest a subject's row is measured at: its file plus every library it visibly sources
+    verdict-cache stale                      the measured subjects whose row went stale (their stamp moved), one per line
     verdict-cache plan <jobs-file> <outdir>  the runner's one call: for every `idx<TAB>kind<TAB>path<TAB>arg` line print
                                              `idx<TAB>hit|miss|never<TAB>key`, and write a hit's stored log to <outdir>/<idx>.out
     verdict-cache hit  <key>                 the stored log on stdout, exit 0; exit 1 on a miss
@@ -16,6 +18,11 @@ on (the runner, the mutation-coverage check and its tables); the NAMES of each d
 key — a subject that globs would read it); the toolchain (go, bash, python, the herdr binary's bytes, the platform); and an allowlist of
 HW_* knobs that change what a job checks. A subject nobody measured is keyed to the WHOLE tree: it misses on any change anywhere, which is
 today's behaviour, never a smaller one.
+
+A ROW GOES STALE. Each `SUBJECT<TAB><name><TAB><stamp>` row carries the stamp it was measured at: sha256 over the subject's file and every
+library it visibly sources (`. "$(dirname "${BASH_SOURCE[0]}")/_common.sh"`, `. "$ROOT/…"`, `. "$HERE/…"`, followed through the libraries
+themselves). When the stamp no longer matches, the subject or a library may read a path its row does not list: it is keyed to the WHOLE tree
+like an unmeasured one, never to its old read set (a row with no stamp is stale too). `stale` names them for the batch gate to re-measure.
 
 ONLY GREENS ARE STORED, AND ATOMICALLY (decided 2026-09-09: no cache keyed by commit, validated by the file existing, or written with `>`).
 An entry is written beside its name and renamed in; it carries the sha256 of its own log, and one that does not verify is a miss.
@@ -182,11 +189,54 @@ def env_knobs():
 
 # ── a subject's reads (setup/suite-data/subject-deps.txt) ───────────────────────────────
 
+SOURCES = re.compile(r'^\s*(?:\.|source)\s+"?(\$\(dirname "(?:\$\{BASH_SOURCE\[0\]\}|\$0)"\)|\$ROOT|\$HERE)/([^"\s;)]+)')
+
+
+def sources_of(f):
+    """the libraries one shell file visibly sources (a path built from any other variable is not seen)"""
+    k = ("src", f)
+    if k not in _memo:
+        out = []
+        try:
+            text = open(os.path.join(ROOT, f), errors="replace").read()
+        except OSError:
+            text = ""
+        for line in text.splitlines():
+            m = SOURCES.match(line)
+            if m and "$" not in m.group(2):
+                base = "" if m.group(1) == "$ROOT" else os.path.dirname(f)
+                out.append(os.path.normpath(os.path.join(base, m.group(2))))
+        _memo[k] = out
+    return _memo[k]
+
+
+def stamp(rel):
+    """what a subject's row is measured at: the bytes of the subject and of every library it sources, followed through them"""
+    seen, todo = set(), [rel]
+    while todo:
+        f = todo.pop()
+        if f not in seen:
+            seen.add(f)
+            todo += sources_of(f)
+    h = hashlib.sha256()
+    for f in sorted(seen):
+        add(h, f, file_digest(f))
+    return h.hexdigest()
+
+
+def row_state(name, rel):
+    """"fresh" (keyed to its measured reads), "stale" (its stamp moved, or it has none) or "unmeasured" (no row)"""
+    measured, _ = parse_subject_deps()
+    if name not in measured:
+        return "unmeasured"
+    return "fresh" if measured[name] == stamp(rel) else "stale"
+
+
 def parse_subject_deps():
-    """measured subject -> its read paths; a subject with no SUBJECT line was never measured"""
+    """{measured subject: the stamp its row was measured at ("" for none)}, {subject: its read paths}; no SUBJECT line: never measured"""
     if "sdeps" in _memo:
         return _memo["sdeps"]
-    measured, reads = set(), {}
+    measured, reads = {}, {}
     try:
         lines = open(os.path.join(ROOT, DEPS_SUBJECT)).read().splitlines()
     except OSError:
@@ -195,7 +245,8 @@ def parse_subject_deps():
         if not line or line.startswith("#"):
             continue
         if line.startswith("SUBJECT\t"):
-            measured.add(line.split("\t", 1)[1])
+            f = line.split("\t")
+            measured[f[1]] = f[2] if len(f) > 2 else ""
             continue
         if "\t" not in line:
             continue
@@ -347,16 +398,16 @@ def job_key(kind, rel, arg):
         if never_declared(rel):
             return "never", ""
         add(h, "own", rel, file_digest(rel))
-        measured, reads = parse_subject_deps()
-        if name in measured:
-            files = sorted(reads.get(name, set()))
+        state = row_state(name, rel)
+        if state == "fresh":
+            files = sorted(parse_subject_deps()[1].get(name, set()))
             for rel_f in files:
                 add(h, rel_f, file_digest(rel_f))
             for d in sorted({os.path.dirname(x) for x in files}):
                 add(h, "ls", d, listing(d))
         else:
             add(h, "whole-tree", tree_digest())
-            note = "unmeasured: keyed to the whole tree"
+            note = state + " row: keyed to the whole tree"
     for c in COMMON_FILES:
         add(h, c, file_digest(c))
     add(h, "toolchain", toolchain())
@@ -475,6 +526,15 @@ def main(argv):
         if note:
             sys.stderr.write("verdict-cache: %s\n" % note)
         print(k)
+        return 0
+    if cmd == "stamp" and len(a) == 1:
+        print(stamp(job_from_name(a[0])[1]))
+        return 0
+    if cmd == "stale" and not a:
+        for n in sorted(parse_subject_deps()[0]):
+            rel = "setup/tests/" + n
+            if os.path.isfile(os.path.join(ROOT, rel)) and row_state(n, rel) == "stale":
+                print(n)
         return 0
     if cmd == "plan" and len(a) == 2:
         jobs, outdir = a

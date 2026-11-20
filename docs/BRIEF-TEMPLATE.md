@@ -14,6 +14,7 @@ model: <alias>
 effort: <level>
 # Only when they apply:
 # review: none (+ review-skip: <why>; absent = the independent review)
+# review: [tests, qa] (qa: the reviewer runs the lane's qa-tester at 375 and 1440; a UI diff gets it added to any list; only `review: none` turns it off)
 # decision: <what is undecided> (design, or opus/fable outside a build)
 # requires: browser, subagents, repo, database
 # authorizes: <destination> :: <operation> :: <handle|none>

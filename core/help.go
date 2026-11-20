@@ -120,7 +120,7 @@ func (a *app) usageFlags() {
 			}
 			db += l
 		}
-		if a.c.t.get(l, "devserver") == "opt-in" {
+		if a.c.devServerMode(l) == "opt-in" {
 			dev += fmt.Sprintf("\n                         %-19s %s", l, a.c.t.get(l, "devserver_line"))
 		}
 	}

@@ -45,13 +45,29 @@ if [ "$tail_mb" -gt 0 ] && [ -n "$tp" ] && [ -f "$tp" ]; then
   if [ "$size" -gt $((tail_mb * 1048576)) ]; then
     tdir="${HW_STATUSLINE_TAIL_DIR:-$HOME/.cache/hw/statusline-tail}"
     key="$(printf '%s' "$tp" | shasum | cut -c1-16)"
-    if mkdir -p "$tdir" 2>/dev/null \
-       && tail -c "$((tail_mb * 1048576))" "$tp" | tail -n +2 > "$tdir/.$key.$$" \
-       && mv -f "$tdir/.$key.$$" "$tdir/$key.jsonl"; then
-      in2="$(printf '%s' "$in" | jq -c --arg t "$tdir/$key.jsonl" '.transcript_path = $t' 2>/dev/null)"
+    tail_f="$tdir/$key.jsonl"; tmp="$tdir/.$key.$$"
+    # THE STATUS LINE KILLS THE PREVIOUS INVOCATION ON EVERY REFRESH: a copy cut off here left .<key>.<pid> for good (404 of
+    # them, 1.9 GB, 2026-11-20). The trap removes it on exit and on INT/TERM/HUP; the exec below drops the traps.
+    trap 'rm -f "$tmp"' EXIT; trap 'exit 1' INT TERM HUP
+    # a refresh does not rewrite 8 MB for a transcript that has not moved: the tail is kept while it is newer than the
+    # transcript, or the transcript grew under 256 KB since it was cut (its size then is in <key>.size)
+    last=""; read -r last < "$tdir/$key.size" 2>/dev/null || true; case "$last" in ''|*[!0-9]*) last="" ;; esac
+    if [ -f "$tail_f" ] && { [ "$tail_f" -nt "$tp" ] || { [ -n "$last" ] && [ "$size" -ge "$last" ] && [ $((size - last)) -lt 262144 ]; }; }; then
+      cut_ok=1
+    elif mkdir -p "$tdir" 2>/dev/null \
+       && tail -c "$((tail_mb * 1048576))" "$tp" | tail -n +2 > "$tmp" \
+       && mv -f "$tmp" "$tail_f"; then
+      printf '%s' "$size" > "$tdir/$key.size" 2>/dev/null
+      cut_ok=1
+    else
+      cut_ok=0
+    fi
+    if [ "$cut_ok" = 1 ]; then
+      in2="$(printf '%s' "$in" | jq -c --arg t "$tail_f" '.transcript_path = $t' 2>/dev/null)"
       [ -n "$in2" ] && in="$in2"
     fi
-    rm -f "$tdir/.$key.$$" 2>/dev/null
+    rm -f "$tmp" 2>/dev/null
+    trap - EXIT INT TERM HUP
   fi
 fi
 

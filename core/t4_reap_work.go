@@ -59,7 +59,7 @@ func reapApplyIsBackup(p string) bool { // _artifact_is_backup
 // retentionExpired is _retention_expired: is EVERY artifact past its own window? Keep (false) on anything unmeasured.
 func (r *reapApplyRun) retentionExpired(files string) bool {
 	r.retAge, r.retWin, r.retKind = "", "", ""
-	art := r.windowDays("HW_ARTIFACT_RETENTION_DAYS", r.ex.retArt, "30")
+	art := r.windowDays("HW_ARTIFACT_RETENTION_DAYS", r.ex.retArt, "14")
 	bak := r.windowDays("HW_BACKUP_RETENTION_DAYS", r.ex.retBak, "60")
 	now := reapApplyNow()
 	best := int64(-1)

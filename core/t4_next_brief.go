@@ -309,9 +309,10 @@ func (a *app) nextRoundGate(brief, rundir string) {
 	if brief == "" || reviewRawOf(nextFmValue("review", brief)) != "none" {
 		return
 	}
+	parent := briefRoundOf(brief)
 	switch {
-	case nextFmValue("round_of", brief) != "":
-		a.die(roundNoneRefusal("round_of: "+nextFmValue("round_of", brief)) + " NOTHING was sent and the counter did NOT move.")
+	case parent != "":
+		a.die(roundNoneRefusal("round_of: "+parent) + " NOTHING was sent and the counter did NOT move.")
 	case len(receiptValues(rundir, "review_run")) > 0:
 		a.die(roundNoneRefusal("a run that already has a review (review_run in "+rundir+"/receipt.jsonl)") + " NOTHING was sent and the counter did NOT move.")
 	}

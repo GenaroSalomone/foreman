@@ -1979,10 +1979,19 @@ _reap_job_groups() {
 # repo (git's common dir), where the brainer keeps its history, because the gate's own tree is a private snapshot or a batch worktree that goes away.
 GATE_RUN_STARTED=0; GATE_KNOWN_FLAKE_N=0
 GATE_RUNS_HEADER='date\ttree\tbatch\tresult\tfirst_failing\twall_s'
-_gate_runs_row() { # <the run's exit status>
-  local rc="$1" res=green first="-" i live common root file tree wall batch n_red=0 n_flake=0
+_whole_batch_gate() {
   [ "$GATE_RUN_STARTED" = 1 ] && [ "$HW_TEST_GATE" = fast ] && [ -z "${HW_TEST_CHANGED:-}" ] && [ -z "${_RUNNER_STARTED_NESTED:-}" ] \
-    && [ -z "${HW_TASK:-}" ] && [ -z "${HW_TEST_ONLY:-}" ] || return 0
+    && [ -z "${HW_TASK:-}" ] && [ -z "${HW_TEST_ONLY:-}" ]
+}
+# _main_checkout — the repo's MAIN checkout (git's common dir) of the live tree this gate verified; fails when there is none
+_main_checkout() {
+  local common
+  common="$(git -C "${TEST_HW_LIVE_ROOT:-$SOURCE_ROOT}" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 1
+  case "$common" in */.git) printf '%s' "${common%/.git}" ;; *) return 1 ;; esac
+}
+_gate_runs_row() { # <the run's exit status>
+  local rc="$1" res=green first="-" i live root file tree wall batch n_red=0 n_flake=0
+  _whole_batch_gate || return 0
   if [ "$rc" -ne 0 ]; then
     for i in "${!JOB_PATH[@]}"; do
       [ -n "${JOB_RED[$i]:-}" ] || continue
@@ -1994,8 +2003,7 @@ _gate_runs_row() { # <the run's exit status>
     else res=red; fi
   fi
   live="${TEST_HW_LIVE_ROOT:-$SOURCE_ROOT}"
-  common="$(git -C "$live" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || common=""
-  case "$common" in */.git) root="${common%/.git}" ;; *) root="$live" ;; esac
+  root="$(_main_checkout)" || root="$live"
   [ -d "$root/setup/suite-data" ] || return 0
   # NEVER INTO THE CHECKOUT UNDER TEST (setup/tests/880 and 1014 caught it). A row appended to the tree a gate is verifying changes the tree a dirty gate's
   # verdict names (880 P01) and shows up as a changed path in the NEXT gate's diff, which narrows the in-process suite to a document that reaches no
@@ -2014,7 +2022,25 @@ _gate_runs_row() { # <the run's exit status>
   } >> "$file" 2>/dev/null || printf 'runner: could not append the gate-runs row to %s\n' "$file" >&2
   return 0
 }
-trap '_gate_rc=$?; _gate_runs_row "$_gate_rc"; _reap_job_groups; rm -f "$TALLY" "$TALLY.subject"; [ -z "$WITNESS_PID" ] || kill "$WITNESS_PID" 2>/dev/null || true; rm -rf "$JOBDIR"; _pool_release_all; _gocache_trim_at_exit; _queue_release; _gate_release' EXIT  # MUTATION-ANCHOR: 1004-M07
+# A STALE subject-deps ROW IS RE-MEASURED BY THE BATCH GATE. A whole fast gate with HW_TASK
+# unset that ended GREEN asks `verdict-cache stale`; when it names rows, the tree it verified (this snapshot, gone after this exit) is cloned
+# (APFS clonefile: seconds) and setup/measure/subject-deps-refresh starts in a session of its own (setup/heavy KILLs what a run leaves in its
+# group): it measures them under setup/heavy and commits the rows on main. The gate waits for none of it, and an executor never starts it:
+# its stale rows only fall back to the whole tree.
+_subject_deps_refresh() { # <the run's exit status>
+  local stale main base clone log
+  [ "$1" = 0 ] && _whole_batch_gate && [ -x "$HERE/measure/subject-deps-refresh" ] || return 0
+  stale="$(python3 "$HERE/verdict-cache" stale 2>/dev/null)" && [ -n "$stale" ] || return 0
+  main="$(_main_checkout)" || return 0
+  base="${XDG_CACHE_HOME:-$HOME/.cache}/hw"; log="$base/subject-deps-refresh.log"
+  mkdir -p "$base" && clone="$(mktemp -d "$base/subject-deps-refresh.XXXXXX")/tree" || return 0
+  cp -cR "$SOURCE_ROOT" "$clone" 2>/dev/null || cp -R "$SOURCE_ROOT" "$clone" 2>/dev/null || { rm -rf "$(dirname "$clone")"; return 0; }
+  # shellcheck disable=SC2086  # one subject name per word
+  python3 -c 'import subprocess, sys; subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=open(sys.argv[1], "a"), stderr=subprocess.STDOUT, start_new_session=True)' \
+    "$log" bash "$clone/setup/measure/subject-deps-refresh" "$clone" "$main" $stale || { rm -rf "$(dirname "$clone")"; return 0; }
+  printf 'runner: %s stale subject-deps row(s) — re-measured on their own under setup/heavy, then committed on main; log %s\n' "$(printf '%s\n' "$stale" | grep -c .)" "$log" >&2
+}
+trap '_gate_rc=$?; _gate_runs_row "$_gate_rc"; _subject_deps_refresh "$_gate_rc"; _reap_job_groups; rm -f "$TALLY" "$TALLY.subject"; [ -z "$WITNESS_PID" ] || kill "$WITNESS_PID" 2>/dev/null || true; rm -rf "$JOBDIR"; [ -z "${LABEL_BASE:-}" ] || label_base_drop; _pool_release_all; _gocache_trim_at_exit; _queue_release; _gate_release' EXIT  # MUTATION-ANCHOR: 1004-M07
 
 # ── THE PANE A FULL RUN IS STARTED FROM IS A WITNESS, NOT A TARGET ──────────
 #
@@ -2311,9 +2337,10 @@ NONEXCL_LEFT=$((JOB_TOTAL - EXCLUSIVE_OWED))
 # `# cache: never` in a subject's header always runs it. HW_TEST_NO_CACHE=1 runs everything cold. A nested runner (a fixture run
 # inside a subject) and a runner with no setup/verdict-cache beside it use none.
 #
-# THE COVERAGE THIS TRADES AWAY is named in KNOWN-LIMITATIONS: a subject's reads are MEASURED once (setup/measure/subject-deps.py), so a
-# change to a file it never read cannot move its key, and a mutant whose anchor, test, cases and golden did not change is not re-judged
-# (core/mutant_verdict_test.go). A change elsewhere that would let an old mutant survive is unseen until a cold run (HW_TEST_NO_CACHE=1).
+# THE COVERAGE THIS TRADES AWAY is named in KNOWN-LIMITATIONS: a subject's reads are MEASURED (setup/measure/subject-deps.py; a row whose
+# subject or sourced library changed since is stale and keyed to the whole tree), so a change to a file it never read cannot move its key,
+# and a mutant whose anchor, test, cases and golden did not change is not re-judged (core/mutant_verdict_test.go).
+# A change elsewhere that would let an old mutant survive is unseen until a cold run (HW_TEST_NO_CACHE=1).
 CACHE_ON=0; JOB_CKEY=(); JOB_CHIT=(); CACHE_STORED=""
 if [ -x "$HERE/verdict-cache" ] && [ -z "${_RUNNER_STARTED_NESTED:-}" ] && [ -z "${HW_TEST_NO_CACHE:-}" ] && [ "${HW_VERDICT_CACHE:-}" != off ] \
    && [ "$JOB_TOTAL" -gt 0 ] && command -v python3 >/dev/null 2>&1; then

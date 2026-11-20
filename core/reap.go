@@ -555,7 +555,7 @@ func (r *reapRun) disposition(main, wt, branch, base string) {
 		r.why = "preview leased until " + firstKey(body, "until_h") + " — " + firstKey(body, "why")
 		return
 	}
-	if lockr, ok := lockReason(main, wt); ok {
+	if lockr, ok := lockReason(main, wt); ok && !deadHwLock(lockr) { // hw's own lock with nobody in the tree is its executor's leftover
 		r.verdict = "locked"
 		paren := ""
 		if lockr != "" {
@@ -565,6 +565,16 @@ func (r *reapRun) disposition(main, wt, branch, base string) {
 		return
 	}
 	if branch == "" || branch == "detached" {
+		if expiredCacheTree(r.getenv, wt, time.Now()) {
+			real, _ := filepath.EvalSymlinks(wt)
+			if held, ok := cwdsHold(real); held || !ok {
+				r.verdict, r.why = "detached", cacheTreeInUse(!ok)
+				return
+			}
+			r.verdict = "safe"
+			r.why = "detached tree under the cache, made over " + itoa(int(detachedTreeTTL/time.Hour)) + "h ago — a gate, cut or triage base run's; no branch, nothing to merge"
+			return
+		}
 		r.verdict = "detached"
 		r.why = "no branch — a detached worktree is not something this tool decides about"
 		return
@@ -590,8 +600,7 @@ func (r *reapRun) disposition(main, wt, branch, base string) {
 		return o
 	})
 	if statusOut != "" {
-		r.verdict = "dirty"
-		r.why = itoa(strings.Count(statusOut, "\n")+1) + " uncommitted tracked change(s)"
+		r.setClosable("dirty", wt, itoa(strings.Count(statusOut, "\n")+1)+" uncommitted tracked change(s)")
 		return
 	}
 	if !r.branchMerged(main, branch, base) {
@@ -601,8 +610,7 @@ func (r *reapRun) disposition(main, wt, branch, base string) {
 		} else if out, rc := gitRC(main, "rev-list", "--count", base+".."+branch); rc == 0 {
 			n = bashSub(out)
 		}
-		r.verdict = "unmerged"
-		r.why = branch + " has " + n + " commit(s) not in " + base
+		r.setClosable("unmerged", wt, branch+" has "+n+" commit(s) not in "+base)
 		return
 	}
 	keep := r.irreplaceable(wt)
@@ -646,6 +654,15 @@ func (r *reapRun) disposition(main, wt, branch, base string) {
 	} else {
 		r.why = "merged into " + base + ", clean, nothing ignored that git cannot rebuild"
 	}
+}
+
+// setClosable is a dirty or unmerged verdict: it is `closed` (archived, then removed; the branch stays) when the task reported.
+func (r *reapRun) setClosable(verdict, wt, why string) {
+	if closedTaskAt(wt, time.Now()) {
+		r.verdict, r.why = "closed", closedWhy(why)
+		return
+	}
+	r.verdict, r.why = verdict, why
 }
 
 // gitStatusErr is `git -C wt status --porcelain 2>file`: stdout with its trailing newlines stripped, stderr, status.
@@ -823,7 +840,7 @@ func (r *reapRun) retentionExpired(files []string) bool {
 	if bakEnv == "" {
 		bakEnv = r.c.t.retBackup
 	}
-	art, bak := retentionDays(30, artEnv), retentionDays(60, bakEnv)
+	art, bak := retentionDays(14, artEnv), retentionDays(60, bakEnv)
 	r.retAge, r.retWin, r.retKnd = "", "", ""
 	now := nowSec()
 	best, have := int64(0), false
@@ -1040,13 +1057,15 @@ func (r *reapRun) run(projFilter string) int {
 				r.recordDatabases(proj, wt)
 			}
 			r.disposition(main, wt, branch, base)
-			if r.verdict == "safe" || r.verdict == "archivable" {
+			if r.verdict == "safe" || r.verdict == "archivable" || r.verdict == "closed" {
 				totalSafe++
 				a.ok(filepath.Base(wt) + "  " + a.cDim + r.why + a.c0)
-				if r.verdict != "archivable" {
-					continue
+				switch r.verdict {
+				case "archivable":
+					a.printf("      %sarchive to %s/%s/%s, then remove%s\n", a.cDim, a.archiveRoot(), proj, filepath.Base(wt), a.c0)
+				case "closed":
+					a.printf("      %sarchive to %s/%s/<date>/%s, then remove — the branch stays%s\n", a.cDim, a.archiveRoot(), proj, filepath.Base(wt), a.c0)
 				}
-				a.printf("      %sarchive to %s/%s/%s, then remove%s\n", a.cDim, a.archiveRoot(), proj, filepath.Base(wt), a.c0)
 				continue
 			}
 			totalKept++
@@ -1102,6 +1121,12 @@ func (r *reapRun) run(projFilter string) int {
 		// ── the databases hw recorded whose worktree is gone ──
 		if a.c.t.get(proj, "db_provisioned") != "" {
 			totalSafe += r.databases(proj)
+		}
+
+		// ── the archive itself: what reap archived is kept archiveKeepDays days ──
+		for _, e := range archiveExpired(a.archiveRoot()+"/"+proj, time.Now()) {
+			totalSafe++
+			a.ok(e.path + "  " + a.cDim + e.why() + a.c0)
 		}
 
 		// ── build output: the weight `df` actually gets back ──

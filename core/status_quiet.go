@@ -8,6 +8,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -339,9 +340,10 @@ func (a *app) hygieneQuiet() int {
 		}
 		n := count - 1
 		pct := dfPercent(main)
-		why := ""
+		why, reaped := "", ""
 		if le, _ := bashLE(itoa(n), maxn); !le {
 			why = itoa(n) + " worktrees (threshold " + maxn + ")"
+			reaped = a.autoReap(proj)
 		}
 		if pct != "" {
 			if le, _ := bashLE(pct, maxd); !le {
@@ -385,10 +387,61 @@ func (a *app) hygieneQuiet() int {
 			why += safe + " disposable at the last reap (" + agoOf(t, time.Now().Unix()) + ")"
 		}
 		if why != "" {
-			a.warn(proj + ": " + why + " — hw reap " + proj + " --apply")
+			a.warn(proj + ": " + why + " — hw reap " + proj + " --apply" + reaped)
 		}
 	}
 	return 0
+}
+
+// autoReapEvery is how often a lane over its worktree threshold gets a reap started for it.
+const autoReapEvery = 24 * time.Hour
+
+// autoReapStart starts `nice -n 10 <hw> reap <lane> --apply` in its own session, its output in log. A var: the unit tests answer it.
+var autoReapStart = func(hw, lane, log string) error {
+	nice, err := exec.LookPath("nice")
+	if err != nil {
+		return err
+	}
+	os.Remove(log) // one run's output, not a log that grows
+	_, err = realDetach(nice, []string{"-n", "10", hw, "reap", lane, "--apply"}, os.Environ(), log)
+	return err
+}
+
+// autoReap: A LANE OVER ITS WORKTREE THRESHOLD IS REAPED WITH NOBODY RUNNING A CLEANUP. It starts `hw reap <lane> --apply` in the
+// background (never waited for) at most once a day. The claim is atomic: the stamp <brain>/.hw-reap-auto-<lane> is flock'ed (not
+// waited for) across its check, its write and the start, so of two statuses at once one starts the reap and the other says one is
+// starting. The text it returns is what the `!` line adds. A status that only reads (HW_CORE_READONLY) or runs under HW_HOUSEKEEPING=0
+// (every test subject) starts nothing.
+func (a *app) autoReap(lane string) string {
+	if a.getenv("HW_CORE_READONLY") != "" || a.getenv("HW_HOUSEKEEPING") == "0" { // the switch every test exports: no background housekeeping
+		return ""
+	}
+	stamp := filepath.Join(a.c.brain, ".hw-reap-auto-"+lane)
+	f, held, err := tryLockFile(stamp)
+	if err != nil {
+		return ""
+	}
+	if !held {
+		return ", a reap was started 0m ago" // another status holds the claim right now
+	}
+	defer f.Close()
+	now := time.Now()
+	if body, ok := readText(stamp); ok {
+		if t, err := strconv.ParseInt(strings.TrimSpace(body), 10, 64); err == nil && now.Sub(time.Unix(t, 0)) < autoReapEvery {
+			return ", a reap was started " + agoOf(t, now.Unix())
+		}
+	}
+	if f.Truncate(0) != nil {
+		return ""
+	}
+	if _, err := f.WriteAt([]byte(strconv.FormatInt(now.Unix(), 10)+"\n"), 0); err != nil {
+		return ""
+	}
+	if err := autoReapStart(filepath.Join(a.binDir(), "hw"), lane, stamp+".log"); err != nil {
+		os.Remove(stamp) // not started: the next status tries again
+		return ", the background reap could not start: " + err.Error()
+	}
+	return ", a reap was started in the background"
 }
 
 // splitSpace is `read -r f1 … fn` under the default IFS (space, tab, newline): runs are one separator, the last field
@@ -577,6 +630,32 @@ func (a *app) agentToolsQuiet(lane string) int {
 	a.printf("\n")
 	for _, l2 := range strings.Split(l, "\n") {
 		a.warn(l2)
+	}
+	return 0
+}
+
+// ── throughputQuiet ─────────────────────────────────────────────────────────
+
+// throughputQuiet: IS THE BUILD→MERGE BOTTLENECK GONE, ONE LINE (setup/measure/throughput.py --status): the last report
+// and its date, and an ALERT line for every number over its threshold. The helper re-measures in the background when its
+// report is over a day old, so this never waits for a scan; a brain without it prints nothing.
+func (a *app) throughputQuiet() int {
+	tool := filepath.Join(a.c.brain, "setup", "measure", "throughput.py")
+	if !readable(tool) {
+		return 0
+	}
+	r := extRun(extCall{Name: "python3", Args: []string{tool, "--status"}})
+	if r.RC != 0 {
+		return 0
+	}
+	for _, l := range strings.Split(subst(r.Out), "\n") {
+		switch {
+		case l == "":
+		case strings.HasPrefix(l, "ALERT"):
+			a.warn(l)
+		default:
+			a.info(l)
+		}
 	}
 	return 0
 }
