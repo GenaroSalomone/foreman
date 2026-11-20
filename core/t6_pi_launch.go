@@ -467,7 +467,7 @@ func (l *lch) piSpecialistNote(list string) string {
 	var b strings.Builder
 	if deleg != "" || reg != "" {
 		b.WriteString("This executor is pi. The lane's specialists (" + list + ") are registered with pi-subagents; call `subagent` with agent \"<name>\".\n" +
-			"It runs on the lane profile's model (the receipt names each one), not on yours; the Task/WebFetch/WebSearch/MCP\n" +
+			"Each runs on the lane profile's model, not yours; the Task/WebFetch/WebSearch/MCP\n" +
 			"tools its file needs are dropped. Your guards travel with each child.")
 		if deleg != "" {
 			b.WriteString("\n" + deleg + " also has a pi copy in `.pi/agents`, which pi-subagents loads by itself: its file pins an openai-codex model this\n" +

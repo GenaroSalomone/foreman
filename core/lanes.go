@@ -51,7 +51,7 @@ var laneFields = []string{"product_repo", "hw_aliases", "brain_aliases", "space"
 	"checkout", "checkout_var", "base", "base_ref_prefix", "branch", "worktree_root", "worktree", "ports",
 	"hint_aliases", "build", "agents_from", "deps", "db", "devserver", "reap", "sweep", "brain_guard", "brief_note", "qa_target",
 	"model_floor", "model_pins", "subagent_model", "pi_subagent_models", "requested_by", "suite_lock", "org",
-	"opencode_config_dir"} // opencode_config_dir: RETIRED (OpenCode left hw), accepted and ignored for one release; bin/project-spaces.sh agrees
+	"review_default", "review_post", "opencode_config_dir"} // opencode_config_dir: RETIRED (OpenCode left hw), accepted and ignored for one release; bin/project-spaces.sh agrees
 
 var laneSub = map[string][]string{
 	"model_floor": {"tier", "accepts"},
@@ -239,6 +239,24 @@ func loadTable(file, home string) (*table, []string) {
 	badlock := collect("suite_lock", inList("lane", "none"))
 	if len(badlock) > 0 {
 		return bad("suite_lock is lane or none: " + strings.Join(badlock, ", "))
+	}
+	badrd := collect("review_default", func(v *jval) bool {
+		if v.kind != vArr {
+			return false
+		}
+		for _, e := range v.arr {
+			if e.kind != vStr || !has(reviewDefaultItems, e.s) {
+				return false
+			}
+		}
+		return true
+	})
+	if len(badrd) > 0 {
+		return bad("review_default is a list of " + strings.Join(reviewDefaultItems, ", ") + " (judgment-day is a risk call made per brief, never a lane default): " + strings.Join(badrd, ", "))
+	}
+	badrp := collect("review_post", inList("pr-description", "none"))
+	if len(badrp) > 0 {
+		return bad("review_post is pr-description or none: " + strings.Join(badrp, ", "))
 	}
 	badart := collect("artifacts", inList("deny", "default", "personal"))
 	if len(badart) > 0 {
@@ -454,6 +472,8 @@ func loadTable(file, home string) (*table, []string) {
 		l.f["checkout_var"] = str("checkout_var", "")
 		l.f["engram"] = str("engram", "brain")
 		l.f["org"] = str("org", "")
+		l.f["review_default"] = joinStrs(field(v, "review_default"), ",")
+		l.f["review_post"] = str("review_post", "none")
 		if p := field(v, "product_repo"); p != nil && p.kind == vBool && p.b {
 			l.f["product_repo"] = "1"
 		}

@@ -489,7 +489,8 @@ func (l *lch) lrcSubagentModelValue() string {
 }
 
 // ledgerDispatch is _ledger_dispatch for a launch (seq 1, rundir the run's): one JSONL line per real dispatch,
-// in $WORK/.hw-ledger/<lane>.jsonl. A dry run writes nothing. Never fails the dispatch.
+// in $WORK/.hw-ledger/<lane>.jsonl. A dry run writes nothing. Never fails the dispatch. It also leaves the brainer's own lane
+// ledger (bin/ledger, a different store: laneLedgerRunning, t5l_lane_ledger.go) a `running` line for the task.
 func (l *lch) ledgerDispatch(pane string, drc int) {
 	if l.dispatchDry { // # MUTATION-ANCHOR: 847-A2-21
 		return
@@ -531,6 +532,7 @@ func (l *lch) ledgerDispatch(pane string, drc int) {
 	if l.fs.appendTo(f, []byte(obj.toJSON()+"\n"), 0o666) != nil {
 		l.warn("ledger: could not append to " + f + "; this dispatch is NOT recorded")
 	}
+	l.laneLedgerRunning(pane, drc)
 }
 
 // lrcPhys is `cd "$d" && pwd -P`: the physical path, or false where the cd fails.

@@ -1,6 +1,6 @@
 package main
 
-// `hw review <lane> <task> [--dry-run] [--here] [--at <sha>] [--account <name>]`: the independent review of a build (design: brain/archive/setup/
+// `hw review <lane> <task> [--dry-run] [--here] [--at <sha>] [--account <name>] [--model <m>] [--effort <e>]`: the independent review of a build (design: brain/archive/setup/
 // review-by-default-design/design.md §2, §3, §6 «Brief 1», §8 C1 C3 S1 S2). It measures the build's diff, picks the
 // tier, writes the reviewer's brief from docs/REVIEW-BRIEF.md and dispatches a fresh claude opus executor on a branch
 // cut at the reviewed SHA. It is a brainer verb: an executor reaches only its `--dry-run`.
@@ -18,10 +18,11 @@ package main
 // absence of a verdict is never read as "nothing owed" (C1).
 
 import (
+	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -32,10 +33,10 @@ const reviewSmallMax = 400
 
 // reviewDocOnly is the S2 allowlist: the paths whose change is prose a reader reads and nothing runs. Everything else is
 // code, including `.claude/**`, `_agents/`, `_skills/`, `plugins/`, `CLAUDE.md`, `*.golden` and `testdata/`: a markdown file
-// an agent obeys is executable. The two templates under docs/ are executable too.
+// an agent obeys is executable. The three templates under docs/ are executable too.
 func reviewDocOnly(path string) bool {
 	switch path {
-	case "docs/REVIEW-BRIEF.md", "docs/BRIEF-TEMPLATE.md":
+	case "docs/REVIEW-BRIEF.md", "docs/REVIEW-DELTA-BRIEF.md", "docs/BRIEF-TEMPLATE.md":
 		return false
 	}
 	if strings.HasPrefix(path, "docs/") || strings.HasPrefix(path, "setup/export/overlay/changes/") {
@@ -76,6 +77,13 @@ func reviewMeasure(numstatZ string) (code int, codeFiles []string, docLines int)
 		codeFiles = append(codeFiles, f[2])
 	}
 	return code, codeFiles, docLines
+}
+
+// reviewerOwed is false only when no reviewer is dispatched: tier 0, and no changes-needed to answer. A prose-only fix after
+// changes-needed is still owed one, because `hw done` denies until a review says approve (a prose delta carries an approve, never a
+// changes-needed), and a reviewer is who marks the prior rows resolved or open.
+func (p *reviewPlan) reviewerOwed() bool {
+	return p.tier != "0" || (p.delta != nil && p.delta.verdict == "changes-needed")
 }
 
 // reviewTierOf is 0, S or L by code-only lines.
@@ -131,6 +139,8 @@ func reviewerPieces(list []string) []string {
 		case "pstack":
 			add("pstack:principle-minimize-reader-load")
 			add("pstack:principle-subtract-before-you-add")
+		case reviewerOnlyItem:
+			add("pstack:" + reviewerOnlyItem)
 		default:
 			for _, q := range reviewSkillsQualified([]string{it}) {
 				add(q)
@@ -237,20 +247,36 @@ type reviewPlan struct {
 	docLines                                int
 	tier                                    string
 	jd                                      bool
-	list, pieces, extra                     []string
+	list, pieces                            []string
+	extraBrief, extraLane                   []string // what the reviewer's tier adds: the build's review: items, then the lane's review_default ones
+	post                                    string   // the lane's review_post: pr-description or none
 	rtask, rbranch, rbase                   string
 	briefPath                               string
 	functions                               []string
 	buildBrief, requestedBy                 string
 	buildRunDir                             string
 	dirty                                   string
-	at                                      bool // --at: a past head; the build's receipt is not touched
+	at                                      bool         // --at: a past head; the build's receipt is not touched
+	rounds                                  int          // the reviews this build already had, this dispatch not counted
+	liftWhy                                 string       // --lift-cap's reason when this dispatch is past the cap (set once, by reviewRoundCapCheck); reviewRecord writes it
+	from                                    string       // the diff starts here: base, or a delta's T (a commit, or the tree of V with the base merged in)
+	delta                                   *reviewDelta // a re-check of V..head; nil is the full review
+	fullWhy                                 string       // why a build with an earlier review is re-checked in full
+	rwtTask                                 string       // the task whose worktree holds the reviewer: rtask, or the kept reviewer's
+	retask                                  string       // the pane of the kept reviewer the delta goes to; "" is a fresh reviewer
+	retaskWhy                               string       // what ruled the kept reviewer out
+	jdDropped                               bool         // the build declared judgment-day and the delta is below tier L, so the re-check does not run it
+	model                                   string       // the reviewer's model: opus unless --model, and what its brief declares
 }
 
-const reviewUsage = "hw review <lane> <task> [--dry-run] [--here] [--no-report] [--at <sha>] [--account <name>]"
+const reviewUsage = "hw review <lane> <task> [--dry-run] [--here] [--no-report] [--at <sha>] [--account <name>] [--model <m>] [--effort <e>] [--lift-cap \"<why>\"]"
+
+// reviewRoundCap is the most reviews one build gets: 75 of 82 builds finished within 3, and the ones past it never converged
+// (setup/evidence/review-system-eval-2026-11-19.md §2, §6.1). The 4th dispatch is refused unless --lift-cap says why.
+const reviewRoundCap = 3
 
 // reviewValuedNeeds is what each value-taking flag of `hw review` wants, for the refusal that names it.
-var reviewValuedNeeds = map[string]string{"--at": "a commit", "--account": "a name"}
+var reviewValuedNeeds = map[string]string{"--at": "a commit", "--account": "a name", "--model": "a model", "--effort": "a level", "--lift-cap": "the reason"}
 
 // reviewValuedFlag reads args[i] as one of reviewValuedNeeds' flags, spelled `--flag v` or `--flag=v`: the flag, its value
 // ("" when none follows) and the index of the last argument it consumed.
@@ -270,17 +296,24 @@ func reviewValuedFlag(args []string, i int, x string) (flag, v string, next int,
 
 func (a *app) cmdReview() int {
 	dry, here, noReport := false, false, false
-	at, account := "", ""
+	at, account, liftCap, model, effort := "", "", "", "", ""
 	var pos []string
 	for i := 0; i < len(a.args); i++ {
 		x := a.args[i]
 		if flag, v, next, ok := reviewValuedFlag(a.args, i, x); ok {
-			if i = next; v == "" || strings.HasPrefix(v, "-") {
+			if i = next; v == "" || (strings.HasPrefix(v, "-") && flag != "--lift-cap") { // a reason may start with a dash; a commit or an account may not
 				a.die("hw review: " + flag + " needs " + reviewValuedNeeds[flag] + " (usage: " + reviewUsage + ")")
 			}
-			if flag == "--at" {
+			switch flag {
+			case "--at":
 				at = v
-			} else {
+			case "--lift-cap":
+				liftCap = v
+			case "--model":
+				model = v
+			case "--effort":
+				effort = v
+			default:
 				account = v
 			}
 			continue
@@ -311,7 +344,7 @@ func (a *app) cmdReview() int {
 	}
 	defer os.RemoveAll(tmp)
 
-	if p.tier == "0" {
+	if !p.reviewerOwed() {
 		if p.at {
 			a.ok("no code changed at " + p.head + ": no reviewer dispatched, and nothing recorded (--at).")
 			return 0
@@ -325,22 +358,54 @@ func (a *app) cmdReview() int {
 		return 0
 	}
 
-	brief, err := a.reviewBriefText(p)
-	if err != nil {
-		a.die("hw review: " + err.Error())
+	if !p.at { // a past head is a benchmark, never a round of the build
+		a.reviewRoundCapCheck(p, liftCap)
 	}
+	// the reviewer's effort follows the tier (plain S: medium, L and S+JD: high, a declared high-risk build is not lowered; a delta's tier is
+	// its own); --model and --effort override, and the dispatch validates them
+	p.model = model // the brief declares it too: the dispatch refuses a brief and a flag that disagree
+	if p.model == "" {
+		p.model = "opus"
+	}
+	reviewEffort := effort
+	if reviewEffort == "" {
+		reviewEffort = "high"
+		if p.tier == "S" && !p.jd {
+			reviewEffort = "medium"
+		}
+	}
+	a.reviewRoute(p, account)
+	a.reviewPrintRoute(p)
 	path := p.briefPath
 	if dry { // a dry run creates nothing in the brain: the dispatch's own check reads a scratch copy
 		path = filepath.Join(tmp, p.rtask+".md")
 	} else if err := os.MkdirAll(filepath.Dir(path), 0o777); err != nil {
 		a.die("hw review: " + err.Error())
 	}
-	if err := os.WriteFile(path, []byte(brief), 0o666); err != nil {
-		a.die("hw review: cannot write the reviewer's brief " + path + ": " + err.Error())
+	writeBrief := func() {
+		brief, err := a.reviewBriefText(p)
+		if err != nil {
+			a.die("hw review: " + err.Error())
+		}
+		if err := os.WriteFile(path, []byte(brief), 0o666); err != nil {
+			a.die("hw review: cannot write the reviewer's brief " + path + ": " + err.Error())
+		}
+	}
+	writeBrief()
+	if p.retask != "" {
+		if a.reviewRetask(p, path, dry) {
+			if !dry {
+				a.reviewRecord(p, true)
+				a.reviewWriteFunctions(p)
+			}
+			return 0
+		}
+		p.retask, p.retaskWhy, p.rwtTask, p.delta.kept = "", "the re-task did not go through", p.rtask, ""
+		writeBrief() // the fresh reviewer reads V's own review.md, not the copy that was to sit beside the kept reviewer's
 	}
 	// --fresh always: a reviewer is a fresh session by contract (docs/REVIEW-BRIEF.md), and without it the dispatch may re-task a kept
 	// pane of the lane (a prior reviewer, the builder) that runs on another account, and refuse with a remedy this verb cannot take
-	args := []string{p.lane, p.rtask, "--agent", "claude", "--model", "opus", "--effort", "high", "--base", p.rbase, "--brief", path, "--fresh"}
+	args := []string{p.lane, p.rtask, "--agent", "claude", "--model", p.model, "--effort", reviewEffort, "--base", p.rbase, "--brief", path, "--fresh"}
 	if !noReport { // --keep-pane needs a report to chain after, so a no-report rehearsal drops it
 		args = append(args, "--keep-pane", "--why", "the re-check: the brainer re-tasks this reviewer with hw next after the builder's one fix round (review-by-default design §3.4)")
 	}
@@ -361,15 +426,22 @@ func (a *app) cmdReview() int {
 		args = append(args, "--dry-run")
 	}
 	a.step("dispatch  hw " + strings.Join(args, " "))
-	cmd := exec.Command(a.c.brain+"/bin/hw", args...)
-	cmd.Stdout, cmd.Stderr = a.out, a.err
-	if err := cmd.Run(); err != nil {
+	if err := a.reviewRunHW(args); err != nil {
 		retry := "`hw review " + p.lane + " " + p.task
 		if p.at {
 			retry += " --at " + p.head
 		}
+		if p.liftWhy != "" { // without it the retry is refused at the cap, and the remedy printed here would be a loop
+			retry += " --lift-cap " + strconv.Quote(p.liftWhy)
+		}
 		if account != "" { // the retry must run the reviewer where this one was asked to run, not on the lane's default
 			retry += " --account " + account
+		}
+		if model != "" { // nor with another model or effort than the ones asked
+			retry += " --model " + model
+		}
+		if effort != "" {
+			retry += " --effort " + effort
 		}
 		retry += "`"
 		if p.at { // a past head never touches the build's receipt: do not claim anything about it
@@ -385,6 +457,49 @@ func (a *app) cmdReview() int {
 	}
 	a.reviewWriteFunctions(p)
 	return 0
+}
+
+// reviewRoundsOf counts the reviews a build already had: the review_run records in the receipts of the build's runs, one per
+// dispatch `hw review` made (a failed dispatch records none, a --at benchmark records none). A re-tasked reviewer is one
+// directory holding several reviews, so its directories and briefs would undercount; the build's own receipt does not. A fix task
+// is a build of its own, so the cap is the chain's: the reviews of the task and of every parent its `round_of:` names, each once.
+func (a *app) reviewRoundsOf(p *reviewPlan) int {
+	n := 0
+	for _, t := range a.reviewChainOf(p.lane, p.task) {
+		wt := a.workTree(p.lane, t) // a parent whose worktree is gone has no receipt left to count
+		for _, r := range runsNewestFirst(wt + "/.hw") {
+			n += len(receiptValues(wt+"/.hw/"+r, "review_run"))
+		}
+	}
+	return n
+}
+
+// reviewChainOf is the task and the parents its brief's `round_of:` chain names, nearest first, each once (a cycle ends the walk).
+func (a *app) reviewChainOf(lane, task string) []string {
+	var chain []string
+	for ; task != "" && !has(chain, task); task = nextFmValue("round_of", a.reviewBuildBrief(lane, task)) {
+		chain = append(chain, task)
+	}
+	return chain
+}
+
+// reviewRoundCapCheck refuses the dispatch past the cap, naming both exits; --lift-cap "<why>" is the one that dispatches.
+func (a *app) reviewRoundCapCheck(p *reviewPlan, liftCap string) {
+	p.rounds = a.reviewRoundsOf(p)
+	if p.rounds < reviewRoundCap {
+		return
+	}
+	next, limit := strconv.Itoa(p.rounds+1), strconv.Itoa(reviewRoundCap)
+	if liftCap != "" {
+		p.liftWhy = liftCap
+		a.warn("review round cap lifted: this is review " + next + " of " + p.lane + ":" + p.task + " (cap " + limit + "); the reason goes in the build's receipt as review_cap_lifted")
+		return
+	}
+	chain := ""
+	if c := a.reviewChainOf(p.lane, p.task); len(c) > 1 {
+		chain = ", counted across its round_of chain " + strings.Join(c, " <- ")
+	}
+	a.die("hw review: " + p.lane + ":" + p.task + " already had " + strconv.Itoa(p.rounds) + " reviews" + chain + " (the cap is " + limit + "): review " + next + " is refused. Either lift the cap with `hw review " + p.lane + " " + p.task + " --lift-cap \"<why>\"` (recorded in the receipt), or close the build and move its open review rows to KNOWN-LIMITATIONS.")
 }
 
 // reviewPlan measures the build and fixes everything the dispatch will say, or dies. A non-empty `at` is --at: the head is that
@@ -461,12 +576,29 @@ func (a *app) reviewPlan(laneArg, task, at string) *reviewPlan {
 		a.die("hw review: no base to measure " + p.branch + " against (no review_base in its receipt and no merge-base with " + prefix + a.c.t.get(lane, "base") + ")")
 	}
 	p.base, p.baseHow = base, how
+	p.from = base
+	mm := a.reviewLaneMergeBase(checkout, lane, p.head, base)
+	if !p.at { // a past head is a blind benchmark: always the whole range
+		a.reviewDeltaPlan(p, checkout, mm)
+	}
+	if p.delta == nil {
+		a.reviewFromWithoutLane(p, checkout, mm)
+	}
 
-	num, _ := gitRun(checkout, nil, "diff", "--no-renames", "--numstat", "-z", base+".."+p.head)
+	num, _ := gitRun(checkout, nil, "diff", "--no-renames", "--numstat", "-z", p.from, p.head)
 	p.code, p.codeFiles, p.docLines = reviewMeasure(string(num))
 	p.tier = reviewTierOf(p.code)
-	p.extra = reviewExtraPlugins(review, pluginsOfValue(nextDecl(nextBriefDeclares(p.buildBrief), "plugins")))
-	p.list = reviewTierListWith(p.tier, p.jd, p.extra)
+	if p.delta != nil && p.tier != "L" && p.jd { // a fix round's check is not the high-risk read the whole build got: Judgment Day only when the delta is itself L
+		p.jd, p.jdDropped = false, true
+	}
+	p.extraBrief = reviewExtraPlugins(review, pluginsOfValue(nextDecl(nextBriefDeclares(p.buildBrief), "plugins")))
+	for _, n := range a.c.t.reviewLaneDefault(lane) {
+		if !has(p.extraBrief, n) && !has(p.extraLane, n) {
+			p.extraLane = append(p.extraLane, n)
+		}
+	}
+	p.post = a.c.t.get(lane, "review_post")
+	p.list = reviewTierListWith(p.tier, p.jd, append(slices.Clone(p.extraBrief), p.extraLane...))
 	p.pieces = reviewerPieces(p.list)
 	short := p.head
 	if len(short) > reviewShortLen {
@@ -476,12 +608,13 @@ func (a *app) reviewPlan(laneArg, task, at string) *reviewPlan {
 	if p.at {
 		p.rtask = reviewAtTaskName(task, short)
 	}
+	p.rwtTask = p.rtask
 	p.rbranch = a.c.lanePath(lane, "branch", p.rtask)
 	if p.rbranch == "" {
 		p.rbranch = "task/" + p.rtask
 	}
 	p.briefPath = a.c.brain + "/" + lane + "/briefs/" + p.rtask + ".md"
-	if p.tier != "0" {
+	if p.tier != "0" { // a prose-only delta owed a reviewer (reviewerOwed) has no code files, so no functions to list
 		p.functions = a.reviewFunctions(checkout, p)
 	}
 	return p
@@ -490,18 +623,16 @@ func (a *app) reviewPlan(laneArg, task, at string) *reviewPlan {
 // reviewBaseOf is the base a branch's diff is measured from: the merge-base with the lane's base NOW (a branch that merged main in
 // has a later fork point than the one recorded at its dispatch, and base..head must not count main's commits). Once the branch is
 // merged that is the head itself, and the merge-base recorded at the build's dispatch, while it is still an ancestor of the head, is
-// the only fork point left. "" when there is none. `hw done` measures with it too, so the two never disagree about what is code.
+// the only fork point left. "" when there is none. `hw done` measures with it; `hw review` also takes the lane's merged-in commits out
+// of it (reviewFromWithoutLane).
 func (a *app) reviewBaseOf(checkout, lane, head, buildBrief, runDir string) (base, how string) {
 	prefix := a.c.t.get(lane, "base_ref_prefix")
 	lb := nextFmValue("base", buildBrief)
 	if lb == "" {
 		lb = a.c.t.get(lane, "base")
 	}
-	for _, ref := range []string{prefix + lb, lb} {
-		if m, ok := gitRun(checkout, nil, "merge-base", head, ref); ok && strings.TrimSpace(string(m)) != "" {
-			base, how = strings.TrimSpace(string(m)), "git merge-base "+ref+" at the head"
-			break
-		}
+	if m, ref := reviewMergeBaseOf(checkout, head, prefix, lb); m != "" {
+		base, how = m, "git merge-base "+ref+" at the head"
 	}
 	if (base == "" || base == head) && runDir != "" {
 		if b, _ := doneReceiptLast(runDir+"/receipt.jsonl", "review_base"); b != "" {
@@ -511,6 +642,43 @@ func (a *app) reviewBaseOf(checkout, lane, head, buildBrief, runDir string) (bas
 		}
 	}
 	return base, how
+}
+
+// reviewLaneMergeBase is the merge-base of head with the lane's own base (main), which differs from the build's base when a fix branch is
+// cut from another task branch: what the branch merged from main is not the build's, whatever its base. It is fallback (the build's base)
+// when the lane's base has no merge-base with head, or head is already in it (a merged branch measures from its recorded fork point).
+func (a *app) reviewLaneMergeBase(checkout, lane, head, fallback string) string {
+	prefix := a.c.t.get(lane, "base_ref_prefix")
+	lb := a.c.t.get(lane, "base")
+	if mm, _ := reviewMergeBaseOf(checkout, head, prefix, lb); mm != "" && mm != head {
+		return mm
+	}
+	return fallback
+}
+
+// reviewMergeBaseOf is `git merge-base head ref` for the first of prefix+lb and lb that has one, and that ref; "" when neither does.
+func reviewMergeBaseOf(checkout, head, prefix, lb string) (mb, ref string) {
+	for _, ref := range []string{prefix + lb, lb} {
+		if m, ok := gitRun(checkout, nil, "merge-base", head, ref); ok && strings.TrimSpace(string(m)) != "" {
+			return strings.TrimSpace(string(m)), ref
+		}
+	}
+	return "", ""
+}
+
+// reviewFromWithoutLane starts a full review's diff at the merge-tree of its base and the lane's newer commits when the branch merged
+// them in (a fix branch that merged main: 162 files, tier L, against its own 30 lines, 2026-11-19), and says so in the plan's base line.
+func (a *app) reviewFromWithoutLane(p *reviewPlan, checkout, mm string) {
+	if mm == "" || mm == p.base {
+		return
+	}
+	if _, anc := gitRun(checkout, nil, "merge-base", "--is-ancestor", mm, p.base); anc {
+		return
+	}
+	if tree := reviewMergeTree(checkout, p.base, mm); tree != "" {
+		p.from = tree
+		p.baseHow += "; measured from git merge-tree " + reviewShort(tree) + ": that base with the lane's newer commits (" + reviewShort(mm) + ") merged in, so the commits the branch took from the lane are not the build's"
+	}
 }
 
 // reviewBuildBrief is brain/<lane>/briefs/<task>.md, "" when the build had none.
@@ -537,7 +705,7 @@ func (a *app) reviewFunctions(checkout string, p *reviewPlan) []string {
 		return nil
 	}
 	args := []string{"-c", "core.attributesFile=" + a.c.brain + "/setup/review/gitattributes", "-c", "diff.jsfn.xfuncname=" + reviewJSDriver,
-		"diff", "-U0", "--no-renames", "--no-color", p.base + ".." + p.head, "--"}
+		"diff", "-U0", "--no-renames", "--no-color", p.from, p.head, "--"}
 	args = append(args, p.codeFiles...)
 	out, ok := gitRun(checkout, nil, args...)
 	if !ok {
@@ -561,6 +729,12 @@ func (a *app) reviewPrint(p *reviewPlan, dry bool) {
 		a.warn(p.dirty)
 	}
 	a.printf("  base         %s  (%s)\n", p.base, p.baseHow)
+	switch {
+	case p.delta != nil:
+		a.printf("  delta        re-check of %s..%s: the last review said %s at %s; %s\n", reviewShort(p.delta.v), reviewShort(p.head), p.delta.verdict, reviewShort(p.delta.v), p.delta.tHow)
+	case p.fullWhy != "":
+		a.printf("  delta        none, a full re-check: %s\n", p.fullWhy)
+	}
 	a.printf("  diff         %d code-only line(s) in %d file(s); %d doc-only line(s) not counted\n", p.code, len(p.codeFiles), p.docLines)
 	a.printf("  tier         %s  (0: none · S: 1-%d · L: more)%s\n", reviewTierLabel(p.tier, p.jd), reviewSmallMax, func() string {
 		if p.jd && p.tier == "0" {
@@ -568,15 +742,24 @@ func (a *app) reviewPrint(p *reviewPlan, dry bool) {
 		}
 		return ""
 	}())
-	if p.tier == "0" {
+	if !p.reviewerOwed() {
 		return
 	}
 	a.printf("  pieces       %s\n", strings.Join(p.pieces, ", "))
+	if p.jdDropped {
+		a.printf("  - JD         the build brief's review: names judgment-day, which a delta runs only at tier L\n")
+	}
 	if p.jd {
 		a.printf("  + JD         the build brief's review: names judgment-day: the reviewer orchestrates the two judges\n")
 	}
-	if len(p.extra) > 0 {
-		a.printf("  + plugins    the build's review: adds %s to the reviewer's tier\n", strings.Join(p.extra, ", "))
+	if len(p.extraBrief) > 0 {
+		a.printf("  + plugins    the build's review: adds %s to the reviewer's tier\n", strings.Join(p.extraBrief, ", "))
+	}
+	if len(p.extraLane) > 0 {
+		a.printf("  + lane       %s's review_default adds %s to the reviewer's tier\n", p.lane, strings.Join(p.extraLane, ", "))
+	}
+	if p.post == reviewPostPR {
+		a.printf("  + post       %s's review_post: the reviewer writes its findings into the PR body's `## Review` section\n", p.lane)
 	}
 	a.printf("  reviewer     task %s on %s, cut from %s (the %s)\n", p.rtask, p.rbranch, p.rbase, func() string {
 		if p.rbase == p.head {
@@ -588,6 +771,17 @@ func (a *app) reviewPrint(p *reviewPlan, dry bool) {
 	a.printf("  functions    %d changed function(s) listed into the reviewer's $HW_ARTIFACTS/functions.txt\n", len(p.functions))
 }
 
+// reviewPrintRoute says who takes a re-check's delta.
+func (a *app) reviewPrintRoute(p *reviewPlan) {
+	switch {
+	case p.delta == nil:
+	case p.retask != "":
+		a.printf("  re-task      pane %s, the reviewer of %s: its worktree fast-forwards to %s, then hw next --brief; it keeps the model and effort it was launched with (a live session's cannot change), so the tier's effort and --model/--effort apply only to a fresh reviewer\n", p.retask, p.rwtTask, reviewShort(p.head))
+	default:
+		a.printf("  re-task      none, a fresh reviewer takes the delta: %s\n", p.retaskWhy)
+	}
+}
+
 // reviewRecord appends the build's receipt lines. review_owed=1 is the build dispatch's own and is left alone.
 func (a *app) reviewRecord(p *reviewPlan, dispatched bool) {
 	dir := p.buildRunDir
@@ -597,11 +791,17 @@ func (a *app) reviewRecord(p *reviewPlan, dispatched bool) {
 	}
 	src := "hw review " + p.lane + " " + p.task + " — the branch tip " + p.branch + " measured against " + p.base
 	if dispatched {
-		a.receiptInto(dir, "review_run", p.briefPath, "hw review dispatched "+p.lane+":"+p.rtask+" with this brief")
+		a.receiptInto(dir, "review_run", p.briefPath, "hw review dispatched "+p.lane+":"+p.rwtTask+" with this brief")
+		a.receiptInto(dir, "review_task", p.rwtTask, "hw review: the task whose worktree holds the reviewer ("+orDefaultStr(p.retask, "a fresh one")+") — hw done reads its review.md, the next hw review its pane")
+		if p.liftWhy != "" {
+			a.receiptInto(dir, "review_cap_lifted", p.liftWhy, "hw review "+p.lane+" "+p.task+" --lift-cap: review "+strconv.Itoa(p.rounds+1)+", past the cap of "+strconv.Itoa(reviewRoundCap))
+		}
 	}
 	a.receiptInto(dir, "review_head", p.head, src)
 	a.receiptInto(dir, "review_tier", reviewTierLabel(p.tier, p.jd), src+" — "+strconv.Itoa(p.code)+" code-only line(s)")
 }
+
+var reviewArtifactsRe = regexp.MustCompile(`(?m)^HW_ARTIFACTS='(.*)'$`)
 
 // reviewArtifactsOf is the $HW_ARTIFACTS of a worktree's newest run, read off its env file; "" when there is none.
 func (a *app) reviewArtifactsOf(wt string) string {
@@ -613,7 +813,7 @@ func (a *app) reviewArtifactsOf(wt string) string {
 	if err != nil {
 		return ""
 	}
-	if m := regexp.MustCompile(`(?m)^HW_ARTIFACTS='(.*)'$`).FindStringSubmatch(string(b)); m != nil {
+	if m := reviewArtifactsRe.FindStringSubmatch(string(b)); m != nil {
 		return m[1]
 	}
 	return ""
@@ -621,7 +821,7 @@ func (a *app) reviewArtifactsOf(wt string) string {
 
 // reviewWriteFunctions puts functions.txt in the reviewer's $HW_ARTIFACTS, read off its run's env file.
 func (a *app) reviewWriteFunctions(p *reviewPlan) {
-	rwt := a.workTree(p.lane, p.rtask)
+	rwt := a.workTree(p.lane, p.rwtTask)
 	art := a.reviewArtifactsOf(rwt)
 	if art == "" {
 		a.warn("functions.txt was NOT written: the reviewer's run directory has no HW_ARTIFACTS (looked in " + rwt + "/.hw). The brief carries the same list.")
@@ -644,11 +844,29 @@ func (a *app) reviewWriteFunctions(p *reviewPlan) {
 
 // ── the reviewer's brief ────────────────────────────────────────────────────
 
+// reviewCommonFrom is where the sections the full brief and the delta brief share begin in docs/REVIEW-BRIEF.md.
+const reviewCommonFrom = "## What you run"
+
 // reviewBriefText fills docs/REVIEW-BRIEF.md: its frontmatter and body carry {{key}} slots, and nothing else is rewritten.
 func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 	tpl, err := os.ReadFile(a.c.brain + "/docs/REVIEW-BRIEF.md")
 	if err != nil {
 		return "", err
+	}
+	if p.delta != nil { // the delta's own head, then the full template's sections from «What you run» on, so the two never disagree about them
+		head, err := os.ReadFile(a.c.brain + "/docs/REVIEW-DELTA-BRIEF.md")
+		if err != nil {
+			return "", err
+		}
+		i := strings.Index(string(tpl), reviewCommonFrom)
+		if i < 0 {
+			return "", errors.New("docs/REVIEW-BRIEF.md has no `" + strings.TrimSpace(reviewCommonFrom) + "` section: the delta brief is built from it")
+		}
+		tpl = []byte(strings.Replace(string(head), "{{common}}", strings.TrimSpace(string(tpl)[i:]), 1))
+	}
+	prior := reviewDelta{}
+	if p.delta != nil {
+		prior = *p.delta
 	}
 	fns := "(hw extracted none: read the diff and list every function you judged)"
 	if len(p.functions) > 0 {
@@ -667,6 +885,15 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 	if p.jd {
 		jd = "This build is declared high risk (its brief lists `judgment-day`: money, mail or live data). After the pieces above, run Judgment Day over the same range with the `judgment-day` skill, once, and fold its confirmed findings into `review.md`."
 	}
+	// a slot's value is not rescanned by the replacer below, so the two clauses take their own slots here
+	own := strings.NewReplacer("{{base}}", p.from, "{{head}}", p.head, "{{branch}}", p.branch)
+	agents, post := "", ""
+	if reviewHasAgent(p.pieces) {
+		agents = own.Replace(reviewAgentsPrompt)
+	}
+	if p.post == reviewPostPR {
+		post = own.Replace(reviewPostPrompt)
+	}
 	asked := "investigate"
 	rb := p.requestedBy
 	if rb == "" {
@@ -675,11 +902,68 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 	r := strings.NewReplacer(
 		"{{review_list}}", strings.Join(p.list, ", "),
 		"{{review_of}}", p.lane+":"+p.task+"@"+p.head,
-		"{{lane}}", p.lane, "{{task}}", p.task, "{{head}}", p.head, "{{base}}", p.base,
+		"{{lane}}", p.lane, "{{task}}", p.task, "{{head}}", p.head, "{{base}}", p.from,
 		"{{tier}}", reviewTierLabel(p.tier, p.jd), "{{code_lines}}", strconv.Itoa(p.code),
 		"{{build_brief}}", orDefaultStr(p.buildBrief, "(the build had no brief on disk)"),
-		"{{skills}}", strings.TrimRight(skills, "\n"), "{{jd}}", jd, "{{functions}}", fns,
-		"{{requested_by}}", strings.ReplaceAll(rb, `"`, `'`), "{{asked}}", asked,
+		"{{skills}}", strings.TrimRight(skills, "\n"), "{{jd}}", jd, "{{agents}}", agents, "{{post_exception}}", post, "{{functions}}", fns,
+		"{{requested_by}}", strings.ReplaceAll(rb, `"`, `'`), "{{asked}}", asked, "{{model}}", p.model,
+		"{{delta_from}}", p.from, "{{delta_how}}", prior.tHow, "{{prior_head}}", prior.v, "{{prior_verdict}}", prior.verdict, "{{prior_review}}", prior.priorPath(),
 	)
 	return r.Replace(string(tpl)), nil
 }
+
+// reviewPostPR is the lane's `review_post` that has the reviewer write its findings into the PR.
+const reviewPostPR = "pr-description"
+
+// reviewHasAgent is true when a reviewer's pieces include one launched with the Agent tool.
+func reviewHasAgent(pieces []string) bool {
+	for _, q := range pieces {
+		if reviewPieceIsAgent(q[strings.Index(q, ":")+1:]) {
+			return true
+		}
+	}
+	return false
+}
+
+// reviewAgentsPrompt fills {{agents}}: how a reviewer runs an agent piece (comment-sicko). The agent's own definition edits comments, and
+// a reviewer changes nothing, so the prompt is report-only and the tree is checked after; its findings map to review.md severities here,
+// never a blocker (the review-lane-default design verdict).
+const reviewAgentsPrompt = `The pieces above that name an agent (` + "`pstack:comment-sicko`" + `) are not skills: launch each with the Agent tool, its ` + "`subagent_type`" + ` that full name. Foreground or background both prove it, but a background agent proves only once it **completes**: wait for its completion notice (the task-notification) before you write ` + "`review.md`" + ` and close, since done-invoker refuses one that never completed.
+
+- Its prompt is report-only: "Review the lines added by ` + "`{{base}}..{{head}}`" + ` (read ` + "`git diff {{base}}..{{head}}`" + `). Report: files touched, deletion count, ` + "`MUST KILL`" + ` flags with one line each, skips. Change no file."
+- Afterwards ` + "`git status --porcelain`" + ` prints nothing. If it prints a path, the agent edited it against the prompt: restore exactly those paths to ` + "`{{head}}`" + ` (delete an added file) and say so in ` + "`review.md`" + `.
+- What it reports becomes rows of ` + "`review.md`" + `, and never a blocker:
+
+        agent reports                                    row
+        a comment it kills on a line this diff added     should
+        a MUST KILL flag on a symbol this diff added     should
+        a kill or flag on a line that was already there  follow-up`
+
+// reviewPostPrompt fills {{post_exception}} when the lane's review_post is pr-description: the one thing a reviewer writes outside its
+// artifacts. One section of the PR body, replaced in place or appended: never a comment, never a review, never an approval. The skeleton
+// is the whole text it posts, so it names no skill, plugin or agent (2026-11-19: reviews live only in the PR description).
+const reviewPostPrompt = `## The one thing you write outside ` + "`$HW_ARTIFACTS`" + `
+
+This lane sets ` + "`review_post: pr-description`" + `: it overrides the opening line's "post nothing to GitHub" for this one edit. After ` + "`review.md`" + ` is written, put your findings in the build's pull request **body**, in ONE section titled ` + "`## Review`" + `, replacing that section if the body has it and appending it if not. Never a comment, never a submitted review, never an approval, and no other part of the body changes.
+
+Write the section as the person who opened the PR would: findings and what was done about them, plain sentences, ` + "`file:line`" + ` for each. It names no skill, plugin, agent or tool, carries no AI attribution and no memory ids. Write it to ` + "`$HW_ARTIFACTS/review-section.md`" + `:
+
+        ## Review
+
+        Verdict: approved | changes needed (head <short sha>).
+
+        - ` + "`file:line`" + ` — what is wrong and what it breaks. Fixed in <commit> | Open.
+
+Then replace it in the body (if ` + "`gh pr view`" + ` fails (no pull request for the branch, a network error), the block stops before any edit: say so in ` + "`review.md`" + ` and post nothing):
+
+` + "```sh" + `
+gh pr view {{branch}} --json body -q .body > "$HW_ARTIFACTS/pr-body-old.md" || exit 1
+awk -v sec="$HW_ARTIFACTS/review-section.md" '
+  { sub(/\r$/, "") }
+  function put(  l) { while ((getline l < sec) > 0) print l; close(sec); done = 1 }
+  /^## Review[ \t]*$/ { put(); skip = 1; next }
+  skip && /^## / { skip = 0; print "" }
+  !skip { print }
+  END { if (!done) { print ""; put() } }' "$HW_ARTIFACTS/pr-body-old.md" > "$HW_ARTIFACTS/pr-body.md" || exit 1
+gh pr edit {{branch}} --body-file "$HW_ARTIFACTS/pr-body.md"
+` + "```"

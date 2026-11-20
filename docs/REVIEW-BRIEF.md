@@ -1,6 +1,6 @@
 ---
 kind: review
-model: opus
+model: {{model}}
 review: [{{review_list}}]
 review_of: {{review_of}}
 requested_by: "{{requested_by}}"
@@ -31,15 +31,17 @@ Each with the Skill tool under its full name; done-invoker reads your transcript
 
 {{jd}}
 
+{{agents}}
+
 If you run Judgment Day: **a binary (an image, a font, a compiled file) is checked by you, never by a judge.** The diff counts it as
-owed, so open it yourself and write what you saw in `checks.md`; keep every binary out of a judge's target paths, since a judge
+owed, so open it yourself and write what you saw in `review.md`; keep every binary out of a judge's target paths, since a judge
 cannot judge bytes and a coverage relaunch spent on one is wasted. And write the judges' prompts with **intent, not reassurance**:
 say what the code is meant to do, never that a value or behaviour is fine ("it sends real mail once the token is changed from
 the test value" tells the judge not to look at the very defect the test value is).
 
 A skill that is not among your available skills means this pane was launched without its plugin: close with
 `done-invoker --blocked` naming it, never as "not installed". The principle skills are guidance, not reports: apply them to the
-diff and say in `checks.md` what they changed in your verdict.
+diff and say in `review.md` what they changed in your verdict.
 
 ## What you also look for
 
@@ -63,17 +65,14 @@ Beyond the skills, every one of these is a defect class this system has already 
 
     verdict: approve | changes-needed  head: {{head}}
 
-then one row per finding: `id | blocker|should|nit|follow-up | file:line | failure scenario | fix direction`.
+then one row per finding: `id | blocker|should|follow-up | file:line | failure scenario | fix direction`.
 
 - A `blocker` is caused by this diff and carries a failure scenario and a file:line. A defect that was already there is a
   `follow-up` row, and it never blocks. `approve` with a `blocker` row, or `changes-needed` with none, is wrong.
 
-**`$HW_ARTIFACTS/checks.md`**, `requirement | verdict | evidence | correction`:
-
-- one row per piece above, named in full (`thermo:thermo-nuclear-code-quality-review`): verdict `pass` means *applied*,
-  evidence is what it found, counted; a reviewer that found defects has done its job, so never `fail` a piece for that.
-- one row per changed function, with the one-thing-per-function verdict: `simple`, `split`, `merge` or `inline`, and an action
-  (`none` for `simple`):
+**`$HW_ARTIFACTS/checks.md`** holds only the one-thing-per-function table, no requirement rows: what a piece found is a row of
+`review.md`, and done-invoker proves each piece from your transcript. One row per changed function, with its verdict `simple`,
+`split`, `merge` or `inline`, and an action (`none` for `simple`):
 
         function | what it does | verdict | action
 
@@ -82,6 +81,8 @@ then one row per finding: `id | blocker|should|nit|follow-up | file:line | failu
 {{functions}}
 
   A row for a function this list missed is welcome.
+
+{{post_exception}}
 
 Then `done-invoker "<verdict, the head, how many blockers, the engram ids>"`. Save the findings to engram with
 `topic_key: {{lane}}/{{task}}-review/findings`.

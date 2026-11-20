@@ -375,15 +375,9 @@ func isSeparatorRow(l string) bool {
 // ChecksGate is the inside of `if [ -n "$_ck" ]`: checks.md needs at least one
 // row and a pass/fail/unresolved verdict on every row, and a plain done carries no `fail` row: a task whose own
 // checks.md says a requirement failed is not done, it closes --blocked (setup:bash-justify-or-port closed done over
-// 2 fail rows, 2026-11-10). It returns CHECKS_NOTE.
+// 2 fail rows, 2026-11-10). It returns CHECKS_NOTE. A reviewer is not held to it: it owes no requirement rows, and its function
+// table `function | what it does | verdict | action` (design §3.5) is ReviewerGate's.
 func ChecksGate(artifactsRoot string) (note string, err error) {
-	return checksGate(artifactsRoot, false)
-}
-
-// checksGate is ChecksGate; fnTable is a reviewer's close (review_of), whose checks.md also carries the one-thing-per-function
-// table `function | what it does | verdict | action` (design §3.5): its rows are that table's, with their own four verdicts, and
-// are read by ReviewerGate, not by this one. The table runs from its header to the first line without a pipe.
-func checksGate(artifactsRoot string, fnTable bool) (note string, err error) {
 	file := artifactsRoot + "/checks.md"
 	how := fmt.Sprintf("Write %s as a table, one row per requirement of the brief: its Verification section and each numbered goal:  requirement | verdict | evidence | correction  (verdict: pass, fail or unresolved). NOTHING was sent or marked.", file)
 	if !isRegular(file) {
@@ -393,25 +387,16 @@ func checksGate(artifactsRoot string, fnTable bool) (note string, err error) {
 	failWhy := ""
 	why := ""
 	hdr := false
-	inFn := false
 	// awk (macOS, UTF-8 locale) aborts on the first record with an invalid
 	// byte sequence, END never runs and the bash sees an empty summary: no rows.
 	if b, rerr := os.ReadFile(file); rerr == nil && utf8.Valid(b) {
 		for _, line := range strings.Split(string(b), "\n") {
 			l := trimRightFn(trimLeftFn(line, awkSpace), awkSpace)
-			if !strings.Contains(l, "|") {
-				inFn = false
-				continue
-			}
-			if isSeparatorRow(l) {
+			if !strings.Contains(l, "|") || isSeparatorRow(l) {
 				continue
 			}
 			l = strings.TrimPrefix(l, "|")
 			c := splitUnescapedPipes(l)
-			if fnTable && (inFn || isFunctionHeader(c)) {
-				inFn = true
-				continue
-			}
 			v := ""
 			if len(c) > 1 {
 				v = trimRightFn(trimLeftFn(awkLower(c[1]), awkSpaceMark), awkSpaceMark)
@@ -528,7 +513,7 @@ var (
 )
 
 // reviewSeverities are review.md's severities; `follow-up` is a defect that was already there and never blocks.
-var reviewSeverities = map[string]bool{"blocker": true, "should": true, "nit": true, "follow-up": true}
+var reviewSeverities = map[string]bool{"blocker": true, "should": true, "follow-up": true}
 
 // functionVerdicts are the one-thing-per-function verdicts of checks.md's function table.
 var functionVerdicts = map[string]bool{"simple": true, "split": true, "merge": true, "inline": true}
@@ -555,7 +540,7 @@ func sameSHA(a, b string) bool {
 // functions.txt (a name hw could not extract is not owed).
 func ReviewerGate(artifactsRoot, of, workHead string) (note string, err error) {
 	review := artifactsRoot + "/review.md"
-	how := "Write " + review + " with the first line  verdict: approve | changes-needed  head: <the SHA you judged>  and one row per finding,  id | blocker|should|nit|follow-up | file:line | failure scenario | fix direction  (approve has no blocker row; changes-needed has at least one; a defect that was already there is a follow-up and never blocks). NOTHING was sent or marked."
+	how := "Write " + review + " with the first line  verdict: approve | changes-needed  head: <the SHA you judged>  and one row per finding,  id | blocker|should|follow-up | file:line | failure scenario | fix direction  (approve has no blocker row; changes-needed has at least one; a defect that was already there is a follow-up and never blocks). NOTHING was sent or marked."
 	want := of[strings.LastIndex(of, "@")+1:]
 	if !strings.Contains(of, "@") || len(want) < 7 {
 		return "", die("%s", fmt.Sprintf("this reviewer's receipt names the review as '%s', which is not <lane>:<task>@<sha>: hw review wrote it wrong. Report it with done-invoker --blocked. NOTHING was sent or marked.", of))
@@ -597,7 +582,7 @@ func ReviewerGate(artifactsRoot, of, workHead string) (note string, err error) {
 		rows++
 		switch {
 		case !reviewSeverities[sev]:
-			return "", die("%s", fmt.Sprintf("row at line %d of %s ('%s') has the severity '%s'. Severities are exactly blocker, should, nit or follow-up, in the second cell. %s", i+2, review, strings.TrimSpace(c[0]), sev, how))
+			return "", die("%s", fmt.Sprintf("row at line %d of %s ('%s') has the severity '%s'. Severities are exactly blocker, should or follow-up, in the second cell. %s", i+2, review, strings.TrimSpace(c[0]), sev, how))
 		case len(c) < 3 || !reviewLocRe.MatchString(c[2]):
 			return "", die("%s", fmt.Sprintf("row at line %d of %s ('%s') has no file:line in its third cell. Every finding names the place it is about. %s", i+2, review, strings.TrimSpace(c[0]), how))
 		}

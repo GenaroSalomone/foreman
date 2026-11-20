@@ -372,10 +372,12 @@ _exec_touched_form() {
   [ -n "${HW_TASK:-}" ] && [ -n "${HW_ARTIFACTS:-}" ] && [ -n "${HW_TEST_CHANGED:-}" ] \
     && [ "$(cd -P "$(dirname "$HW_TEST_CHANGED")" 2>/dev/null && pwd)" = "$(cd -P "$HW_ARTIFACTS" 2>/dev/null && pwd)" ]
 }
+# AN EXECUTOR'S PRE-COMMIT: a selected gate (GATE_SELECTED, set below) inside an executor that is not the touched form above (its paths file is pre-commit's mktemp).
+_exec_precommit() { [ -n "${HW_TASK:-}" ] && [ "${GATE_SELECTED:-0}" = 1 ] && ! _exec_touched_form; }
 # A SLOW SUBJECT THAT NAMES THE DIFF AND DID NOT RUN IS NAMED AT THE END (suite-15-first-try; Judgment Day found it CRITICAL): the selected form runs only
 # the fast subjects and the pinned references, the touched form cuts the slow ones over its budget, and the closing lines said "the rest are deferred" without
 # saying WHICH, so 1283 and the layouts went unrun by an executor who believed the gate had covered his diff. One line each, copy-pasteable.
-DEFERRED_LINES=""; DEFERRED_N=0; DEFERRED_CAP=12; DEFERRED_REL=""
+DEFERRED_LINES=""; DEFERRED_N=0; DEFERRED_CAP=12; DEFERRED_REL=""; DEFERRED_GO=""
 TOUCHED_SKIPPED_LINES=""   # the touched-skipped lines of the run, repeated in the last lines: they were read in a `tail` of retro status-names-archivable-briefs and 812 was missed
 _defer_add() { # <subject file name>
   local n="$1"
@@ -392,6 +394,7 @@ _defer_print() { # on stdout, in the last lines of the run
   [ -z "$TOUCHED_SKIPPED_LINES" ] || printf '%s\n' "${TOUCHED_SKIPPED_LINES#
 }"
   [ -z "$DEFERRED_REL" ] || printf '%s\n' "$DEFERRED_REL"   # the mutation partitions the diff reaches (the release gate's)
+  [ -z "$DEFERRED_GO" ] || printf '%s\n' "$DEFERRED_GO"   # the Go partitions an executor's pre-commit left to the brainer's batch gate
   [ "$DEFERRED_N" -gt 0 ] || return 0
   printf '%s\n' "${DEFERRED_LINES#
 }"
@@ -405,10 +408,14 @@ GO_TALLY=""   # "go partitions Q of N" once the in-process suite is queued (the 
 GATE_PATHS_FILE=""
 if [ "$HW_TEST_GATE" = fast ] && [ -n "${HW_TEST_CHANGED:-}" ]; then
   _gs_why=""
+  # A PATHS FILE THAT IS NOT A FILE IS A TYPO, NOT A REASON TO RUN THE BRAINER'S GATE: a relative path from another cwd widened to the whole fast gate
+  # and cost an executor ~10 min (rules-diet, retro batch-2026-11-19 #2). Exit 2, naming it, before any subject runs.
+  if [ ! -r "$HW_TEST_CHANGED" ] || [ -d "$HW_TEST_CHANGED" ]; then  # MUTATION-ANCHOR: 361-M03
+    printf 'not ok - runner: HW_TEST_CHANGED=%s is not a readable file, so the touched form has no paths to select from; it does not widen to the whole fast gate. Pass the absolute path of a file of changed paths, one per line (git diff --name-only "$(git merge-base HEAD main)" > "$HW_ARTIFACTS/changed").\n' "$HW_TEST_CHANGED" >&2
+    exit 2
+  fi
   if [ ! -f "$HERE/gate-select" ]; then
     _gs_why="setup/gate-select is absent"
-  elif [ ! -r "$HW_TEST_CHANGED" ]; then
-    _gs_why="HW_TEST_CHANGED=$HW_TEST_CHANGED is not a readable file"
   else
     _gs_pat=""
     if [ -f "$HERE/hooks/suite-trigger-pattern.sh" ]; then
@@ -1669,14 +1676,24 @@ if [ -f "$HERE/go-test-core.sh" ] && [ -f "$SOURCE_ROOT/core/go.mod" ]; then
   # queued 40 of 40 partitions (~7700 s of work), the brainer's gate, and go-test-core.sh's own exit 75 sits on the `--affected --run` form and on a
   # list an executor NAMES, never on the partitions this runner queues itself (a job runs `env -u HW_TASK`, below). The estimate is the table's seconds,
   # the one go-test-core.sh sums; the way out is the one focused test.
-  if [ "$HW_TEST_GATE" = fast ] && _exec_touched_form && [ -n "$_gt_pick" ]; then  # MUTATION-ANCHOR: 1350-M12 — fast only: a full run ignores HW_TEST_CHANGED, and BUDGETS is set only for fast
+  # AN EXECUTOR'S PRE-COMMIT DEFERS THE SAME BATCH, and runs its bash subjects (precommit-defer-go, 2026-11-19): a commit has no other gate, so the touched form's
+  # exit 75 would refuse the commit; the Go partitions over the budget leave the queue instead, named, to the brainer's batch gate. Measured: an executor's
+  # SELECTED pre-commit took 1358 s on d8c796342, 708 s of it the Go `rest` partition, which any bin/ path reaches (setup/decisions.md, 2026-11-19). Same estimate, same budget.
+  if [ "$HW_TEST_GATE" = fast ] && { _exec_touched_form || _exec_precommit; } && [ -n "$_gt_pick" ]; then  # MUTATION-ANCHOR: 1350-M12 — fast only: a full run ignores HW_TEST_CHANGED, and BUDGETS is set only for fast
     _gt_est="$(printf '%s\n' "$_gt_all" | awk -F'\t' -v names="$(printf '%s' "$_gt_pick" | tr '\n' ',')" 'BEGIN { n = split(names, a, ","); for (i = 1; i <= n; i++) w[a[i]] = 1 } ($1 in w) { s += $2 } END { printf "%d", s }')"
     _gt_bud="$(python3 -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("touched_budget_seconds", 90)))' "$BUDGETS" 2>/dev/null || echo 90)"
     if [ "${_gt_est:-0}" -gt "${_gt_bud:-90}" ]; then  # MUTATION-ANCHOR: 1350-M01
-      [ -z "${_tc_file:-}" ] || rm -f "$_tc_file"
-      printf 'not ok - runner: the touched form would queue %s of %s Go partitions, estimated at %s s, over the %s s budget of an executor (touched_budget_seconds in setup/suite-data/test-budgets.json). That batch is the brainer'"'"'s, once per merge tree (setup/CLAUDE.md), so an executor gets exit 75 here and nothing ran. Run the one focused test the change reaches instead: setup/heavy --short -- sh -c '"'"'cd core && go test -count=1 -timeout 5m -run <TestName> .'"'"' (from the repo root, in the background, never piped to tail); `bash setup/go-test-core.sh --affected %s` names the partitions the paths reach, and `--affected %s --run` prints the case slices of each.\n' \
-        "$(printf '%s\n' "$_gt_pick" | grep -c .)" "$(printf '%s\n' "$_gt_all" | grep -c .)" "$_gt_est" "$_gt_bud" "$GATE_PATHS_FILE" "$GATE_PATHS_FILE" >&2
-      exit 75
+      _gt_over="$(printf '%s' "$_gt_pick" | grep -c .) of $(printf '%s\n' "$_gt_all" | grep -c .) Go partitions, estimated at $_gt_est s, over the $_gt_bud s budget of an executor (touched_budget_seconds in setup/suite-data/test-budgets.json)"
+      if _exec_touched_form; then
+        [ -z "${_tc_file:-}" ] || rm -f "$_tc_file"
+        printf 'not ok - runner: the touched form would queue %s. That batch is the brainer'"'"'s, once per merge tree (setup/CLAUDE.md), so an executor gets exit 75 here and nothing ran. Run the one focused test the change reaches instead: setup/heavy --short -- sh -c '"'"'cd core && go test -count=1 -timeout 5m -run <TestName> .'"'"' (from the repo root, in the background, never piped to tail); `bash setup/go-test-core.sh --affected %s` names the partitions the paths reach, and `--affected %s --run` prints the case slices of each.\n' \
+          "$_gt_over" "$GATE_PATHS_FILE" "$GATE_PATHS_FILE" >&2
+        exit 75
+      fi
+      _gt_defer="$(printf '%s' "$_gt_pick" | tr '\n' ',')"; _gt_defer="${_gt_defer%,}"
+      printf 'runner: the pre-commit of an executor does not queue %s: that batch is the brainer'"'"'s, once per merge tree (setup/CLAUDE.md); the bash subjects still run, and the focused `go test -run` of the Go you touched is yours\n' "$_gt_over" >&2
+      DEFERRED_GO="DEFERRED, names your diff: Go partitions $_gt_defer -> bash setup/go-test-core.sh +$_gt_defer  (the brainer's batch gate runs them)"
+      _gt_pick=""  # MUTATION-ANCHOR: 1350-M14
     fi
   fi
   # THE INCREMENTAL VERDICT NAMES THE PARTITIONS ITS DIFF REACHES. setup/verdict-incremental writes, beside the job names of

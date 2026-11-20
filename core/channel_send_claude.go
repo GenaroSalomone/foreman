@@ -155,6 +155,15 @@ func (c *chanSend) checkReportState() {
 
 // claudePane is `herdr agent list | jq … | head -1`: the pane hosting that claude session.
 func (c *chanSend) claudePane() string {
+	if c.paneRead {
+		return c.pane
+	}
+	c.paneRead = true
+	c.pane = c.claudePaneLookup()
+	return c.pane
+}
+
+func (c *chanSend) claudePaneLookup() string {
 	out, _ := c.herdr().stdout("agent", "list")
 	vals, _ := parseStream([]byte(out))
 	for _, v := range vals {
@@ -224,6 +233,47 @@ func (c *chanSend) claudeTargetName() (string, bool) {
 	return hits[0].Name, true
 }
 
+// claudeHCTerminal finds the live hc terminal running claude that the target names: its address or its name, else the one
+// whose claude session id the target is.
+func (c *chanSend) claudeHCTerminal() (addr, name string, ok bool) {
+	raw, got := hcOut(hcReadTimeout, "ls", "--json")
+	if !got {
+		return "", "", false
+	}
+	terms, _ := hcLsTerminals(raw)
+	var claudes []jmap
+	for _, e := range terms {
+		if t, isMap := e.(jmap); isMap && hcStr(t, "agent") == "claude-code" && hcStr(t, "address") != "" {
+			if hcStr(t, "address") == c.tgt || hcStr(t, "name") == c.tgt {
+				return hcStr(t, "address"), hcStr(t, "name"), true
+			}
+			claudes = append(claudes, t)
+		}
+	}
+	for _, t := range claudes {
+		if c.hcSession(hcStr(t, "address")) == c.tgt {
+			return hcStr(t, "address"), hcStr(t, "name"), true
+		}
+	}
+	return "", "", false
+}
+
+// claudeToHC makes a claude target that lives in an hc terminal (a brainer) an hc target, before any flag is checked against
+// the route, so every flag the hc route takes works on it. A request the claude route refuses for its own reasons keeps
+// that refusal, and a session in a herdr pane stays on the claude route.
+func (c *chanSend) claudeToHC() {
+	if c.vendor != "claude" || c.deliveryKey != "" || c.required != "admitted" || c.tgt == "" || c.claudePane() != "" {
+		return
+	}
+	if addr, name, ok := c.claudeHCTerminal(); ok {
+		if name == "" {
+			name = "unnamed"
+		}
+		c.printf("channel-send: routed via hc terminal %s (%s)\n", addr, name)
+		c.vendor, c.tgt = "hc", addr
+	}
+}
+
 func (c *chanSend) routeClaude() {
 	if c.deliveryKey != "" {
 		c.die("claude does not yet expose idempotent caller-supplied delivery ids")
@@ -236,7 +286,7 @@ func (c *chanSend) routeClaude() {
 	}
 	pane := c.claudePane()
 	if pane == "" {
-		c.die(fmt.Sprintf("claude session %s is live but is not in a herdr pane, so nothing here can tell whether it is between turns — and SendMessage succeeding only proves the message was admitted, never that a turn opened on it. Refusing rather than reporting a delivery this route cannot prove. Use the herdr route against the receiver's pane id.", c.tgt))
+		c.die(fmt.Sprintf("claude session %s is live but is not in a herdr pane, and no live hc terminal holds it either, so nothing here can tell whether it is between turns — and SendMessage succeeding only proves the message was admitted, never that a turn opened on it. Refusing rather than reporting a delivery this route cannot prove. A session in an hc terminal is reached with `channel-send hc <terminal-name> - <message>` (`hc ls` lists the names); one in a herdr pane, with the herdr route against the receiver's pane id.", c.tgt))
 	}
 	desc := fmt.Sprintf("%s (claude session %s)", pane, c.tgt)
 	if c.isRuling && !c.holdProven {

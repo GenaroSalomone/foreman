@@ -579,12 +579,12 @@ CT_SUBJECT_MAX_S=20     # a subject budgeted above this is listed, never run her
 CT_SUBJECT_ALLOW_S=180  # budgeted seconds this check may spend in one commit
 CT_SUBJECT_FLOOR_S="${COMMIT_TREE_SUBJECT_FLOOR_S:-20}"  # the wall limit of one subject is its budget, never less than this
 CT_SUBJECT_WALL_S="${COMMIT_TREE_SUBJECT_WALL_S:-150}"   # the wall the whole check may take
-ct_run_bounded() { # <limit s> <cwd> <subject file> <out file> → the subject's exit; 124 when the limit killed it (its whole session, stopped or not)
+ct_run_bounded() { # <limit s> <cwd> <subject file> <out file> [<arg>...] → the subject's exit; 124 when the limit killed it (its whole session, stopped or not)
   python3 -I -c '
 import os, signal, subprocess, sys
 lim, cwd, subj, out = float(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4]
 with open(out, "wb") as f:
-    p = subprocess.Popen(["nice", "-n", "10", "bash", subj], cwd=cwd, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+    p = subprocess.Popen(["nice", "-n", "10", "bash", subj] + sys.argv[5:], cwd=cwd, stdin=subprocess.DEVNULL, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
     try:
         sys.exit(p.wait(timeout=lim))
     except subprocess.TimeoutExpired:
@@ -592,11 +592,30 @@ with open(out, "wb") as f:
             try: os.killpg(p.pid, sig)
             except OSError: pass
         p.wait()
-        sys.exit(124)' "$1" "$2" "$3" "$4"
+        sys.exit(124)' "$@"
+}
+# ct_base_verdict <test-hw --base output> <subject file> <the first `not ok` line of the new tree's run> → red | green | none | unmeasured:<why>
+# `red` only when the base's own output (test-hw prints its tail as `    base| <line>`) holds THAT line: a base that is red for another reason — a clean clone
+# without the ignored files the subject reads, `env -i`, a hw-core that did not build — is not this subject's red, and a commit that broke a green subject must not
+# ride on it (review of 4f16e30ee, B1). The tail is 12 lines, so a first failure scrolled out of it reads as unmeasured: the refusal, never a wrong allowance.
+ct_base_verdict() {
+  local f="$1" n="$2" first="$3" sec v
+  grep -q 'build-core failed' "$f" 2>/dev/null && { echo "unmeasured:hw-core did not build at the base"; return 0; }
+  sec="$(awk -v h="test-hw: --base setup/tests/$n" '$0 == h { on = 1; next } /^test-hw: --base / { on = 0 } on' "$f" 2>/dev/null)"
+  v="$(printf '%s\n' "$sec" | sed -nE 's/^  [^ ]+ \([0-9a-f]+\): (red|green|none)$/\1/p' | head -n 1)"
+  case "$v" in
+    green|none) echo "$v"; return 0 ;;
+    red) ;;
+    *) echo "unmeasured:the base run gave no verdict"; return 0 ;;
+  esac
+  case $'\n'"$sec"$'\n' in
+    *$'\n'"    base| $first"$'\n'*) [ -z "$first" ] || { echo red; return 0; } ;;
+  esac
+  echo "unmeasured:the base is red, but not on this commit's failing line (another reason, or its first failure is out of the 12-line tail)"  # MUTATION-ANCHOR: 1354-M04
 }
 ct_subjects_check() {
   [ -f "$root/setup/gate-select" ] && [ -f "$root/setup/suite-data/test-budgets.json" ] && [ -f "$root/setup/hooks/suite-trigger-pattern.sh" ] || return 0
-  local changed trigger names n secs plan run=() runsecs=() later=() red=() spent=0 out rc first i limit scratch t0 timedout=0 ran=0
+  local changed trigger names bsubj n secs plan run=() runsecs=() later=() red=() hard=() spent=0 out rc first i limit scratch t0 timedout=0 ran=0 left why bv rec cost brc line base_out
   changed="$(mktemp "${TMPDIR:-/tmp}/commit-tree-changed.XXXXXX")" || return 0
   printf '%s\n' "${paths[@]}" > "$changed"
   trigger="$(bash -c '. "$1" && printf %s "$SUITE_TRIGGER_PATTERN"' _ "$root/setup/hooks/suite-trigger-pattern.sh" 2>/dev/null)" || trigger=""
@@ -633,15 +652,48 @@ for n in sorted((l.strip() for l in sys.stdin if l.strip()), key=lambda n: (b.ge
     if [ "$rc" -eq 124 ]; then  # MUTATION-ANCHOR: 1354-M03
       timedout=1; later+=("$n (${runsecs[$i]} s, FROZEN/TIMEOUT: killed after ${limit} s)"); ran=$((ran - 1))
     elif [ "$rc" -ne 0 ]; then  # MUTATION-ANCHOR: 1354-M01
-      first="$(grep -m1 '^not ok' "$out" | cut -c1-200)"
-      red+=("$n (exit $rc)${first:+: $first}")
+      first="$(grep -m1 '^not ok' "$out")"
+      red+=("$n"$'\t'"$rc"$'\t'"${runsecs[$i]}"$'\t'"$first")
     fi
   done
+  # A RED SUBJECT IS THIS COMMIT'S ONLY IF IT IS GREEN ON THE BASE (retro batch-2026-11, item 2B: 11 runs ended --blocked with finished work uncommitted over a
+  # subject already red on main). ONE `setup/test-hw --base $old <every red subject>` (a fresh clone of the parent this commit uses, `env -i`, run inside the same
+  # wall) answers for all of them; ct_base_verdict reads each one. Red on the base ON THE SAME not-ok LINE is printed and allowed; green or absent there refuses
+  # as before; anything else (timeout, no verdict, another failure, over the allowance) refuses, saying the base could not be measured. test-hw runs each subject
+  # twice (the base and this tree) beside a clone and a build, so the allowance is charged twice the budgets: the wall is the real bound. Its clone lives in
+  # $scratch/tmp, so the `rm -rf` below collects it even when the run was killed (a SIGKILL skips test-hw's own trap).
+  if [ "${#red[@]}" -gt 0 ]; then
+    bsubj=(); cost=0; why=""; base_out="$scratch/base.out"
+    for rec in "${red[@]}"; do
+      IFS=$'\t' read -r n rc secs first <<< "$rec"
+      bsubj+=("setup/tests/$n"); cost="$(awk -v c="$cost" -v s="$secs" 'BEGIN { print c + 2 * s }')"
+    done
+    left=$(( CT_SUBJECT_WALL_S - ( $(date +%s) - t0 ) ))
+    if ! awk -v t="$spent" -v c="$cost" -v m="$CT_SUBJECT_ALLOW_S" 'BEGIN { exit !(t + c <= m) }'; then  # MUTATION-ANCHOR: 1354-M07
+      why="over this commit's ${CT_SUBJECT_ALLOW_S} s allowance (the base run costs twice the budgets)"
+    elif [ "$left" -le 0 ] || [ ! -f "$root/setup/test-hw" ]; then
+      why="no wall time or no setup/test-hw left to ask"
+    else
+      mkdir -p "$scratch/tmp"; brc=0
+      TMPDIR="$scratch/tmp" ct_run_bounded "$left" "$scratch" "$root/setup/test-hw" "$base_out" --base "$old" "${bsubj[@]}" || brc=$?  # MUTATION-ANCHOR: 1354-M05
+      [ "$brc" -ne 124 ] || why="the base run timed out after ${left} s"  # MUTATION-ANCHOR: 1354-M06
+    fi
+    for rec in "${red[@]}"; do
+      IFS=$'\t' read -r n rc secs first <<< "$rec"
+      line="$n (exit $rc)${first:+: ${first:0:200}}"
+      if [ -n "$why" ]; then bv="unmeasured:$why"; else bv="$(ct_base_verdict "$base_out" "$n" "$first")"; fi
+      case "$bv" in
+        red) printf 'commit-tree: RED ON BASE TOO %s (not this commit'"'"'s; allowed)\n' "$n" >&2 ;;
+        unmeasured:*) hard+=("$line [base could not be measured: ${bv#unmeasured:}]") ;;
+        *) hard+=("$line") ;;
+      esac
+    done
+  fi
   rm -rf "$scratch"
   [ "$ran" -eq 0 ] || printf 'commit-tree: ran %s touched subject(s) of seconds%s\n' "$ran" "$([ "${#red[@]}" -eq 0 ] && printf ', all green')" >&2
   [ "${#later[@]}" -eq 0 ] || printf 'commit-tree: NOT RUN here (they stay the batch gate'"'"'s): %s\n' "$(printf '%s; ' "${later[@]}")" >&2
-  [ "${#red[@]}" -eq 0 ] || ct_refuse "a subject this commit touches is red, so it would be red in the batch gate hours later. The ref was not moved.
-$(printf '    %s\n' "${red[@]}")
+  [ "${#hard[@]}" -eq 0 ] || ct_refuse "a subject this commit touches is red, so it would be red in the batch gate hours later. The ref was not moved.
+$(printf '    %s\n' "${hard[@]}")
 Run it alone for the whole output: bash setup/tests/<n>-*.sh. Is the red the branch's or the base's: bash setup/test-hw --base \"\$(git merge-base HEAD main)\" setup/tests/<n>-*.sh"
 }
 ct_subjects_check

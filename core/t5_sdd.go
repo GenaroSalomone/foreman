@@ -36,13 +36,13 @@ func rtReadable(path string) (string, bool) {
 }
 
 var (
-	rtMarkRe     = regexp.MustCompile(`  \([^()]*\)$`)
+	rtMarkRe     = regexp.MustCompile(`  .*$`)
 	rtModelLine  = regexp.MustCompile(`^[ \t\n\v\f\r]*model=`)
 	rtEffortLine = regexp.MustCompile(`^[ \t\n\v\f\r]*effort=`)
 )
 
 // rtDispatchValue is the awk of `_next_dispatch_model`/`_next_dispatch_effort`: the value after the key on the
-// first matching line, with a trailing "  (mark)" taken off.
+// first matching line, the manifest's tail from its first "  " taken off.
 func rtDispatchValue(rundir string, key *regexp.Regexp) string {
 	text, ok := rtReadable(rundir + "/dispatch")
 	if !ok {

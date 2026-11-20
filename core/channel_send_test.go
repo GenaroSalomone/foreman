@@ -56,6 +56,11 @@ exit 0
 [ "$1" != call ] || { [ ! -f "$STUB_DIR/rpc-call-out" ] || cat "$STUB_DIR/rpc-call-out"; exit "${STUB_RPC_CALL_RC:-0}"; }
 exit "${STUB_RPC_RC:-0}"
 `)
+	// hc knows no terminal unless a test installs its own: the claude route asks it before it refuses, and the real one is the machine's.
+	script("hc", `printf 'hc %s\n' "$*" >> "$STUB_DIR/calls"
+case "$1" in ls) echo '{"terminals":[]}'; exit 0 ;; esac
+echo '{"error":{"kind":"not_found"}}'; exit 3
+`)
 	script("holdfacts", `printf 'holdfacts %s\n' "$*" >> "$STUB_DIR/calls"
 n=$(cat "$STUB_DIR/hold-undelivered" 2>/dev/null || echo 0)
 [ "$n" -le 0 ] || { echo $((n-1)) > "$STUB_DIR/hold-undelivered"; echo "holdfacts: x/pending-reply-1: state=undelivered, expected delivered"; exit 1; }
@@ -700,7 +705,7 @@ func TestChannelSendClaudeRoute(t *testing.T) {
 	w := newCSWorld(t)
 	r := w.cs("claude", "ses-1", "-", "m")
 	r.rcIs(t, 1)
-	r.has(t, "claude session ses-1 is live but is not in a herdr pane")
+	r.has(t, "claude session ses-1 is live but is not in a herdr pane", "`channel-send hc <terminal-name> - <message>`", "`hc ls`")
 	w.cs("--id", "k", "claude", "ses-1", "-", "m").has(t, "claude does not yet expose idempotent caller-supplied delivery ids")
 	w.cs("--require", "processed", "claude", "ses-1", "-", "m").has(t, "claude does not yet expose processed receipt proof")
 	// the pane is found by session id; --report is said not to apply; a wait that times out names the budget
@@ -1063,4 +1068,110 @@ func TestReplyHoldAfterRetirementDelivers(t *testing.T) {
 		t.Fatalf("a hold retired as answered refused the reply: %s%s", r.out, r.err)
 	}
 	r.has(t, "was already retired as answered")
+}
+
+// OLD: `channel-send claude t19s` (the hc terminal of brain-setup) was refused with "is not in a herdr pane … use the herdr
+// route", a route brainers in hc terminals do not have. NEW: a claude target that is live in an hc
+// terminal — named by address, name or session id — is delivered through the hc route, and one that is in none says which form works.
+func TestChannelSendClaudeTargetInAnHCTerminalIsRoutedThroughHC(t *testing.T) {
+	const sid = "11111111-2222-4333-8444-555555555555"
+	hcStub := `printf 'hc %s\n' "$*" >> "$STUB_DIR/calls"
+rec() { printf '{"address":"%s","name":"%s","state":"live","pid":%s,"cwd":"%s","turn":%s,"status":{"app":"%s","state":"idle"}}\n' "$1" "$2" "$3" "$STUB_CWD" "$(cat "$STUB_DIR/hc-turn" 2>/dev/null || echo 0)" "$4"; }
+case "$1" in
+  get) case "$2" in
+         t7|brain-setup) rec t7 brain-setup "$STUB_PID" claude-code ;;
+         t8|plain-shell) rec t8 plain-shell 1 zsh ;;
+         *) echo '{"error":{"kind":"not_found"}}'; exit 3 ;;
+       esac ;;
+  ls) echo '{"terminals":[{"address":"t8","agent":"zsh","name":"plain-shell","state":"live"},{"address":"t7","agent":"claude-code","name":"brain-setup","state":"live"}]}' ;;
+  send) n=$(cat "$STUB_DIR/hc-turn" 2>/dev/null || echo 0); echo $((n+1)) > "$STUB_DIR/hc-turn" ;;
+esac
+exit 0
+`
+	w := newCSWorld(t)
+	if err := os.WriteFile(w.bin+"/hc", []byte("#!/bin/bash\n"+hcStub), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cwd := w.dir + "/cwd"
+	os.MkdirAll(cwd, 0o755)
+	os.MkdirAll(w.dir+"/.claude/sessions", 0o755)
+	pid := os.Getpid()
+	os.WriteFile(fmt.Sprintf("%s/.claude/sessions/%d.json", w.dir, pid), []byte(fmt.Sprintf(`{"sessionId":"%s","cwd":"%s","pid":%d}`, sid, cwd, pid)), 0o644)
+	w.set("HOME", w.dir)
+	w.set("STUB_CWD", cwd)
+	w.set("STUB_PID", fmt.Sprint(pid))
+	w.set("HW_HC_PROOF_MS", "3000")
+	for _, target := range []string{"brain-setup", "t7", sid} {
+		os.WriteFile(w.stub+"/calls", nil, 0o644)
+		os.Remove(w.stub + "/hc-turn")
+		r := w.cs("claude", target, "-", "the message")
+		r.rcIs(t, 0)
+		r.has(t, "routed via hc terminal t7 (brain-setup)")
+		if !strings.Contains(w.calls(), "hc send -- t7 the message\n") {
+			t.Errorf("%s: the message did not go through hc send; calls:\n%s", target, w.calls())
+		}
+	}
+	// a session in a herdr pane stays on the claude route even when an hc terminal carries the same name (R4: pane precedence)
+	os.WriteFile(w.stub+"/agent-list.json", []byte(`{"result":{"agents":[{"agent":"claude","agent_session":{"value":"brain-setup"},"pane_id":"wC:p4"}]}}`), 0o644)
+	os.WriteFile(w.stub+"/calls", nil, 0o644)
+	w.agent("working", nil)
+	w.set("STUB_RPC_RC", "2")
+	w.set("HW_INVOKER_WAIT_MS", "5000")
+	pr := w.cs("claude", "brain-setup", "-", "the message")
+	pr.has(t, "wC:p4 (claude session brain-setup) was still working")
+	if strings.Contains(w.calls(), "hc send") || strings.Contains(pr.out+pr.err, "routed via hc") {
+		t.Errorf("a herdr-pane session was rerouted to hc; calls:\n%s", w.calls())
+	}
+	os.Remove(w.stub + "/agent-list.json")
+	w.set("STUB_RPC_RC", "0")
+	w.set("HW_INVOKER_WAIT_MS", "")
+	// a terminal that is not running claude is not a claude target, and a name nothing holds names the working form
+	for _, target := range []string{"plain-shell", "nobody"} {
+		os.WriteFile(w.stub+"/calls", nil, 0o644)
+		r := w.cs("claude", target, "-", "the message")
+		r.rcIs(t, 1)
+		r.has(t, "is live but is not in a herdr pane, and no live hc terminal holds it either", "`channel-send hc <terminal-name> - <message>`", "`hc ls`")
+		if strings.Contains(w.calls(), "hc send") {
+			t.Errorf("%s: something was sent to a target that is no claude terminal; calls:\n%s", target, w.calls())
+		}
+	}
+}
+
+// OLD: the claude->hc reroute happened inside routeClaude, after --reply-hold had been checked against vendor "claude", so
+// `channel-send --report --reply-hold <hold> claude <hc terminal>` was refused (holdfacts: "unknown route") although the same answer
+// sent with `hc <terminal>` is delivered and clears its ask. NEW: the target is normalised to hc before the hold is read, so every
+// flag the hc route takes works on it.
+func TestChannelSendClaudeTargetInAnHCTerminalTakesReplyHold(t *testing.T) {
+	w := newCSWorld(t)
+	hcStub := `printf 'hc %s\n' "$*" >> "$STUB_DIR/calls"
+n() { cat "$STUB_DIR/hc-turn" 2>/dev/null || echo 0; }
+case "$1" in
+  ls) echo '{"terminals":[{"address":"t7","agent":"claude-code","name":"","state":"live"}]}' ;;
+  get) case "$2" in t7) printf '{"address":"t7","state":"live","turn":%s,"status":{"app":"claude-code","state":"idle"},"labels":{"hw_ask_state":"delivered"}}\n' "$(n)" ;; *) exit 3 ;; esac ;;
+  send) echo $(( $(n)+1 )) > "$STUB_DIR/hc-turn" ;;
+  label) ;;
+esac
+exit 0
+`
+	os.WriteFile(w.bin+"/hc", []byte("#!/bin/bash\n"+hcStub), 0o755)
+	// the holdfacts stub refuses a hold whose route is not hc, as bin/holdfacts does for any route it does not know
+	os.WriteFile(w.bin+"/holdfacts", []byte(`#!/bin/bash
+printf 'holdfacts %s\n' "$*" >> "$STUB_DIR/calls"
+case "$*" in *"--route hc"*) exit 0 ;; esac
+echo "holdfacts: unknown route"; exit 1
+`), 0o755)
+	w.set("HW_HC_PROOF_MS", "3000")
+	hold := w.stub + "/pending-reply-1"
+	os.WriteFile(hold, []byte("logical_id=x\n"), 0o644)
+	r := w.cs("--report", "--reply-hold", hold, "claude", "t7", "-", "the answer")
+	r.rcIs(t, 0)
+	r.has(t, "routed via hc terminal t7 (unnamed)") // R4: the unnamed fallback
+	if !strings.Contains(w.calls(), "hc label t7 hw_ask_state=answered\n") {
+		t.Errorf("the answer went through the reroute but the ask was not marked answered; calls:\n%s", w.calls())
+	}
+	// R4: an hc ls that fails leaves the refusal as it was, naming the working form
+	os.WriteFile(w.bin+"/hc", []byte("#!/bin/bash\nexit 1\n"), 0o755)
+	f := w.cs("claude", "t7", "-", "the answer")
+	f.rcIs(t, 1)
+	f.has(t, "is live but is not in a herdr pane", "`channel-send hc <terminal-name> - <message>`")
 }

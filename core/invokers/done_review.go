@@ -56,10 +56,48 @@ func (c *Ctx) draftPRGate(receipt, status, project, workdir string, preflight *[
 // core package (this one cannot import it), and a test there holds the two together.
 func KnownAccount(name string) bool { return name == "default" || name == "personal" }
 
+// reviewDispatchedHere is whether done-invoker dispatches the independent review itself: a delivered build that owes it, at task 1.
+func (c *Ctx) reviewDispatchedHere(receipt, status string) bool {
+	return status == "done" && c.taskSeq() == "1" && receiptValue(receipt, "review_owed") != ""
+}
+
+// reviewTaskMax and reviewShortLen mirror core/t6_review.go (this package cannot import it); a test there holds the two together.
+const (
+	reviewShortLen = 7
+	reviewTaskMax  = 32
+)
+
+// ReviewTaskName is core's reviewTaskName: `<task>-review-<short sha>`, the build's name cut so the whole fits herdr's cap.
+func ReviewTaskName(task, short string) string {
+	suffix := "-review-" + short
+	if room := reviewTaskMax - len(suffix); len(task) > room {
+		task = strings.TrimRight(task[:room], "-")
+	}
+	return task + suffix
+}
+
+// reviewOwedNote is the last line of the report a brainer reads when done-invoker is about to dispatch the review: the report goes
+// out before the dispatch, so it says what will happen, not that it happened, and a brainer that runs `hw review` by hand anyway
+// meets the per-task dispatch lock. The reviewer's name is the one `hw review` will give it for the build's head; without a head
+// (not a git checkout) the line names no reviewer.
+func (c *Ctx) reviewOwedNote(receipt, status, workdir, task string) string {
+	if !c.reviewDispatchedHere(receipt, status) {
+		return ""
+	}
+	who := ""
+	var b bytes.Buffer
+	if rc := c.run(runOpts{stdout: &b}, "git", "-C", workdir, "rev-parse", "HEAD"); rc == 0 {
+		if sha := strings.TrimSpace(b.String()); len(sha) >= reviewShortLen {
+			who = " (reviewer " + ReviewTaskName(task, sha[:reviewShortLen]) + ")"
+		}
+	}
+	return "review: done-invoker dispatches it right after this report" + who + " — do not run hw review; if hw status shows no reviewer in a few minutes, run it"
+}
+
 // reviewAfterDelivery runs `hw review <lane> <task>` once the report is delivered: task 1 of a build that owes the review (a
 // re-task's re-check is the brainer's `hw next` onto the kept reviewer pane). It never changes the report's outcome.
 func (c *Ctx) reviewAfterDelivery(hwBin, receipt, status, project, task string) {
-	if status != "done" || c.taskSeq() != "1" || receiptValue(receipt, "review_owed") == "" {
+	if !c.reviewDispatchedHere(receipt, status) {
 		return
 	}
 	// `review` is a brainer verb: bin/hw refuses it for an executor (HW_TASK/HW_RUN set), so the invoker, which is hw's own, runs it

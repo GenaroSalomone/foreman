@@ -13,7 +13,7 @@ import (
 
 var nextKnownKeys = map[string]bool{"agent": true, "model": true, "effort": true, "sdd": true, "placement": true, "worktree": true,
 	"database": true, "invoker": true, "requires": true, "requires-agents": true, "kind": true, "base": true,
-	"decision": true, "delivery": true, "boundary": true, "deployed_check": true, "sandbox": true, "review": true, "review-skip": true, "review_of": true, "plugins": true,
+	"decision": true, "delivery": true, "boundary": true, "deployed_check": true, "sandbox": true, "review": true, "review-skip": true, "review_of": true, "round_of": true, "plugins": true,
 	"requested_by": true, "asked": true, "authorizes": true, "secrets": true, "skills": true}
 
 // nextBriefDeclares is _brief_declares: "key\tvalue" per declared key, "__malformed__\t…" and
@@ -303,6 +303,25 @@ func (a *app) nextReviewGate(brief string) {
 	}
 }
 
+// nextRoundGate refuses `review: none` on a fix round: a brief that declares round_of answers a review, and a run whose receipt holds
+// review_run is the build `hw review` already judged, so its next task owes the re-check like the first. Nothing is sent.
+func (a *app) nextRoundGate(brief, rundir string) {
+	if brief == "" || reviewRawOf(nextFmValue("review", brief)) != "none" {
+		return
+	}
+	switch {
+	case nextFmValue("round_of", brief) != "":
+		a.die(roundNoneRefusal("round_of: "+nextFmValue("round_of", brief)) + " NOTHING was sent and the counter did NOT move.")
+	case len(receiptValues(rundir, "review_run")) > 0:
+		a.die(roundNoneRefusal("a run that already has a review (review_run in "+rundir+"/receipt.jsonl)") + " NOTHING was sent and the counter did NOT move.")
+	}
+}
+
+// roundNoneRefusal is the one sentence both doors of the round-of rule say.
+func roundNoneRefusal(what string) string {
+	return "the brief declares `review: none`, but it is a fix round (" + what + "): a fix round answers a review and owes the next one. Drop `review: none`; `hw review` re-checks only what the fix changed."
+}
+
 // nextSddGate is the check the launch makes on a brief's `sdd:`: the Spec Kit flow was removed (2026-11-16), so a brief that
 // still asks for it refuses the re-task before anything is sent. Any other value is read as none, as the launch reads it.
 func (a *app) nextSddGate(brief string) {
@@ -326,6 +345,25 @@ func (a *app) nextReviewReceipt(rundir, key, brief string) {
 		return
 	}
 	a.receiptInto(rundir, key, mode, reviewReceiptSource(brief, mode, nextPluginsDeclared(brief)))
+}
+
+// nextReviewerReceipts is lch.reviewerReceipts for a re-task: the gate keys of a `kind: review` brief with `review_of:`, keyed by the
+// task they belong to. Without them a reviewer re-tasked by `hw next` closed unbound: done-invoker runs ReviewerGate only on
+// `review_of_t<n>`, so a verdict for a head its worktree was not at went through unchecked.
+func (a *app) nextReviewerReceipts(rundir, seq, brief string) {
+	if nextKindForClose(brief) != "review" {
+		return
+	}
+	of := nextFmValue("review_of", brief)
+	if of == "" {
+		return
+	}
+	src := "brief review_of: and review: in " + brief + " at hw next"
+	a.receiptInto(rundir, "review_of_t"+seq, of, src+" — the build and the SHA this run judges: its review.md must name this head")
+	list, _ := reviewListOf(reviewRawOf(nextFmValue("review", brief)))
+	if pieces := reviewerPieces(list); len(pieces) > 0 {
+		a.receiptInto(rundir, "plugin_review_t"+seq, strings.Join(pieces, ","), src+" — done-invoker proves each piece from the transcript, or takes a review-skip: line")
+	}
 }
 
 // nextJdAgentsReceipt is jdAgentsReceipt for a re-task: the same row, the same condition (pi, a DECLARED
@@ -409,6 +447,15 @@ func (a *app) nextCheckBriefEffort(brief, vendor, pane, running string) {
 	}
 }
 
+// nextPluginsLoaded is the plugins a pane was launched with: the receipt row `plugins` written at dispatch (absent when the
+// brief asked for none, "NOT APPLIED — …" when the vendor loads none). `hw next` and `hw review`'s re-task route both read it.
+func nextPluginsLoaded(rundir string) []string {
+	if v, rc := reviveReceiptLast(rundir+"/receipt.jsonl", "plugins"); rc == 0 && !strings.HasPrefix(v, "NOT APPLIED") {
+		return pluginsOfValue(v)
+	}
+	return nil
+}
+
 // nextCheckBriefPlugins is the `plugins:` check of a re-task brief, the twin of nextCheckBriefEffort: a plugin is loaded when
 // a session starts (claude --plugin-dir, pi -e), so hw next cannot add one to a live pane, and a re-task that declares a review
 // plugin the pane did not launch with would be told "not installed" by its own executor and close on a review-skip (MEASURED
@@ -419,10 +466,7 @@ func (a *app) nextCheckBriefPlugins(brief, vendor, pane, rundir string) {
 	if vendor != "claude" && vendor != "pi" { // a run recorded with another vendor predates the removal: not held to it, and no new dispatch can write one
 		return
 	}
-	var loaded []string
-	if v, rc := reviveReceiptLast(rundir+"/receipt.jsonl", "plugins"); rc == 0 && !strings.HasPrefix(v, "NOT APPLIED") {
-		loaded = pluginsOfValue(v)
-	}
+	loaded := nextPluginsLoaded(rundir)
 	var missing []string
 	for _, n := range nextPluginsDeclared(brief) {
 		if !has(loaded, n) { // # MUTATION-ANCHOR: 1150-G17

@@ -52,7 +52,16 @@ func realSpawn(path string, argv []string, env []string) {
 
 // tryLock takes an exclusive lock on path without waiting: held=false when another process holds it. release frees it.
 func tryLock(path string) (release func(), held bool, err error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	f, held, err := tryLockFile(path)
+	if !held {
+		return nil, false, err
+	}
+	return func() { f.Close() }, true, nil // closing the descriptor drops the lock
+}
+
+// tryLockFile is tryLock's descriptor: the caller closes it to let go.
+func tryLockFile(path string) (f *os.File, held bool, err error) {
+	f, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, false, err
 	}
@@ -63,5 +72,5 @@ func tryLock(path string) (release func(), held bool, err error) {
 		}
 		return nil, false, err
 	}
-	return func() { f.Close() }, true, nil // closing the descriptor drops the lock
+	return f, true, nil
 }

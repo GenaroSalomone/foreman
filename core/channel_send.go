@@ -84,7 +84,8 @@ type chanSend struct {
 	allowTurnEnded, isReport, isRuling            bool
 	holdProven, reportProven                      bool
 	vendor, tgt, endpoint, message                string
-	witnessDetail                                 string
+	witnessDetail, pane                           string
+	paneRead                                      bool
 	probeMS                                       int64
 }
 
@@ -373,6 +374,7 @@ parse:
 		}
 	}
 	c.probeMS = 30000
+	c.claudeToHC()
 	c.checkHold()
 	c.checkReportState()
 	c.setTarget(c.tgt)

@@ -168,8 +168,8 @@ func nextCurrentTask(rundir string) string {
 	return n
 }
 
-// nextDispatchModel is _next_dispatch_model: the value after `model=` on the first such line, a trailing
-// `  (mark)` anchored at its end taken off.
+// nextDispatchModel is _next_dispatch_model: the value after `model=` on the first such line, the manifest's
+// tail from its first `  ` taken off.
 func nextDispatchModel(rundir string) string {
 	b, err := os.ReadFile(rundir + "/dispatch")
 	if err != nil {
@@ -239,7 +239,8 @@ func nextLeaseEligibility(rundir, seq string) string {
 	return "expired"
 }
 
-var nextReMark = regexp.MustCompile(`  \([^()]*\)$`)
+// nextReMark is the manifest's tail: from the first run of two spaces (`  (chosen) / sonnet suggested — …`) on.
+var nextReMark = regexp.MustCompile(`  .*$`)
 
 // nextLeaseIneligible is _chaining_lease_ineligible_message.
 func nextLeaseIneligible(state, seq, rundir string) string {

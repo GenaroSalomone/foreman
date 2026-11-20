@@ -64,7 +64,7 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
         "checkout","checkout_var","base","base_ref_prefix","branch","worktree_root","worktree","ports",
         "hint_aliases","build","agents_from","deps","db","devserver","reap","sweep","brain_guard","brief_note","qa_target",
         "model_floor","model_pins","subagent_model","pi_subagent_models","requested_by","suite_lock","org",
-        "opencode_config_dir"]) as $fields  # opencode_config_dir: RETIRED, accepted and ignored for one release (core/lanes.go agrees)
+        "review_default","review_post","opencode_config_dir"]) as $fields  # opencode_config_dir: RETIRED, accepted and ignored for one release (core/lanes.go agrees)
     | ({model_floor: ["tier","accepts"], deps: ["line","contention"], db: ["line","provisioned","no_worktree","no_db_inert"],
         devserver: ["start","line","off"], reap: ["copies","copies_from","max_worktrees","max_disk_pct","max_build_gb"]}) as $sub
     | ([$lanes | to_entries[] | .key as $l | .value | to_entries[] | select($sub[.key] != null) | .key as $f
@@ -79,6 +79,12 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
     | ([$lanes | to_entries[] | .key as $l | select(.value.suite_lock != null)
         | if (.value.suite_lock | IN("lane", "none")) then empty else "\($l).suite_lock" end]) as $badlock
     | if ($badlock | length) == 0 then . else error("suite_lock is lane or none: \($badlock | join(", "))") end
+    | ([$lanes | to_entries[] | .key as $l | select(.value.review_default != null)
+        | if (.value.review_default | type == "array" and all(IN("thermo", "tests", "ponytail", "pstack", "comment-sicko"))) then empty else "\($l).review_default" end]) as $badrd
+    | if ($badrd | length) == 0 then . else error("review_default is a list of thermo, tests, ponytail, pstack, comment-sicko (judgment-day is a risk call made per brief, never a lane default): \($badrd | join(", "))") end
+    | ([$lanes | to_entries[] | .key as $l | select(.value.review_post != null)
+        | if (.value.review_post | IN("pr-description", "none")) then empty else "\($l).review_post" end]) as $badrp
+    | if ($badrp | length) == 0 then . else error("review_post is pr-description or none: \($badrp | join(", "))") end
     | ([$lanes | to_entries[] | .key as $l | select(.value.artifacts != null)
         | if (.value.artifacts | IN("deny", "default", "personal")) then empty else "\($l).artifacts" end]) as $badart
     | if ($badart | length) == 0 then . else error("artifacts is deny or an account (default, personal): \($badart | join(", "))") end
@@ -155,6 +161,8 @@ lane_config_load() {  # $1 = brain root; reads $1/projects.json
           emit($l; "pi_subagent_models"; ($v.pi_subagent_models // {}) | to_entries | map("\(.key)=\(.value.model)|\(.value.thinking // "inherit")") | join(" ")),
           emit($l; "requested_by"; $v.requested_by // ""),
           emit($l; "suite_lock"; $v.suite_lock // ""),
+          emit($l; "review_default"; ($v.review_default // []) | join(",")),
+          emit($l; "review_post"; $v.review_post // "none"),
           emit($l; "account"; $v.account // "default"),
           emit($l; "artifacts"; $v.artifacts // $v.account // "default"),
           emit($l; "repoless"; if $v.repoless == true then "1" else "" end),

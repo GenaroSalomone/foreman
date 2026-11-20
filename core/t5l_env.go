@@ -573,6 +573,7 @@ func (l *lch) writeRunEnv(workdir, extra, invoker string) {
 	}
 	l.pluginReviewReceipt(dir)
 	l.reviewOwedReceipt(dir)
+	l.priorReviewReceipt(dir)
 	l.reviewerReceipts(dir)
 	l.jdAgentsReceipt(dir)
 	if l.reportToChosen {

@@ -139,6 +139,7 @@ func (a *app) nextDeliver(s *nextState, nextSeq string) int {
 	// THE REVIEW THE NEW BRIEF CHOSE, keyed by task like the boundary above.
 	if s.brief != "" {
 		a.nextReviewReceipt(s.rundir, "review_t"+nextSeq, s.brief)
+		a.nextReviewerReceipts(s.rundir, nextSeq, s.brief)
 	}
 	if err := os.WriteFile(s.rundir+"/task", []byte(nextSeq+"\n"), 0o666); err != nil { // # MUTATION-ANCHOR: 862-G24
 		release()
@@ -554,8 +555,8 @@ func nextOr(v, d string) string {
 	return v
 }
 
-// nextDispatchEffort is _next_dispatch_effort's reading for the ledger: the `effort=` value, its trailing
-// `  (mark)` taken off.
+// nextDispatchEffort is _next_dispatch_effort's reading for the ledger: the `effort=` value, the manifest's
+// tail from its first `  ` taken off.
 func nextDispatchEffort(rundir string) string {
 	b, err := os.ReadFile(rundir + "/dispatch")
 	if err != nil {

@@ -95,7 +95,7 @@ func closesIndependent(f *promptFacts) bool { return f.build && f.independent }
 // pi loads no ~/.claude/CLAUDE.md, so for pi this line is the only carrier of the rule that a delegate inherits no remote access.
 func hasNoRemoteLine(f *promptFacts) bool { return f.vendor == "pi" && !hasAuthorization(f) }
 func noRemoteText(*promptFacts) string {
-	return "No remote operation is authorized for this task, for you or a child: stay local, and report what needs one as blocked."
+	return "No remote operation is authorized for this task, for you or a child: stay local; report what needs one as blocked."
 }
 
 // THE GUARD A PI EXECUTOR IS JUDGED BY IS NOT THE ONE ITS BRANCH CARRIES. MEASURED 2026-11-04 (retro of
@@ -115,6 +115,7 @@ func piGuardText(*promptFacts) string {
 }
 
 func noSpecialists(f *promptFacts) bool { return f.piNote == "" && f.specialists == "" }
+
 const noSpecialistsLine = "No specialist subagents in this lane (no ops-investigator, no qa-tester)."
 
 func noSpecialistsText(*promptFacts) string { return noSpecialistsLine } // # MUTATION-ANCHOR: 847-C-05
@@ -150,6 +151,7 @@ var promptBlocks = []promptBlock{
 	{"close-judgment-day", grpClose, closesWithJD, closeJudgmentDayText},
 	{"close-plugins", grpClose, closesWithPlugins, func(f *promptFacts) string { return reviewPluginsNote(f.plugins) }},
 	{"close-independent", grpClose, closesIndependent, closeIndependentText},
+	{"smallest-change", grpClose, isBuild, func(*promptFacts) string { return smallestChangeNote }},
 	{"brief", grpBrief, pAlways, func(f *promptFacts) string { return f.briefText }},
 }
 
@@ -189,23 +191,22 @@ func retaskOpenText(f *promptFacts) string {
 // askNote stays whole on every vendor: the measured gap is a pi executor that ignored a prohibition the brief itself wrote
 // (deepseek), and the challenge is the brainer's only instrument for a wrong one.
 const askNote = `ASK OR CHALLENGE, NEVER GUESS. Only your brainer decides what the brief does
-not; ask once, then end your turn: the reply arrives as your next prompt. A brief that forbids what you measured is
-a --challenge — evidence, not opinion, and it spends no ask — and you hold until
-the ruling arrives, then act on it in this same task. A workaround hides the gap
-from the only person who could close it.`
+not; ask once. A brief that forbids what you measured is
+a --challenge — evidence, not opinion; it spends no ask — and you hold until
+the ruling arrives, then act on it in this same task. A workaround hides the gap from whoever could close it.`
 
 const epistemicNote = `BRIEF EPISTEMIC SAFEGUARD.
 
 MEASURED — act only on a claim whose evidence you can name: a file:line, a
 command and its output, an engram id. A heading, a citation or the brief's own
 confidence is not evidence.
-UNESTABLISHED — a cause you cannot evidence stays labelled in your report; it
-does not become a fact on the way into code.
+UNESTABLISHED — a cause you cannot evidence stays labelled in your report, never
+a fact on the way into code.
 CONSTRAINTS — the brief's Limits and Verification are the task, not advice
 about it.
 
 A remedy resting on an UNESTABLISHED cause is a contradiction to report, not a
-fix to apply. A remedy the evidence supports is yours to execute without asking.
+fix to apply; one the evidence supports is yours to execute without asking.
 Where the brief's Limits restrict what you run, the brief wins; the checks
 done-invoker makes do not move.`
 
@@ -248,12 +249,12 @@ done-invoker and ask-invoker are shell commands in ` + f.binDir + `, not tools:
     ` + f.binDir + `/done-invoker "<what you established; the engram #ids; 900 chars max>"   # rehearse: done-invoker --check
     ` + f.binDir + `/done-invoker --blocked "<what stopped you; what would unblock it>"   # you stay; a ruling resumes this task — never --retask it
     ` + f.binDir + `/ask-invoker "<one question, 600 chars max>"   # 3 per task; then END YOUR TURN: the reply arrives as your next prompt (never sleep or poll)
-    ` + f.binDir + `/ask-invoker --challenge "<what the brief forbids> :: <your evidence against it>"   # own budget; hold until ruled
+    ` + f.binDir + `/ask-invoker --challenge "<what the brief forbids> :: <your evidence against it>"   # own budget
 
 No question tool reaches a person. A missing tool, capability or credential is a
 --blocked report, never a silent stop.
 
-A friction (a tool, hook or doc that cost you time): mem_save with topic_key
+A friction (a tool, hook or doc that cost time): mem_save with topic_key
 `+f.lane+`/`+f.task+`/friction, its #id in your done summary; never channel-send it.`
 }
 
@@ -360,7 +361,7 @@ func closeJudgmentDayText(f *promptFacts) string {
 		diffFile = ""
 	}
 	return judgmentDayWithPlugins(head+"\n"+
-		"2. Run "+skill+" over `git diff \"$(hw review-range)\"..HEAD` (the branch point computed now, never a range of your own) "+judges+"."+diffFile+" At most two rounds. "+rule+
+		"2. Run "+skill+" over `git diff \"$(hw review-range)\"..HEAD` (computed now, never a range of your own) "+judges+"."+diffFile+" At most two rounds. "+rule+
 		"If hw review-range fails: --blocked. An empty range is reported, not judged. After a rebase, run `hw review-delta <judged-base> <judged-head>` and do what it prints."+judgeSpecText(f.briefText)+"\n"+
 		"3. The skill's fix-round question needs no answer here: this brief is the authorization. Apply the fixes both judges confirm; judges that contradict each other, or anything left after round two, is ESCALATED: report it, do not wait.\n"+
 		"4. The report carries the judged range (base SHA..head SHA), the verdict APPROVED or ESCALATED"+report+", and, separately, each severe finding only ONE judge raised (unconfirmed: fix it only once reproduced), with its file:line.", f.plugins)
@@ -431,6 +432,9 @@ bypass classes the judges found. Two rejected designs mean the approach is
 your brainer's call.`, f.boundary, end)
 }
 
+// smallestChangeNote is the rule the brief template's Limits carried and no executor read (1 of 467 briefs copied it): said to every build.
+const smallestChangeNote = `Make the smallest change that meets Done when: delete or reuse before adding; no new flag, alias or switch unless a Done-when rule needs it.`
+
 const checksNote = `Before working, write $HW_ARTIFACTS/checks.md: one row per requirement of the
 brief's Verification section and per numbered goal —
 
@@ -439,7 +443,8 @@ brief's Verification section and per numbered goal —
 verdict is exactly pass, fail or unresolved; evidence is a command and its
 result, or a file:line. Fill it in as you go: done-invoker refuses a missing
 file, no rows, an empty verdict, or any fail row — a requirement you did not
-meet closes --blocked, never done.`
+meet closes --blocked, never done.
+An item the task drops is a ` + "`pass`" + ` row with ` + "`dropped: <proof>`" + ` as evidence; a DROPPED verdict is refused.`
 
 // consultantNote is the consultant's delivery format (kind design + asked investigate): injected, not a gate.
 const consultantNote = `You are the consultant: the brainer decides, you advise. Deliver in this order:
@@ -457,10 +462,9 @@ The artifact goes to $HW_ARTIFACTS and the findings to engram with a topic_key.`
 // the brainer's (2026-11-09: executors kept running it and the brainer killed five). What done-invoker checks does not move.
 func behaviourFixText(f *promptFacts) string {
 	s := `A behaviour fix ships the test that fails on the old code. Prove it: revert
-the fix, watch that test go red, restore it, watch it go green, and say so in
-the commit. An existing expectation that asserts the old behaviour is the
-defect written a second time: change it. The one exception is a refactor — it
-changes no expectation, and a refactor that does has broken something.`
+the fix, see that test red, restore it, see it green, and say so in the commit. An existing expectation that asserts the old behaviour is the
+defect written a second time: change it. A refactor is the exception: it
+changes no expectation, and one that does has broken something.`
 	if f.fastGate {
 		s += `
 

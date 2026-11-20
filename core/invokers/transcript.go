@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -196,6 +197,34 @@ func scanTranscripts(files []string, since time.Time, newExtractor func() transc
 	return p, nil
 }
 
+// looseBool reads a JSON flag the way Claude Code records it: the string "true" (367 of 367 run_in_background flags in 20 days of
+// transcripts) as well as the bool. Anything else is false and never an error, so one odd field cannot drop the whole line.
+type looseBool bool
+
+func (b *looseBool) UnmarshalJSON(raw []byte) error {
+	*b = string(raw) == "true" || string(raw) == `"true"`
+	return nil
+}
+
+// backgroundAgent is true for an Agent call that is not a judge and was launched in the background: it answers its tool_use only with
+// "Async agent launched", so the launch proves the start and not the run (a review agent such as pstack:comment-sicko launched this way
+// was the 2026-11-09 friction). The run is proved when its <task-notification> reports it completed (agentNotification): a background
+// agent that never completes proves nothing. The flag is only a hint, since most async launches carry none (632 of 643 in 40
+// transcripts): a call without it is taken back when its tool_result says "Async agent launched" (asyncResult), and proved the same way.
+// A judge's background round is read from its notification too (judgeNotification).
+func backgroundAgent(subagentType string, runInBackground looseBool) bool {
+	return bool(runInBackground) && !isJudgeName(subagentType)
+}
+
+// asyncLaunched is the text a background Agent call is answered with, in place of the agent's report.
+const asyncLaunched = "Async agent launched"
+
+// agentLaunch is a recorded foreground Agent call, kept to take back when its tool_result says it ran async.
+type agentLaunch struct {
+	name  string
+	group int // index in TranscriptProof.Groups
+}
+
 // claudeExtractor reads a claude jsonl line: a `Skill` tool_use proves the skill it names, and an `Agent`/`Task`
 // tool_use proves its `subagent_type`. A call is recorded on one line, so every assistant tool_use counts.
 type claudeExtractor struct {
@@ -206,9 +235,19 @@ type claudeExtractor struct {
 	judgeRound int             // its index in TranscriptProof.JudgeRounds
 	judgeByUse map[string]int  // tool_use id of a judge call -> its round, to put its result in it
 	judgeSeen  map[string]bool // task-notification results already added: Claude Code repeats one under several line types
+
+	launches map[string]agentLaunch // tool_use id of a non-judge Agent call still waiting for its result -> what to retract if it says async
+	pending  map[string]string      // tool_use id of a background non-judge call -> its agent name, until its notification says completed
 }
 
-func (*claudeExtractor) flush(*TranscriptProof) {}
+// flush puts the agent names that survived into Names: Groups holds exactly the foreground calls left after the retractions.
+func (e *claudeExtractor) flush(p *TranscriptProof) {
+	for _, g := range p.Groups {
+		for _, n := range g {
+			p.Names[n] = true
+		}
+	}
+}
 
 func (e *claudeExtractor) line(raw []byte, p *TranscriptProof) {
 	var line struct {
@@ -219,6 +258,7 @@ func (e *claudeExtractor) line(raw []byte, p *TranscriptProof) {
 		} `json:"message"`
 	}
 	if json.Unmarshal(raw, &line) == nil && line.Type == "user" {
+		e.asyncResult(line.Message.Content, p)
 		e.judgeResult(raw, p)
 		return
 	}
@@ -234,27 +274,18 @@ func (e *claudeExtractor) line(raw []byte, p *TranscriptProof) {
 		Type  string `json:"type"`
 		Name  string `json:"name"`
 		Input struct {
-			Skill        string `json:"skill"`
-			SubagentType string `json:"subagent_type"`
-			Prompt       string `json:"prompt"`
+			Skill           string    `json:"skill"`
+			SubagentType    string    `json:"subagent_type"`
+			Prompt          string    `json:"prompt"`
+			RunInBackground looseBool `json:"run_in_background"`
 		} `json:"input"`
 	}
 	if json.Unmarshal(line.Message.Content, &blocks) != nil {
 		return
 	}
 	for _, b := range blocks {
-		if b.Type != "tool_use" {
-			continue
-		}
-		switch b.Name {
-		case "Skill":
-			if b.Input.Skill != "" {
-				p.Names[b.Input.Skill] = true
-			}
-		case "Agent", "Task":
-			if b.Input.SubagentType != "" {
-				p.Names[b.Input.SubagentType] = true
-			}
+		if b.Type == "tool_use" && b.Name == "Skill" && b.Input.Skill != "" {
+			p.Names[b.Input.Skill] = true
 		}
 	}
 	// A judge launch: one assistant message is one round (two judges in a parallel call, or one in a relaunch), and its
@@ -278,29 +309,110 @@ func (e *claudeExtractor) line(raw []byte, p *TranscriptProof) {
 	}
 	// One assistant message with two Agent/Task tool_uses is ONE parallel call: that is the shape a
 	// Judgment Day needs, and the reason the group is kept (1241's sibling, retro-fixes-rc3 item 7).
+	// Claude Code writes each tool_use block of ONE parallel assistant message as its own jsonl line, all sharing
+	// message.id (measured: two Agent calls of one message on lines 388 and 390 of a real transcript), so the
+	// group is the message, not the line. A line with no id is its own group.
+	gi, merge := len(p.Groups), line.Message.ID != "" && line.Message.ID == e.lastID && e.lastGroup < len(p.Groups)
+	if merge {
+		gi = e.lastGroup
+	}
 	var group []string
 	for _, b := range blocks {
-		if b.Type == "tool_use" && (b.Name == "Agent" || b.Name == "Task") && b.Input.SubagentType != "" {
-			group = append(group, b.Input.SubagentType)
+		if b.Type != "tool_use" || (b.Name != "Agent" && b.Name != "Task") || b.Input.SubagentType == "" {
+			continue
+		}
+		if backgroundAgent(b.Input.SubagentType, b.Input.RunInBackground) {
+			e.await(b.ID, b.Input.SubagentType) // proved by its completed notification, not by the launch
+			continue
+		}
+		group = append(group, b.Input.SubagentType)
+		if b.ID != "" && !isJudgeName(b.Input.SubagentType) {
+			if e.launches == nil {
+				e.launches = map[string]agentLaunch{}
+			}
+			e.launches[b.ID] = agentLaunch{name: b.Input.SubagentType, group: gi}
 		}
 	}
 	if len(group) == 0 {
 		return
 	}
-	// Claude Code writes each tool_use block of ONE parallel assistant message as its own jsonl line, all sharing
-	// message.id (measured: two Agent calls of one message on lines 388 and 390 of a real transcript), so the
-	// group is the message, not the line. A line with no id is its own group.
-	if line.Message.ID != "" && line.Message.ID == e.lastID && e.lastGroup < len(p.Groups) {
-		p.Groups[e.lastGroup] = append(p.Groups[e.lastGroup], group...)
+	if merge {
+		p.Groups[gi] = append(p.Groups[gi], group...)
 		return
 	}
 	p.Groups = append(p.Groups, group)
-	e.lastID, e.lastGroup = line.Message.ID, len(p.Groups)-1
+	e.lastID, e.lastGroup = line.Message.ID, gi
+}
+
+// asyncResult takes back a foreground-looking Agent call whose tool_result is "Async agent launched": Claude Code runs most agents
+// async without the input flag, and such a call proves the start, not the run. A judge is never taken back (judgeNotification).
+func (e *claudeExtractor) asyncResult(content json.RawMessage, p *TranscriptProof) {
+	if len(e.launches) == 0 {
+		return
+	}
+	var blocks []struct {
+		Type      string          `json:"type"`
+		ToolUseID string          `json:"tool_use_id"`
+		Content   json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(content, &blocks) != nil {
+		return
+	}
+	for _, b := range blocks {
+		l, ok := e.launches[b.ToolUseID]
+		if b.Type != "tool_result" || !ok {
+			continue
+		}
+		delete(e.launches, b.ToolUseID) // answered: only a result that says async takes the call back, and the map drains
+		if !strings.HasPrefix(textOfContent(b.Content), asyncLaunched) {
+			continue
+		}
+		if i := slices.Index(p.Groups[l.group], l.name); i >= 0 {
+			p.Groups[l.group] = slices.Delete(p.Groups[l.group], i, i+1)
+		}
+		e.await(b.ToolUseID, l.name)
+	}
+}
+
+// await keeps a background non-judge call until its notification says it completed.
+func (e *claudeExtractor) await(id, name string) {
+	if id == "" {
+		return
+	}
+	if e.pending == nil {
+		e.pending = map[string]string{}
+	}
+	e.pending[id] = name
+}
+
+// agentNotification proves a background non-judge agent from the <task-notification> that reports it completed: the run, which its
+// "Async agent launched" answer did not show. It joins the proof as a group of its own, since it did not run in the foreground
+// beside its siblings. Any other status (failed, killed) proves nothing.
+func (e *claudeExtractor) agentNotification(text string, p *TranscriptProof) {
+	if len(e.pending) == 0 || !strings.Contains(text, "<task-notification>") {
+		return
+	}
+	use := notifyUseRe.FindStringSubmatch(text)
+	if use == nil || !strings.Contains(text, "<status>completed</status>") {
+		return
+	}
+	name, ok := e.pending[use[1]]
+	if !ok {
+		return
+	}
+	delete(e.pending, use[1]) // Claude Code repeats a notification under several line types
+	p.Groups = append(p.Groups, []string{name})
+}
+
+// notification reads a <task-notification> for both kinds of background agent: a judge's round and any other agent's proof.
+func (e *claudeExtractor) notification(text string, p *TranscriptProof) {
+	e.agentNotification(text, p)
+	e.judgeNotification(text, p)
 }
 
 // judgeResult adds to its round the text of a `user` line's tool_result that answers a judge call.
 func (e *claudeExtractor) judgeResult(raw []byte, p *TranscriptProof) {
-	if len(e.judgeByUse) == 0 {
+	if len(e.judgeByUse) == 0 && len(e.pending) == 0 {
 		return
 	}
 	var line struct {
@@ -319,7 +431,7 @@ func (e *claudeExtractor) judgeResult(raw []byte, p *TranscriptProof) {
 	}
 	var notice string
 	if json.Unmarshal(line.Message.Content, &notice) == nil { // a background judge: its answer is a task-notification, not a tool_result
-		e.judgeNotification(notice, p)
+		e.notification(notice, p)
 		return
 	}
 	if json.Unmarshal(line.Message.Content, &blocks) != nil {
@@ -343,7 +455,7 @@ func (e *claudeExtractor) judgeAttachment(raw []byte, p *TranscriptProof) {
 		} `json:"attachment"`
 	}
 	if json.Unmarshal(raw, &line) == nil && line.Attachment.Type == "queued_command" {
-		e.judgeNotification(line.Attachment.Prompt, p)
+		e.notification(line.Attachment.Prompt, p)
 	}
 }
 

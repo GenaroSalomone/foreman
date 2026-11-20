@@ -16,7 +16,48 @@
                        concurrent work — recorded in the manifest)
     --no-reuse-check   legacy exact alias for --fresh
 
-BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md has the whole block)
+BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md lists the ones in use, this is the one owner of what each means)
+    kind: build|explore|audit|review|design
+                       what the task IS. A model the lane marks build-only is refused for
+                       explore/audit/review. `design` + `asked: investigate` + `decision:`
+                       is the consultant (fable, effort low); `design` + `asked: build`
+                       meets the build ceiling (`top_tier_why:`). `build` silences the name
+                       heuristic for a task like `fix-the-audit-script`.
+    requested_by: "<who, date: the request, quoted>"  and  asked: investigate|build
+                       what was asked for. hw refuses a dispatch without it where the lane
+                       requires one and warns elsewhere; `investigate` does not implement.
+    base: <branch>     the branch the worktree is built on; declare it on any task whose
+                       result is measured. A check, never a source.
+    agent: claude|pi   a check against the resolved vendor, like model:.
+    sdd: none          accepted and ignored.
+    requires: browser|subagents|repo|database  (comma-separated)
+                       what the task NEEDS. hw warns, never refuses, when the target may
+                       not have it: it knows the vendor, not what the session can reach.
+    authorizes: <destination> :: <operation> :: <handle|none>
+                       a remote operation the operator authorized, one entry per line (a `;`
+                       does not separate entries). A Bitwarden item is not a handle: it goes
+                       in `secrets:`.
+    secrets: [<item>, …]  Bitwarden items (folder `agents`) the task needs, by name, never a
+                       value; hw checks each is there before building. The executor reaches
+                       one only as `hw secret run <item> --as VAR -- <cmd>`.
+    placement: project-tab|legacy-space|here   worktree: new|none   database: own|main
+                       the dispatch fields as checks (the flags still choose).
+    invoker: <pane>    the brainer pane that must receive the report.
+    review-skip: <why> with `review: none`: the one opt-out of a build's independent
+                       review; the reason lands in the manifest.
+    release: prod      a brief that writes prod data or deploys to prod. REQUIRES
+                       env-from: and env-to: (app uuids), env-diff: {NAME: needed|not-needed}
+                       (one ruling per name that differs, no more), screens: [<name>, …]
+                       (done needs $HW_ARTIFACTS/screens/<name>.png newer than the run
+                       start; sub-views are fine) and qa: <brief> (hw dispatches it with the
+                       release; the close waits for it to report), and an `authorizes:` line
+                       covering the read: the SSH host, each app's env list, printenv in each
+                       backend container, both app uuids. hw diffs the two envs at dispatch
+                       and again at close; a name ruled needed that still differs refuses
+                       the close. Put the precheck that PRINTS the flags in Verification.
+                       Dispatched, never `hw next`.
+    rehearsal-of: <release brief>  (+ its own env-from:) refused unless that env matches the
+                       release's env-to, or every difference is ruled not-needed there.
     model: <m>         a check against the resolved dispatch, refused before
                        anything is built on disagreement; never a source.
     effort: <level>    the same, for --effort: the same levels per vendor and
@@ -39,6 +80,10 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md has the whole block)
                        line. Other kinds owe none: absent = no review. Another
                        value refuses the dispatch. `rdd` is retired: it warns
                        and runs judgment-day.
+                       A lane's review_default (projects.json) adds pieces to
+                       every reviewer of its builds; to change one build's
+                       review after dispatch, edit its brief's review: list
+                       before `hw review`, never a ruling to the builder.
     plugins: [<name>, …]  installed review plugins (thermo, ponytail, pstack)
                        loaded into THIS executor only. They are an optional
                        install step, off by default (setup/vendor/plugins/install
@@ -48,6 +93,8 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md has the whole block)
                        pi: one -e <plugin dir> each (skills and extension);
                        A name that is not installed refuses the dispatch before anything is built,
                        naming the command that installs them.
+                       `webguide` (Chrome's modern web guidance) is guidance loaded at build time, not a
+                       review piece: name it here on a brief that touches UI, never in `review:`.
     boundary: <what must never cross>
                        a build is not accepted as done without
                        $HW_ARTIFACTS/design-judgment.md naming it and ending

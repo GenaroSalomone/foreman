@@ -263,8 +263,8 @@ loop:
 	// -- a build closes on checks.md
 	checksNote := ""
 	if status == "done" { // 818-M05
-		if ck := receiptValue(receipt, "checks_required_t"+c.taskSeq()); ck != "" { // 818-M04
-			n, err := checksGate(artifacts, reviewOf != "")
+		if ck := receiptValue(receipt, "checks_required_t"+c.taskSeq()); ck != "" && reviewOf == "" { // 818-M04; a reviewer owes no rows, whatever an older receipt of it says
+			n, err := ChecksGate(artifacts)
 			if err != nil {
 				return err
 			}
@@ -309,8 +309,10 @@ loop:
 				return err
 			}
 			checksNote += note
-			if err := PluginEvidenceGate(skills, summary, artifacts); err != nil {
-				return err
+			if reviewOf == "" { // a reviewer's pieces are proved by its transcript alone: it leaves no checks.md row per piece
+				if err := PluginEvidenceGate(skills, summary, artifacts); err != nil {
+					return err
+				}
 			}
 			unverified := ""
 			if proof == nil {
@@ -487,6 +489,9 @@ loop:
 	}
 	msg := head + "\nEnvelope: " + envelope + ". Process this envelope even if your inbox coalesced it\nwith other messages.\n\n" +
 		retaskNote + summary + "\n\n" + tail
+	if note := c.reviewOwedNote(receipt, status, workdir, task); note != "" {
+		msg += "\n" + note
+	}
 
 	publishDone := func(state string) (int, error) {
 		tokens, err := tokensJSON(append([]pair{
@@ -574,6 +579,7 @@ loop:
 	os.Remove(stateDir + "/queued") // a direct delivery after the reopen supersedes the queued one
 	c.transcriptAppend(stateDir, "REPORT", envelope, summary)
 	publishDone("delivered")
+	c.ledgerReported(project, task, status)
 	c.reviewAfterDelivery(hwBin, receipt, status, project, task) // the build's independent review is dispatched once its report is safe
 
 	// -- close only after receiver-owned delivery proof

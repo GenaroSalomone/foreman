@@ -246,6 +246,8 @@ func (d *doneRun) run(proj, task string) int {
 		a.snapshotDoneReport(rundir)
 	}
 	d.inUseGuard(proj, task, rundir)
+	d.ledgerOwed(proj, task, rundir)
+	d.ledgerReported(proj, task, rundir)
 	if rundir != "" && isFile(doneTaskDir(rundir)+"/reopened") {
 		os.Remove(doneTaskDir(rundir) + "/reopened")
 		a.info("run was reopened by hw revive; closing it clears that marker")

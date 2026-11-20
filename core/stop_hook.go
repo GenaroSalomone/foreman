@@ -8,7 +8,7 @@ package main
 //
 //	guards 1-3   the action is `stop`, the session is a herdr or herdr-core pane, the payload is not a subagent's (`"agent_id"`)
 //	             -- anything else is inert, exit 0
-//	brainer      renew the brainer's engram session lease; then, when ENGRAM_PROJECT is `brain` and this is no hw run,
+//	brainer      renew the brainer's engram session lease; then, when neither HW_TASK nor HW_RUN is set (whatever the engram label),
 //	             refuse a handback in the final paragraph (the Python heredoc of the bash, ported below)
 //	guards 4-6   an hw EXECUTOR (HW_TASK, HW_RUN, HW_WORKDIR), whose current task has not reported, and whose session is
 //	             the one hw registered for the run
@@ -76,7 +76,10 @@ func (h *stopHook) run(args []string, stdin io.Reader) {
 		h.renewBrainerLease()
 	}
 
-	if g("HW_RUN") == "" && g("ENGRAM_PROJECT") == "brain" { // # MUTATION-ANCHOR: 855-B01
+	// a brainer is a session with neither HW_TASK nor HW_RUN, whatever its engram label (a lane's brainer carries its lane's,
+	// not `brain`): the same predicate as bin/ledger's SessionStart hook. The lane check inside brainerHandback keeps a
+	// plain interactive session out of it.
+	if g("HW_TASK") == "" && g("HW_RUN") == "" { // # MUTATION-ANCHOR: 855-B01
 		h.brainerHandback()
 		return
 	}

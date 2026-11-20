@@ -9,3 +9,5 @@ bin/decisions first=index
 # --apply, a dispatch, done on another task …) are not here, and bin/hw
 # refuses them itself when HW_TASK/HW_RUN are set.
 bin/hw first=done,executor-turn-end,handle,help,-h,--help,--version,human-boundary,output,reap,receipt,review-delta,review-range,secret,status,suite
+# gh-attach: `gh-attach --check` and `gh-attach <owner/repo> <n> <image>… [--comment …]` are what docs/gh-attach.md tells a brief to hand an executor (measured 2026-11-19: a product executor was refused both). No `first=`: the first argument is the repo. The secret leg (`hw secret run … -- bash gh-attach --inner`) runs inside the script, never as an executor command.
+bin/gh-attach

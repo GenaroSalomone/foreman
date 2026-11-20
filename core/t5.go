@@ -220,6 +220,9 @@ func (d *dsp) run(argv []string) {
 	d.checkSecrets()
 	d.checkBriefAssets()
 	d.checkTask(d.task)
+	if !d.dispatchDry { // a dry run builds nothing, so it neither waits nor is waited for
+		defer d.dispatchLockTake()()
+	}
 	d.checkAgentNameFree(d.task)
 	if !d.c.t.known(d.proj) {
 		d.die("unknown project: " + d.proj + " (expected: " + d.c.t.namesBar() + ")")

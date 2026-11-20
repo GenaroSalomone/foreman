@@ -1,0 +1,299 @@
+#!/usr/bin/env python3
+"""The brainer's agreed state, in one small file per lane: <brain>/<lane>/ledger.md.
+
+    ledger [--lane L] add order|owed|fact "<text>" [--expires YYYY-MM-DD]
+    ledger [--lane L] done <n>
+    ledger [--lane L] show
+    ledger [--lane L] running <task> <pane>           (written by `hw <lane> <task>`, not by hand)
+    ledger [--lane L] report <task> done|blocked|closed   (written by done-invoker and `hw done`, not by hand)
+    ledger hook                      SessionStart hook: prints the ledger, for a brainer only
+
+WHY A FILE. A brainer's orders in force, items it owes and facts it was handed lived only in a transcript that is
+compacted several times a day (13 of 20 "not in context" operator corrections were state). The file survives
+compaction, and the SessionStart hook (matchers startup|resume|clear|compact) puts it back into context.
+
+  ## Orders in force   `- <order, with the operator's exact words in «»> (<date>; expires: <date>|standing)`
+  ## Owed              `- <item> (since <date>)`
+  ## Handed over       `- <fact> (<date>)`
+
+`add order` is `standing` unless --expires is given; --expires is only for orders. `show` numbers the entries across the
+three sections and hides an expired order; `done <n>` removes entry n of that numbering. Every write drops expired
+orders, goes through a temp file and `mv`, and is refused (exit 1, nothing written) past 4096 bytes: finish an item
+with `done` first. A line a person hand-edited in (anything not `- `) is kept verbatim where it was, never dropped, and
+`show` prints it unnumbered. `add` and `done` hold an flock on <lane>/.ledger.lock from load to write, so `hw done` and the
+brainer cannot lose each other's write. `add owed` of an item already in Owed adds nothing. The lane is --lane, else the
+first directory under the brain root that the cwd is in.
+
+AUTO ENTRIES are the ones the tools write, so no prose rule has to, and they have their own verbs: `running <task> <pane>`
+(`hw <lane> <task>`) puts `<task> running in <pane> (auto since <date>)` in Owed, keyed by the task (a re-dispatch replaces the line, it
+never adds a second); `report <task> done|blocked|closed` marks it when the report is admitted: ` — done <date>`, ` — blocked`, or
+` — closed <date>` for `hw done` of a run that never reported (only a line still running becomes closed). `add owed` never
+makes or replaces one. A write that would pass the cap first drops auto entries, finished ones first (done, closed, blocked, then
+running), oldest first: an order, a fact and an item a person added are never dropped. Only the `(auto since …)` mark makes
+an entry auto: a hand-written `x running in y` (it ends `(since …)`) is an item a person added, whatever it reads like.
+
+THE HOOK prints for a brainer — neither HW_TASK nor HW_RUN set (core/stop_hook.go asks the same) — and never fails: a hook that crashed would cost the
+session. It does not look at ENGRAM_PROJECT: a lane's brainer carries its lane's label, not `brain`, and the
+settings that register the hook load only from <brain>/<lane>, so an executor is told apart by HW_TASK/HW_RUN alone.
+Exit codes: 0 done, 1 refused (cap, bad number), 64 usage.
+"""
+import contextlib
+import datetime
+import fcntl
+import os
+import re
+import sys
+
+CAP = 4096
+SECTIONS = {"order": "Orders in force", "owed": "Owed", "fact": "Handed over"}
+ORDER_TAIL = re.compile(r"\((\d{4}-\d{2}-\d{2}); expires: (standing|\d{4}-\d{2}-\d{2})\)$")
+DATE = re.compile(r"\d{4}-\d{2}-\d{2}$")
+LOOSE = "loose"  # lines of the file that belong to no known section (a person's edit); kept, never dropped
+AUTO = re.compile(r"^- (\S+) running in \S+ \(auto since \d{4}-\d{2}-\d{2}\)(?: — (?:(done|closed) \d{4}-\d{2}-\d{2}|(blocked)))?$")
+REPORTS = ("done", "blocked", "closed")
+RECLAIM_ORDER = ("done", "closed", "blocked", "running")  # what the cap drops first among auto entries
+FOOTER = 'Write: `bin/ledger add order|owed|fact "<text>"` · `bin/ledger done <n>`'
+
+
+def empty():
+    return {k: [] for k in (*SECTIONS, LOOSE)}
+
+
+def root():
+    if os.environ.get("HW_BRAIN_ROOT"):
+        return os.path.realpath(os.environ["HW_BRAIN_ROOT"])
+    return os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+
+
+def lane_of(path, brain):
+    rel = os.path.relpath(os.path.realpath(path), brain)
+    first = rel.split(os.sep)[0]
+    return "" if first in ("", ".", "..") else first
+
+
+def today():
+    return datetime.date.today().isoformat()
+
+
+def parse(text):
+    """-> {kind: [line, ...]} from the file's text. Nothing but the title and blank lines is dropped: a line that is not
+    `- ` stays in its section (an unknown `## ` heading and what follows it go to LOOSE)."""
+    sections, cur = empty(), None
+    for n, line in enumerate(text.splitlines()):
+        if line.startswith("## "):
+            title = line[3:].strip()
+            cur = next((k for k, t in SECTIONS.items() if t == title), LOOSE)
+            if cur == LOOSE:
+                sections[LOOSE].append(line)
+        elif line.strip() and not (n == 0 and line.startswith("# ")):
+            sections[cur or LOOSE].append(line)
+    return sections
+
+
+def expired(line, now):
+    m = line.startswith("- ") and ORDER_TAIL.search(line)
+    return bool(m) and m.group(2) != "standing" and m.group(2) < now
+
+
+def visible(kind, lines, now):
+    """The lines of a section that are not an expired order: its indented continuation lines go with it, and nothing else."""
+    out, dropping = [], False
+    for l in lines:
+        if l.startswith("- "):
+            dropping = kind == "order" and expired(l, now)
+        elif not l[:1].isspace():
+            dropping = False
+        if not dropping:
+            out.append(l)
+    return out
+
+
+def render(sections, lane):
+    """LOOSE goes right after the title: a line above the first heading must not read back as part of a section."""
+    out = ["# Ledger — " + lane, ""]
+    if sections[LOOSE]:
+        out += sections[LOOSE] + [""]
+    for k, t in SECTIONS.items():
+        out += ["## " + t, ""] + sections[k] + [""]
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def load(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return parse(f.read())
+    except FileNotFoundError:
+        return empty()
+
+
+def auto(line):
+    """(task, state) of an auto Owed entry, state one of RECLAIM_ORDER; None for any other line."""
+    m = AUTO.match(line)
+    return m and (m.group(1), m.group(2) or m.group(3) or "running")
+
+
+def find_auto(owed, task):
+    """Index of the task's auto entry in Owed, None when it has none."""
+    return next((i for i, l in enumerate(owed) if (auto(l) or (None,))[0] == task), None)
+
+
+def put_auto(owed, task, line):
+    """Replace the task's auto entry by `line`, or append it; False when it is already exactly there."""
+    i = find_auto(owed, task)
+    if i is not None and owed[i] == line:
+        return False
+    if i is None:
+        owed.append(line)
+    else:
+        owed[i] = line
+    return True
+
+
+def rows(sections, now):
+    """What `show` prints, in order: [(kind, line, n)], n the entry's number (0 for a line that is not an entry). The one place
+    entries are numbered: `show` and `done <n>` both read it."""
+    out, n = [], 0
+    for k in SECTIONS:
+        for l in visible(k, sections[k], now):
+            n += l.startswith("- ")
+            out.append((k, l, n if l.startswith("- ") else 0))
+    return out
+
+
+def entries(sections, now):
+    """Live entries in display order: [(kind, line)]."""
+    return [(k, l) for k, l, n in rows(sections, now) if n]
+
+
+def reclaim(sections):
+    """Drop the auto entry the cap spares least: the oldest of the most finished state; False when there is none."""
+    owed = sections["owed"]
+    for state in RECLAIM_ORDER:
+        for l in owed:
+            if (auto(l) or (None, None))[1] == state:
+                owed.remove(l)
+                return True
+    return False
+
+
+def write(path, lane, sections, now):
+    sections["order"] = visible("order", sections["order"], now)
+    text = render(sections, lane)
+    while len(text.encode("utf-8")) > CAP and reclaim(sections):
+        text = render(sections, lane)
+    if len(text.encode("utf-8")) > CAP:
+        sys.exit("ledger: refused: %s would be %d bytes, over the %d-byte cap; `ledger done <n>` something first"
+                 % (os.path.basename(path), len(text.encode("utf-8")), CAP))
+    tmp = "%s.tmp.%d" % (path, os.getpid())
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+@contextlib.contextmanager
+def locked(path):
+    """flock <lane>/.ledger.lock from load to write: `hw done` and the brainer both write through this file."""
+    with open(os.path.join(os.path.dirname(path), ".ledger.lock"), "a") as f:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        yield
+
+
+def show(sections, now):
+    out, shown = [], None
+    for k, l, n in rows(sections, now):
+        if k != shown:
+            out.append("## " + SECTIONS[k])
+            shown = k
+        out.append("%d. %s" % (n, l[2:]) if n else l)
+    return "\n".join(sections[LOOSE] + out)
+
+
+def hook():
+    try:
+        env = os.environ
+        if env.get("HW_TASK") or env.get("HW_RUN"):
+            return
+        brain = root()
+        lane = lane_of(env.get("CLAUDE_PROJECT_DIR") or os.getcwd(), brain)
+        if lane:
+            body = show(load(os.path.join(brain, lane, "ledger.md")), today())
+            print("LEDGER — what the operator and you agreed in lane %s; it outlives compaction.\n%s\n%s" % (lane, body or "(empty)", FOOTER))
+    except Exception:  # noqa: BLE001 — a hook that raises costs the session
+        pass
+
+
+def main(argv):
+    lane = ""
+    if argv[:1] == ["--lane"] and len(argv) > 1:
+        lane, argv = argv[1], argv[2:]
+    if argv[:1] == ["hook"]:
+        return hook()
+    brain = root()
+    lane = lane or lane_of(os.getcwd(), brain)
+    if not lane or not os.path.isdir(os.path.join(brain, lane)):
+        sys.exit("ledger: no lane: run it under <brain>/<lane>, or pass --lane")
+    path, now = os.path.join(brain, lane, "ledger.md"), today()
+    cmd, rest = (argv[0] if argv else ""), argv[1:]
+    if cmd == "show" and not rest:
+        print(show(load(path), now))
+    elif cmd == "add" and len(rest) >= 2 and rest[0] in SECTIONS:
+        kind, text, opts = rest[0], rest[1].strip(), rest[2:]
+        usage = "usage: ledger add order|owed|fact \"<text>\" [--expires YYYY-MM-DD]  (--expires only for an order)"
+        if opts and kind != "order":
+            sys.exit(usage)
+        if opts and not (len(opts) == 2 and opts[0] == "--expires" and DATE.match(opts[1])):
+            sys.exit(usage)
+        if not text or "\n" in text:
+            sys.exit("ledger: the text is one non-empty line")
+        line = {"order": "- %s (%s; expires: %s)" % (text, now, opts[1] if opts else "standing"),
+                "owed": "- %s (since %s)" % (text, now),
+                "fact": "- %s (%s)" % (text, now)}[kind]
+        with locked(path):
+            sections = load(path)
+            if kind == "owed" and any(l.startswith("- %s (since " % text) for l in sections["owed"]):
+                print("ledger: already in Owed: " + text)
+            else:
+                sections[kind].append(line)
+                write(path, lane, sections, now)
+                print("ledger: added to %s" % SECTIONS[kind])
+    elif cmd == "running" and len(rest) == 2 and not any(re.search(r"\s", r) for r in rest):
+        with locked(path):
+            sections = load(path)
+            if put_auto(sections["owed"], rest[0], "- %s running in %s (auto since %s)" % (rest[0], rest[1], now)):
+                write(path, lane, sections, now)
+                print("ledger: %s running in %s" % tuple(rest))
+            else:
+                print("ledger: already running: " + rest[0])
+    elif cmd == "report" and len(rest) == 2 and rest[1] in REPORTS:
+        with locked(path):
+            sections = load(path)
+            owed = sections["owed"]
+            i = find_auto(owed, rest[0])
+            if i is None or (rest[1] == "closed" and auto(owed[i])[1] != "running"):  # nothing to mark, or it already has a report
+                print("ledger: nothing to mark for " + rest[0])
+            else:
+                mark = {"done": " — done " + now, "closed": " — closed " + now, "blocked": " — blocked"}[rest[1]]
+                owed[i] = owed[i].split(" — ")[0] + mark
+                write(path, lane, sections, now)
+                print("ledger: %s %s" % (rest[0], rest[1]))
+    elif cmd == "done" and len(rest) == 1 and rest[0].isdigit():
+        with locked(path):
+            sections = load(path)
+            live = entries(sections, now)
+            if not 1 <= int(rest[0]) <= len(live):
+                sys.exit("ledger: no entry %s (see `ledger show`)" % rest[0])
+            kind, line = live[int(rest[0]) - 1]
+            sections[kind].remove(line)
+            write(path, lane, sections, now)
+        print("ledger: done: " + line[2:])
+    else:
+        sys.stderr.write("\n".join(l for l in __doc__.splitlines() if l.startswith("    ledger")) + "\n")
+        sys.exit(64)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

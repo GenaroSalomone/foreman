@@ -11,10 +11,13 @@
                        (plan only without --apply); an archived task does not launch
     hw briefs restore <lane> <task> | unarchive <lane> --manifest <file>
                        the way back, one brief or a whole manifest
-    hw review <lane> <task> [--dry-run] [--here] [--no-report] [--at <sha>] [--account <name>]
+    hw review <lane> <task> [--dry-run] [--here] [--no-report] [--at <sha>] [--account <name>] [--model <m>] [--effort <e>]
                        the independent review of a build's branch tip. --account
                        runs the reviewer on that account, checked like a task
                        dispatch's (default | personal; omitted: the lane's own).
+                       The reviewer runs opus, effort medium on tier S (high with
+                       judgment-day) and high on L; --model and --effort override,
+                       checked by the dispatch.
                        --at <sha>
                        reviews a past head instead (a benchmark): cut locally, no
                        origin ref needed, the build's receipt is not touched, so it
@@ -60,3 +63,24 @@
         left ambiguous. Every other provider status is relayed unchanged, and
         1 remains hw's own single refusal code.
 
+  QA IN AN ISOLATED HERDR APP (a brief that checks the app, `hc`, the cockpit, or a `brain`/`hw` run inside the app)
+    bin/herdr-isolated start <short dir under /tmp>     start the instance; add --brain for a brainer inside it
+    bin/herdr-isolated stop <dir>                       end it BEFORE reporting: closing the app's pid leaves
+                       its herdr-core running, and done-invoker warns about it. To CHECK for a leak do not
+                       `pgrep` by name: the leaked core's argv is `hc --hc-launchd`, so
+                       a name match finds nothing. The detector is HerdrLeaks in
+                       core/invokers/herdr_leak.go (what done-invoker runs): it ties a process to the run
+                       by the sockets and cwd under the instance dir. By hand, after stop:
+                       `lsof -nP -U | rg <dir>` listing nothing.
+    A herdr-core proof names three lines, because an executor that is not told how to reach the app guesses
+    and the guess is the person's own:
+      Mechanism: bin/herdr-isolated start <short dir under /tmp> --brain, then every command through
+                 <dir>/q ... (never a bare hc, herdr-app or herdr).
+      Precheck:  `lsof -a -U -p <app pid>` showing its sockets under <dir> and not the person's, and
+                 `<dir>/q hc ls` listing only your own terminals; a terminal started with `hc run` is not in
+                 the Agents list until `<dir>/q herdr-app do terminal.keep '{"terminal":"<id>"}'` gives it a
+                 pane (recipe in herdr-app/README.md).
+      If it fails: report blocked and stop with `bin/herdr-isolated stop <dir>`: never a fake marked pass,
+                 never a stand-in answer typed as if the app had given it, never the person's app or core.
+    A browser or deployed-build check is handed one string that only the new build carries (a commit sha, or
+    a marker in the bundle) and FAILS if it is not there: a 200 alone does not prove the new build.

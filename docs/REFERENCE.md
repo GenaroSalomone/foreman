@@ -129,7 +129,7 @@ frozen dead code, and goes when the last two callers in `hw-core` are ported.
 `projects.json` at the brain root is the one place a lane's settings live.
 `hw`, `brain` and the invokers read it once per process, and a lane you add
 there needs no change to `bin/`. An unknown key, or a value of a shape the
-loader checks (`requested_by`, `suite_lock`, `artifacts`, `model_floor`,
+loader checks (`requested_by`, `suite_lock`, `review_default`, `review_post`, `artifacts`, `model_floor`,
 `model_pins`, `ports`), makes the whole file fail to load:
 nothing is read from it. Other values are not checked.
 `hw help lanes` prints this table in short form.
@@ -156,6 +156,8 @@ name and `{task}` the task name.
 | `brief_note` | string | Text `hw` appends to the preamble of every executor prompt of this lane. See below. | none |
 | `qa_target` | boolean | `true`: when `hw` allocates the executor a web port, its prompt (and `hw next`) names `http://localhost:<port>` as the QA target. | off |
 | `suite_lock` | string | `none` lets `hw suite` and a task's close verification run at once; `lane` serializes them. | `lane` |
+| `review_default` | list | Pieces the independent reviewer of every build in this lane runs besides its tier and the brief's `review:`: `thermo`, `tests`, `ponytail`, `pstack`, `comment-sicko`. `judgment-day` is refused: it is a risk call made per brief. | none |
+| `review_post` | string | `pr-description`: the reviewer writes its findings into one `## Review` section of the build's PR body (never a comment); `none` posts nothing. | `none` |
 | `checkout` | path | The lane's repository checkout. | none: no checkout |
 | `checkout_var` | string | An upper-case environment variable that overrides `checkout` when set. | none |
 | `base` | string | The branch a task's worktree is built from, and the base a review is measured against. | none |
@@ -232,7 +234,7 @@ homebrew-core already has a different formula with that name.
 
 ## The herdr app
 
-Foreman runs from the [herdr desktop app](https://herdr.dev). In a terminal the app opened, `brain <lane>` opens the lane's
+Foreman also runs from the [herdr desktop app](https://herdr.dev), beside the terminal UI. In a terminal the app opened, `brain <lane>` opens the lane's
 brainer there and `hw` launches its executors in app terminals of their own; a report, an ask, a ruling,
 `hw next`, `hw done` and `hw revive` go through the same commands as in the terminal UI. A report sent while the brainer is
 closed arrives when it reopens.

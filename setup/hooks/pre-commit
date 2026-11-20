@@ -467,13 +467,6 @@ if [ "$hook_docs" = 1 ] || grep -qE "$SUITE_TRIGGER_PATTERN" <<<"$staged"; then
       printf 'pre-commit: the fast gate passed in %ss (measured on this run) — %s\n' \
         "$hook_elapsed" "$hook_headline" >&2
       [ -z "$hook_untracked" ] || printf 'pre-commit:  %s\n' "$(printf '%s' "$hook_untracked" | sed 's/^ *//')" >&2
-      # A SELECTED GATE LEAVES NO VERDICT, and `hw done` and a task/* push accept only the whole fast gate's
-      # (`<tree>.fast`, written by setup/test-hw only when not SELECTED; lib/hw/done.sh _verify_cached_verdict
-      # reads it, and without it re-runs the gate at close). Measured 2026-10-14, retro of
-      # release-sin-suite-repetida: a 67 s SELECTED gate, then ~10 min by hand for the verdict done needed.
-      case "$hook_headline" in
-        *"(SELECTED)"*) printf 'pre-commit: this was a SELECTED gate and leaves no verdict for this tree; the whole fast gate'"'"'s is still owed for hw done and push: HW_TEST_GATE=fast bash setup/test-hw (minutes; run it in the background).\n' >&2 ;;  # MUTATION-ANCHOR: 361-M02
-      esac
     else
       printf 'pre-commit: the fast gate passed in %ss (measured on this run; its test count line was not found).\n' \
         "$hook_elapsed" >&2

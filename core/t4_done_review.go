@@ -7,6 +7,7 @@ package main
 //	no code        0 code-only lines (the measure of `hw review`, recomputed here, never read from a receipt)
 //	review-skip    the build's brief says `review: none` and gives a `review-skip:` reason
 //	approved       the reviewer's review.md says `verdict: approve  head: <sha>` and <sha> is the head
+//	carried        the approval is at an ancestor A of the head and A..head has 0 code-only lines (review-delta-recheck)
 //	accepted       `hw done … --accept-review "<why>"`, a brainer's override, refused inside an executor
 //
 // Everything else is «NOT MERGEABLE»: the absence of a verdict (hw review never ran, failed, or the reviewer left no review.md)
@@ -55,6 +56,7 @@ type mergeGate struct {
 	why, how []string
 	readyPR  int // > 0: print `gh pr ready <n>`
 	accepted string
+	noAccept bool // an approval sits at an ancestor and the delta has code: --accept-review is not the exit, `hw review` is
 }
 
 // ghPR is what `gh pr view <branch> --json number,isDraft,headRefOid` said.
@@ -127,7 +129,8 @@ func (d *doneRun) reviewGate(proj, task, main, wt, branch, rundir, accept string
 
 	// C1: recompute at the head now. A measure that cannot be made is an owed review, not a free pass.
 	owed, measured := true, ""
-	if base, _ := a.reviewBaseOf(main, proj, head, brief, runDir); base == "" {
+	base, _ := a.reviewBaseOf(main, proj, head, brief, runDir)
+	if base == "" {
 		measured = "could not measure the diff: no merge-base with the lane's base and no review_base in the receipt"
 	} else if num, ok := gitRun(main, nil, "diff", "--no-renames", "--numstat", "-z", base+".."+head); !ok {
 		measured = "could not measure the diff: `git diff --numstat " + reviewShort(base) + ".." + reviewShort(head) + "` failed"
@@ -145,9 +148,8 @@ func (d *doneRun) reviewGate(proj, task, main, wt, branch, rundir, accept string
 	case reviewSkipOf(brief) != "":
 		g.allow = true
 		g.notes = append(g.notes, "review: none — review-skip recorded in "+brief+": "+reviewSkipOf(brief))
-	case d.reviewVerdictCheck(&g, proj, task, head, runDir, measured) == "":
+	case d.reviewVerdictCheck(&g, proj, task, main, head, base, runDir, measured) == "":
 		g.allow, approved = true, true
-		g.notes = append(g.notes, "review: approved at "+reviewShort(head)+" ("+measured+")")
 	}
 
 	// C4: on a product lane the PR is what GitHub shows, so its head must be the bytes that were judged
@@ -167,7 +169,10 @@ func (d *doneRun) reviewGate(proj, task, main, wt, branch, rundir, accept string
 		}
 	}
 
-	if !g.allow {
+	if g.noAccept && accept != "" { // the override is the wrong exit here: say so instead of taking it
+		g.why = append(g.why, "--accept-review is refused: the delta has code that no reviewer read")
+	}
+	if !g.allow && !g.noAccept {
 		g.how = []string{
 			"`hw review " + proj + " " + task + "` dispatches the independent review; `hw next` re-tasks the builder after changes-needed.",
 			"A brainer, never an executor, may override: `hw done " + proj + " " + task + " --accept-review \"<why>\"` (recorded in the receipt).",
@@ -195,8 +200,10 @@ func reviewSkipOf(brief string) string {
 	return strings.TrimSpace(nextFmValue("review-skip", brief))
 }
 
-// reviewVerdictCheck reads the reviewer's review.md and returns "" when it approves the head, else fills g.deny/g.why and says why.
-func (d *doneRun) reviewVerdictCheck(g *mergeGate, proj, task, head, runDir, measured string) string {
+// reviewVerdictCheck reads the reviewer's review.md and returns "" when it approves the head, else fills g.deny/g.why and says why. The
+// reviewer is the task review_task names (a re-tasked reviewer's worktree is not its latest brief's), else the review_run brief's. An
+// approval at an ancestor of the head carries when the delta since has no code (reviewCarry).
+func (d *doneRun) reviewVerdictCheck(g *mergeGate, proj, task, main, head, base, runDir, measured string) string {
 	a := d.app
 	deny := func(verdict, at, why string) string {
 		g.deny = "NOT MERGEABLE: review " + verdict + " at " + at + ", head is " + reviewShort(head)
@@ -210,12 +217,8 @@ func (d *doneRun) reviewVerdictCheck(g *mergeGate, proj, task, head, runDir, mea
 	if run == "" {
 		return deny("none", "—", "no review was dispatched: `hw review` never recorded a review_run for "+proj+":"+task+" (it failed, or was never run)")
 	}
-	rtask := strings.TrimSuffix(doneBasename(run), ".md")
-	rwt := a.workTree(proj, rtask)
-	art := a.reviewArtifactsOf(rwt)
-	if art == "" {
-		art = rwt + "/.artifacts"
-	}
+	rtask := reviewerTaskOf(runDir)
+	art := a.reviewerArtifactsOf(proj, rtask)
 	raw, err := os.ReadFile(art + "/review.md")
 	if err != nil {
 		return deny("none", "—", "the review run "+rtask+" has left no review.md (looked in "+art+")")
@@ -224,8 +227,47 @@ func (d *doneRun) reviewVerdictCheck(g *mergeGate, proj, task, head, runDir, mea
 	if !ok {
 		return deny("unreadable", "—", art+"/review.md does not start with `verdict: approve|changes-needed  head: <sha>`")
 	}
-	if verdict != "approve" || !reviewSameSHA(sha, head) {
-		return deny(verdict, reviewShort(sha), "the latest review.md is "+art+"/review.md")
+	if verdict == "approve" {
+		if reviewSameSHA(sha, head) {
+			g.notes = append(g.notes, "review: approved at "+reviewShort(head)+" ("+measured+")")
+			return ""
+		}
+		if d.reviewCarry(g, proj, task, rtask, main, head, base, sha, measured) {
+			return ""
+		} else if g.noAccept { // the delta has code: reviewCarry filled the denial
+			return g.deny
+		}
 	}
-	return ""
+	return deny(verdict, reviewShort(sha), "the latest review.md is "+art+"/review.md")
+}
+
+// reviewCarry is an approval at sha, which is not the head. It carries (true) when sha is an ancestor of the head and the delta since,
+// measured as `hw review` measures it, has 0 code-only lines. When the delta has code it fills g with the refusal and names the delta's
+// command, and --accept-review is not an exit (noAccept): the code in it is the code no reviewer read. false with no words is every
+// other case (a rebased head, a delta that cannot be measured): the ordinary denial, and its exits.
+func (d *doneRun) reviewCarry(g *mergeGate, proj, task, rtask, main, head, base, sha, measured string) bool {
+	a := d.app
+	out, ok := gitRun(main, nil, "rev-parse", "--verify", "--quiet", sha+"^{commit}")
+	if !ok {
+		return false
+	}
+	from := strings.TrimSpace(string(out))
+	t, _, ok := a.reviewDeltaOf(main, from, head, base)
+	if !ok {
+		return false
+	}
+	num, ok := gitRun(main, nil, "diff", "--no-renames", "--numstat", "-z", t, head)
+	if !ok {
+		return false
+	}
+	code, _, _ := reviewMeasure(string(num))
+	if code == 0 {
+		g.notes = append(g.notes, "review: carried from "+reviewShort(from)+" — approved there, and "+reviewShort(from)+".."+reviewShort(head)+" has 0 code-only lines")
+		return true
+	}
+	g.noAccept = true
+	g.deny = "NOT MERGEABLE: review approved at " + reviewShort(from) + ", an ancestor of the head " + reviewShort(head) + ": the delta has " + strconv.Itoa(code) + " code-only line(s) that no reviewer read"
+	g.why = []string{"the approval covers " + reviewShort(from) + " only (owed: " + measured + ")"}
+	g.how = []string{a.reviewDeltaCommand(proj, task, rtask, from, head, code)}
+	return false
 }

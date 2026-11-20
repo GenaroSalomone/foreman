@@ -42,13 +42,13 @@ func reviewListOf(raw string) ([]string, bool) {
 }
 
 // reviewListMode is the mode a list stands for: judgment-day when it names it (the plugin skills are named beside it), plugins when
-// it names only plugins, none when it is empty. false when an item is neither judgment-day nor a plugin with a review skill.
+// it names only plugins, none when it is empty. false when an item is neither judgment-day, a plugin with a review skill nor comment-sicko.
 func reviewListMode(items []string) (string, bool) {
 	jd := false
 	for _, it := range items {
 		if it == "judgment-day" || it == "rdd" { // rdd is the retired spelling: it adds the same Judgment Day (design 8 S4)
 			jd = true
-		} else if reviewSkillsOfPlugin(it) == nil {
+		} else if reviewSkillsOfPlugin(it) == nil && it != reviewerOnlyItem {
 			return it, false
 		}
 	}
@@ -61,12 +61,36 @@ func reviewListMode(items []string) (string, bool) {
 	return "plugins", true
 }
 
-// reviewPluginsOfList is the plugin items of a `review:` list: what the brief asks hw to load for its review.
-func reviewPluginsOfList(raw string) []string {
+// reviewerOnlyItem is the list item that names one piece of a plugin, not a plugin: pstack's comment-sicko agent. A reviewer
+// runs it (reviewerPieces) and it loads pstack (reviewPluginsOfList); it is in no plugin's review skills (reviewSkillsOfPlugin),
+// so a build's own close never runs it.
+const reviewerOnlyItem = "comment-sicko"
+
+// reviewDefaultItems is what a lane's `review_default` may name: a plugin with a review skill, or comment-sicko. Judgment Day is
+// a risk call the brainer makes per brief, so a lane cannot default to it.
+var reviewDefaultItems = []string{"thermo", "tests", "ponytail", "pstack", reviewerOnlyItem}
+
+// reviewItemsOfList is the items of a `review:` list but judgment-day and rdd, as written.
+func reviewItemsOfList(raw string) []string {
 	items, _ := reviewListOf(raw)
 	var out []string
 	for _, it := range items {
 		if it != "judgment-day" && it != "rdd" {
+			out = append(out, it)
+		}
+	}
+	return out
+}
+
+// reviewPluginsOfList is the plugin items of a `review:` list: what the brief asks hw to load for its review. comment-sicko loads
+// pstack, once each.
+func reviewPluginsOfList(raw string) []string {
+	var out []string
+	for _, it := range reviewItemsOfList(raw) {
+		if it == reviewerOnlyItem {
+			it = "pstack"
+		}
+		if !has(out, it) {
 			out = append(out, it)
 		}
 	}
@@ -234,7 +258,7 @@ func pluginReviewSkillsNamed(mode string, baseRef string, build bool, plugins []
 
 // reviewDiffFileClause hands every review child the diff as a file: some have no shell (pi-subagents' reviewer declares
 // read, grep, find, ls only) and cannot run git. Same text on every vendor.
-const reviewDiffFileClause = " Write that range's diff to `$HW_ARTIFACTS/review-range.diff` and give that path to every review subagent and judge: some have no shell (pi's reviewer reads files only) and cannot run git."
+const reviewDiffFileClause = " Write that diff to `$HW_ARTIFACTS/review-range.diff` and give every review subagent and judge that path: some have no shell."
 
 // judgmentDayWithPlugins is the Judgment Day closing plus the step that names the plugin review skills: run over
 // the same committed range, before Judgment Day, and the report says each one ran or was skipped.
@@ -313,20 +337,29 @@ func (d *dsp) reviewGate() {
 	if reviewBareNone(k == "" || k == "build", d.reviewDeclared(), mode, nextFmValue("review-skip", d.brief)) {
 		d.warn(reviewBareNoneWarning)
 	}
+	if parent := d.roundOf(); parent != "" && d.reviewRaw() == "none" {
+		d.die(roundNoneRefusal("round_of: "+parent) + " NOTHING was built.")
+	}
 }
+
+// roundOf is the `round_of:` of a brief: the parent task whose review this fix round answers.
+func (d *dsp) roundOf() string { return nextFmValue("round_of", d.brief) }
 
 // reviewDeclared is _review_declared: only when the brief DECLARES review:, like plugins.
 func (d *dsp) reviewDeclared() bool { return nextFmValue("review", d.brief) != "" }
 
 // reviewIndependentEffect is the words after the mode for a build that owes the independent review: what the builder does, what
 // the reviewer adds for what the brief declared.
-func reviewIndependentEffect(raw, mode string, declaredPlugins []string) string {
+func reviewIndependentEffect(raw, mode string, declaredPlugins, laneDefault []string) string {
 	e := "an independent review after the report (hw review <lane> <task>); the builder closes with /simplify on claude and runs no Judgment Day and no review skill"
 	if mode == "judgment-day" {
 		e += "; the reviewer runs Judgment Day (high risk, declared)"
 	}
 	if extra := reviewExtraPlugins(raw, declaredPlugins); len(extra) > 0 {
 		e += "; the reviewer's tier adds " + strings.Join(extra, ", ")
+	}
+	if len(laneDefault) > 0 {
+		e += "; the lane's review_default adds " + strings.Join(laneDefault, ", ") + " to the reviewer"
 	}
 	return e
 }
@@ -340,7 +373,7 @@ func (d *dsp) reviewLines() string {
 		if d.reviewDeclared() {
 			src = "brief review:"
 		}
-		return "\n  review      independent  (" + src + ") — " + reviewIndependentEffect(d.reviewRaw(), mode, d.declaredPlugins())
+		return "\n  review      independent  (" + src + ") — " + reviewIndependentEffect(d.reviewRaw(), mode, d.declaredPlugins(), d.c.t.reviewLaneDefault(d.proj))
 	}
 	if !d.reviewDeclared() || !ok {
 		return ""
@@ -365,7 +398,7 @@ func (l *lch) reviewReceipt(dir, key string) {
 	}
 	src := reviewReceiptSource(l.brief, mode, l.pluginsDeclared())
 	if l.independentReview() {
-		src = "brief frontmatter review: in " + orDefaultStr(l.brief, "<no brief>") + " — " + reviewIndependentEffect(l.reviewRaw(), mode, l.declaredPlugins())
+		src = "brief frontmatter review: in " + orDefaultStr(l.brief, "<no brief>") + " — " + reviewIndependentEffect(l.reviewRaw(), mode, l.declaredPlugins(), l.c.t.reviewLaneDefault(l.proj))
 	}
 	l.receiptInto(dir, key, mode, src)
 }
@@ -390,7 +423,7 @@ func reviewBareNone(build, declared bool, mode, skip string) bool {
 
 const reviewBareNoneWarning = "the brief declares review: none with no review-skip: line. On a build that no longer opts out: the independent review is still owed. Add  review-skip: <why>  to the frontmatter to opt out (a bare none is refused from the release after this one)."
 
-// reviewExtraPlugins is what a build's `review:` adds to the reviewer's tier (S4): a list's plugin items, `plugins` (scalar) = the
+// reviewExtraPlugins is what a build's `review:` adds to the reviewer's tier (S4): a list's items (plugins, and comment-sicko), `plugins` (scalar) = the
 // brief's `plugins:` that carry a review piece. judgment-day and rdd add Judgment Day, not a plugin (the plan reads the mode).
 func reviewExtraPlugins(raw string, declared []string) []string {
 	if raw == "plugins" {
@@ -402,7 +435,15 @@ func reviewExtraPlugins(raw string, declared []string) []string {
 		}
 		return out
 	}
-	return reviewPluginsOfList(raw)
+	return reviewItemsOfList(raw)
+}
+
+// reviewLaneDefault is the items of the lane's `review_default`, in the order projects.json lists them.
+func (t *table) reviewLaneDefault(lane string) []string {
+	if v := t.get(lane, "review_default"); v != "" {
+		return strings.Split(v, ",")
+	}
+	return nil
 }
 
 // independentReview is what a build owes at its dispatch: see reviewOwedBy.
@@ -434,6 +475,22 @@ func (l *lch) reviewOwedReceipt(dir string) {
 		"kind build (declared or undeclared) at dispatch, and no `review: none` with a review-skip: reason in "+orDefaultStr(l.brief, "<no brief>")+" — `hw review` measures the diff; until a verdict at the head, a recorded review-skip or --accept-review, a merge is not offered")
 }
 
+// priorReviewReceipt is the fix round's link to what it answers: for a brief with `round_of: <parent>`, prior_review is the parent's last
+// verdict, `<verdict>@<sha> <review.md>`. Archives keep `.artifacts/`, not receipts, so the receipt is where `hw review` finds V for a
+// task that is not the one that was reviewed. A parent with no readable review is said, and the re-check is a full one.
+func (l *lch) priorReviewReceipt(dir string) {
+	parent := l.roundOf()
+	if parent == "" {
+		return
+	}
+	prior, ok := l.reviewPriorOf(l.proj, l.workTree(l.proj, parent))
+	if !ok {
+		l.warn("the brief's round_of: " + parent + " has no readable review.md to measure this round from: prior_review is NOT recorded and `hw review` will re-check in full")
+		return
+	}
+	l.receiptInto(dir, "prior_review", prior.verdict+"@"+prior.v+" "+prior.review, "brief round_of: "+parent+" in "+l.brief+" at dispatch — hw review re-checks only what changed since that head")
+}
+
 // reviewerOf is the `review_of:` of a kind: review brief — `<lane>:<task>@<sha>` — and "" for every other brief.
 func (l *lch) reviewerOf() string {
 	if l.briefKindForClose() != "review" {
@@ -443,8 +500,8 @@ func (l *lch) reviewerOf() string {
 }
 
 // reviewerReceipts is S1: the gate keys a build gets from its kind and its review plugins are inert on `kind: review`, so a
-// reviewer's dispatch writes its own — the pieces it must prove from its transcript (`plugin_review_t1`), the checks.md it
-// must leave (`checks_required_t1`) and what it judges (`review_of_t1`). The judges' row is jdAgentsReceipt's.
+// reviewer's dispatch writes its own — the pieces it must prove from its transcript (`plugin_review_t1`) and what it judges
+// (`review_of_t1`). It owes no checks.md requirement rows, so no `checks_required_t1`. The judges' row is jdAgentsReceipt's.
 func (l *lch) reviewerReceipts(dir string) {
 	of := l.reviewerOf()
 	if of == "" {
@@ -456,5 +513,4 @@ func (l *lch) reviewerReceipts(dir string) {
 	if pieces := reviewerPieces(list); len(pieces) > 0 {
 		l.receiptInto(dir, "plugin_review_t1", strings.Join(pieces, ","), src+" — done-invoker proves each piece from the transcript, or takes a review-skip: line")
 	}
-	l.receiptInto(dir, "checks_required_t1", "required", "kind review with review_of: at dispatch — done-invoker requires $HW_ARTIFACTS/checks.md")
 }

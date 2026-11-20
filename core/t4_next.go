@@ -178,6 +178,7 @@ loop:
 			a.die("run " + s.nextRun + " of " + s.pane + " reported and was not revived (no reopened marker), so `hw next --run` has no authority to re-task it. NOTHING was sent and the counter did NOT move. Revive it first: hw revive " + bashSub(proj) + " " + bashSub(task) + " --run " + s.nextRun + " — then re-run this. A run still on its chaining lease needs no --run.")
 		}
 	}
+	a.nextRoundGate(s.brief, s.rundir)
 	s.reopenedMarker = nextReopenedMarker(s.rundir)
 	if isFile(s.reopenedMarker) && isFile(nextDoneMarker(s.rundir)) {
 		s.reopened = true
