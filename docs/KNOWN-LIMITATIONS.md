@@ -11,9 +11,11 @@ How the guards are meant to hold, and where they stop, is in [`THREAT-MODEL.md`]
 
 ### L2. The guards are a tripwire, not a boundary
 - **Limit:** every agent runs as your user, so nothing enforces a boundary between agents. The write guards (a brainer into its
-  repository, an executor into the brain or another product repository), the Bitwarden guard and the Keychain guard read the
-  tool call they are shown and refuse the careless one. They do not contain a process that is trying to get around them: a path
+  repository, an executor into the brain or another product repository) read the tool call they are shown and refuse the
+  careless one. They do not contain a process that is trying to get around them: a path
   computed at run time, a script, or a secret already in a child's environment gets past them.
+  - foreman ships no Bitwarden guard, and no Claude Code guard on Keychain reads: nothing refuses a Claude Code agent that
+    runs `bw` or `security` itself. The pi extension refuses a pi tool call that names `~/Library/Keychains`.
   - The brain guard judges a command that names the brain only when it is plain (simple commands, quotes, literal variables,
     data heredocs) and refuses the rest, naming the construct and the spelling that passes. It can refuse a harmless command.
   - The Bitwarden session token (`~/.cache/hw/bw-session`) opens the whole vault, not only the folder `agents`, and the master

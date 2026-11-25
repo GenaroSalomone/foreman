@@ -1,6 +1,6 @@
-# foreman 1.3.0-rc.1
+# foreman 1.3.0
 
-foreman 1.3.0-rc.1 is the first-contact release: fewer things to install, one word for a lane in every help page and message, and a dry run that fits on a screen.
+foreman 1.3.0 is the first-contact release: fewer things to install, one word for a lane in every help page and message, and a dry run that fits on a screen.
 
 ## In short
 
@@ -13,7 +13,7 @@ foreman 1.3.0-rc.1 is the first-contact release: fewer things to install, one wo
 
 ## What changed
 
-48 changes since 1.2.0.
+49 changes since 1.2.0 (1.3.0-rc.1 folded in).
 
 ### Added
 - A `CODE_OF_CONDUCT.md`.
@@ -120,6 +120,7 @@ foreman 1.3.0-rc.1 is the first-contact release: fewer things to install, one wo
 - The release cut's notes cover accepts `setup/releases/highlights/VERSION.md`, the file `setup/release/notes` requires, in the notes commit.
 - Two test subjects that run under `env -i` (828, 1381) pass `HW_HOUSEKEEPING=0`, so they no longer start a background reap.
 - The batch gate's subject-deps re-measure commits rows on main only when the commit it verified is main or an ancestor of it; an unmerged batch branch no longer leaves a fresh row that replays a false green.
+- `KNOWN-LIMITATIONS.md` L2 no longer names a Bitwarden guard or a Claude Code Keychain guard, which foreman does not ship.
 
 ## Known limits
 
@@ -129,7 +130,7 @@ foreman 1.3.0-rc.1 is the first-contact release: fewer things to install, one wo
   goes back. Every limit a user can hit is in
   [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md).
 
-## Upgrading from 1.2.0
+## Upgrading from 1.2.0 or 1.3.0-rc.1
 
 Run `foreman-setup upgrade --brain DIR`. A brain installed before `upgrade`
 existed has no record of its flags yet: run your install command once more,
