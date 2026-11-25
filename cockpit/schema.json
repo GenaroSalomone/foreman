@@ -239,7 +239,7 @@
             "type": "object", "additionalProperties": false,
             "required": ["id", "level", "msg"],
             "properties": {
-              "id": { "enum": ["account-override", "cut-running", "dep-floor"], "description": "account-override: an explicit --account that differs from the lane default; `block` only where hw's own account resolution would refuse it, otherwise `warn`. cut-running: a suite cut holds the gate; warn, for any dispatch, never block. dep-floor: a tool this dispatch uses (herdr, engram, the lane's agent, gentle-ai under --sdd gentle) is older than its floor in lib/hw/deps.conf (`block`; the message names the version, the floor and the command to update) or answered with no readable version (`warn`). A tool that is not installed raises nothing. There is one rule per tool, so the id can repeat." },
+              "id": { "enum": ["account-override", "cut-running", "dep-floor"], "description": "account-override: an explicit --account that differs from the lane default; `block` only where hw's own account resolution would refuse it, otherwise `warn`. cut-running: a suite cut holds the gate; warn, for any dispatch, never block. dep-floor: a tool this dispatch uses (herdr, engram, the lane's agent) is older than its floor in lib/hw/deps.conf (`block`; the message names the version, the floor and the command to update) or answered with no readable version (`warn`). A tool that is not installed raises nothing. There is one rule per tool, so the id can repeat." },
               "level": { "enum": ["warn", "block"] },
               "msg": { "type": "string", "maxLength": 240 }
             }

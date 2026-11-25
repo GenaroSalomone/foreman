@@ -116,7 +116,7 @@ func pickerUntouched(body string) bool {
 
 // pickerNewBrief is _new_brief: author a brief, then launch it. The file is created in brain/, never in a repo.
 func (a *app) pickerNewBrief() int {
-	proj, ok := a.pickerFzf(strings.Join(a.c.t.names, "\n")+"\n", "--height=20%", "--reverse", "--prompt=project > ")
+	proj, ok := a.pickerFzf(strings.Join(a.c.t.names, "\n")+"\n", "--height=20%", "--reverse", "--prompt=lane > ")
 	if !ok || proj == "" {
 		return 0
 	}

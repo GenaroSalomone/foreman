@@ -30,11 +30,11 @@ func (a *app) cmdOutbox() int {
 			args = args[2:]
 			continue
 		case strings.HasPrefix(args[0], "-"):
-			a.die("unknown option: " + args[0] + " (usage: hw outbox [list|flush] [<project>] [--to <brainer-pane>])")
+			a.die("unknown option: " + args[0] + " (usage: hw outbox [list|flush] [<lane>] [--to <brainer-pane>])")
 		default:
 			proj = a.c.t.canonProject(args[0])
 			if !a.c.t.known(proj) {
-				a.die("unknown project: " + args[0] + " (expected: " + a.laneNamesHint() + ")")
+				a.die("unknown lane: " + args[0] + " — try: " + a.laneNamesHint())
 			}
 		}
 		args = args[1:]

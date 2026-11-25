@@ -2,7 +2,7 @@ package main
 
 // hw done / hw reap / occupancy for an executor that runs on herdr-core (herdr-app-done-reap, step 4).
 //
-// An hc run says so on disk: dispatch writes <rundir>/hc ("<project> <task> <address>"), the way a TUI run
+// An hc run says so on disk: dispatch writes <rundir>/hc ("<lane> <task> <address>"), the way a TUI run
 // writes <rundir>/tab. Every hc call here is behind that record, so a TUI run makes none. The terminals a run
 // owns are found by their labels (hw_project + hw_task), never by the recorded address or the name alone: a
 // terminal with other labels is somebody else's and is not touched.

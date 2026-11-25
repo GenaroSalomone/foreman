@@ -23,4 +23,4 @@ by one maintainer: expect an acknowledgement within a week, not an SLA.
 
 ## Supported versions
 
-The latest release candidate and `main`. There are no backports.
+The latest stable release, and `main`. There are no backports: a fix lands in `main` and ships in the next release.

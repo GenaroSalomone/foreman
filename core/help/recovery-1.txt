@@ -1,9 +1,9 @@
 RECOVERY AND CLEANUP
-    hw revive <project> <task> [--run <id>] [--dry-run]
+    hw revive <lane> <task> [--run <id>] [--dry-run]
                                     repeat a closed run's recorded cwd, env and
                                     session resume in a new tab; refuses anything
                                     not recorded (cwd gone, no session, no env)
-    hw reap [<project>] [--apply]   merge-clean worktrees, merged task branches AND loose work dirs, only where
+    hw reap [<lane>] [--apply]      merge-clean worktrees, merged task branches AND loose work dirs, only where
                                     provably safe; task outputs (.artifacts, qa-report) are archived to
                                     $HW_ARCHIVE_ROOT/<lane>/<task>/ (default: archive/ beside the work dir) and
                                     verified before removal, a provisioned DB is pg_dump'ed there, then dropped.
@@ -11,6 +11,6 @@ RECOVERY AND CLEANUP
                                     Closes a --blocked executor left unanswered past
                                     HW_BLOCKED_WAIT_HOURS (default 24).
     hw sweep [--apply]              close tabs of runs that REPORTED, only hw's own
-    hw worktrees [<project>] [--migrate]
+    hw worktrees [<lane>] [--migrate]
                                     worktrees outside their repo's canonical root
 

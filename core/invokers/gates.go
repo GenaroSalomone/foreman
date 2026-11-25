@@ -609,6 +609,21 @@ func ReviewerGate(artifactsRoot, of, workHead string) (note string, err error) {
 	return fmt.Sprintf("review.md: %s at %s, %d finding row(s), %d blocker(s); %s", verdict, head, rows, blockers, fnNote), nil
 }
 
+// reviewJDLineRe is the line a reviewer that ran Judgment Day leaves in review.md (no `|`, so it is never read as a finding row):
+// the confirmed findings, the suspects and the ones only Judgment Day found, so the next retro can count what it catches.
+var reviewJDLineRe = regexp.MustCompile(`(?m)^jd:[ \t]*confirmed=[0-9]+[ \t]+suspects=[0-9]+[ \t]+exclusive=[0-9]+[ \t]*$`)
+
+// ReviewerJDLine refuses a review that ran Judgment Day (the reviewer's receipt says `review_jd_t<n>`) and left no `jd:` line. A
+// review that did not run it, and an old review file, owe nothing: this is called only for the receipt.
+func ReviewerJDLine(artifactsRoot string) (string, error) {
+	review := artifactsRoot + "/review.md"
+	b, _ := os.ReadFile(review)
+	if m := reviewJDLineRe.Find(b); m != nil {
+		return strings.TrimSpace(string(m)), nil
+	}
+	return "", die("%s", fmt.Sprintf("this review runs Judgment Day and %s has no line  jd: confirmed=<n> suspects=<n> exclusive=<n>  (confirmed: findings both judges agreed on; suspects: findings one judge raised and you could not confirm; exclusive: findings only Judgment Day found, no other piece). One line, no `|`. NOTHING was sent or marked.", review))
+}
+
 // reviewerFunctionsCovered is the function table's coverage of functions.txt (`name<TAB>path` per line, written by hw review next
 // to checks.md): a verdict row for every name. No functions.txt, or an empty one, owes nothing.
 func reviewerFunctionsCovered(artifactsRoot string) (string, error) {

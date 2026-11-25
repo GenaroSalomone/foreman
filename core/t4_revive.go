@@ -1,6 +1,6 @@
 package main
 
-// hw revive <project> <task> [--run <id>] [--dry-run] — a port of cmd_revive (bin/hw:7985-8328) and of the
+// hw revive <lane> <task> [--run <id>] [--dry-run] — a port of cmd_revive (bin/hw:7985-8328) and of the
 // argument block that calls it (_usage_revive and `if [ "${1:-}" = revive ]`, bin/hw:12106-12137), byte for
 // byte: the same words, the same refusals in the same order, and the same calls to herdr, in the same order.
 //
@@ -18,9 +18,9 @@ import (
 	"strings"
 )
 
-const reviveUsage = "usage: hw revive <project> <task> [--run <id>] [--dry-run]  (hw revive --help)"
+const reviveUsage = "usage: hw revive <lane> <task> [--run <id>] [--dry-run]  (hw revive --help)"
 
-const reviveHelp = `hw revive <project> <task> [--run <id>] [--dry-run]
+const reviveHelp = `hw revive <lane> <task> [--run <id>] [--dry-run]
 
   Repeat a run's recorded cwd, env and session resume in a new tab; refuses
   anything not recorded (cwd gone, no session, no env).
@@ -51,8 +51,8 @@ func (a *app) reviveDie(msg string) {
 }
 
 func (a *app) cmdRevive() int {
-	// bin/hw runs `need herdr; need git; need jq` before anything
-	for _, c := range []string{"herdr", "git", "jq"} {
+	// bin/hw runs `need herdr; need git` before anything
+	for _, c := range []string{"herdr", "git"} {
 		if c == "herdr" && mux.Backend(a.getenv) == mux.HC { // an app run needs hc, not herdr; a TUI run on this machine finds out below
 			continue
 		}
@@ -134,7 +134,7 @@ func reviveReopenedMarker(rundir string) string {
 func (a *app) reviveCmd(proj, task string, dry bool, wantRun string) {
 	chosen := "defaulted: the task's latest run"
 	if !a.c.t.known(proj) {
-		a.die("unknown project: " + proj + " (expected: " + a.c.t.namesBar() + ")")
+		a.die("unknown lane: " + proj + " — try: " + a.c.t.namesBar())
 	}
 	wt := a.c.lanePath(proj, "worktree", task)
 	if wt == "" {

@@ -19,8 +19,9 @@ live receiver, two records carry the payload:
                                           "prompt": "<payload>"}}
 
 The first is the message entering the receiver's queue; the second is it
-entering a turn. Either is the RECEIVER reporting on itself, which is what a
-receipt has to be.
+entering a turn. A receiver that was IDLE writes neither: it takes the message
+as a user record (measured 2026-11-24), which is the third carrier. Any of them
+is the RECEIVER reporting on itself, which is what a receipt has to be.
 
 THE SLUG IS NOT RECOMPUTED. The directory name is Claude Code's transform of
 the receiver's cwd (`/` and `.` both become `-`), and guessing it wrong would
@@ -85,6 +86,17 @@ def carried(record):
         attachment = record.get("attachment") or {}
         if attachment.get("type") == "queued_command":
             yield attachment.get("prompt")
+    if record.get("type") == "user":
+        # An IDLE receiver takes the message as a turn of its own: a user record whose content is the paste (MEASURED in a brainer's
+        # transcript, 2026-11-24: {"type":"user","message":{"content":"\n\n<pasted_content id=..>\n<payload>…"}}). Its text blocks only: a
+        # tool_result that happens to print the payload is not a delivery.
+        content = (record.get("message") or {}).get("content")
+        if isinstance(content, str):
+            yield content
+        elif isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    yield block.get("text")
 
 
 def watermark(target):

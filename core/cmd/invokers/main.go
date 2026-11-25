@@ -17,11 +17,15 @@ import (
 
 func main() {
 	args := os.Args[1:]
-	if len(args) < 4 || args[0] != "--bin-dir" {
+	if len(args) < 3 || args[0] != "--bin-dir" {
 		fmt.Fprintln(os.Stderr, "usage: invokers --bin-dir <brain/bin> ask-invoker|done-invoker <args…>")
 		os.Exit(64)
 	}
 	binDir, prog, rest := args[1], args[2], args[3:]
+	if u := invokers.BareUsage(prog); len(rest) == 0 && u != "" { // a bare `ask-invoker` is the user's, not the dispatcher's, to answer
+		fmt.Fprintln(os.Stderr, prog+": no argument — "+u)
+		os.Exit(64)
+	}
 	c := invokers.NewCtx(prog, binDir)
 	ch := make(chan os.Signal, 2)
 	signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)

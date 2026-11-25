@@ -34,3 +34,44 @@ for t in "$ROOT"/herdr-app/mods/*/*.test.mjs; do
   out="$(node "$t" 2>&1)" || fail "${t#"$ROOT"/} failed: $out"
   pass "${t#"$ROOT"/}: $out"
 done
+
+# What the export ships of the app side must load and must be explained (brain only: the export has no manifest).
+# An exported .js that imports a file the manifest does not include fails `herdr-app check` in the export
+# (measured 2026-11-24: main.js imported actions.js and restore.js, thrown.js behind it, none of them included),
+# and the export's user page (overlay herdr-app/README.md) stays a short page whose relative links resolve there and whose
+# `ln -sfn ~/brain/...` source is a path install.sh mirrors into the brain (a dangling link otherwise: review of 2026-11-24).
+MANIFEST="$ROOT/setup/export/manifest"
+PAGE="$ROOT/setup/export/overlay/herdr-app/README.md"
+if [ -f "$MANIFEST" ]; then
+  [ -f "$PAGE" ] || fail "the export has no user page for the app side: $PAGE"
+  out="$(python3 - "$ROOT" <<'PY'
+import os, re, sys
+root = sys.argv[1]
+inc = {l.split(None, 1)[1].strip() for l in open(root + "/setup/export/manifest") if l.startswith("include ")}
+ov = "setup/export/overlay/"
+shipped = set(inc) | {os.path.relpath(os.path.join(d, f), root + "/" + ov)
+                      for d, _, fs in os.walk(root + "/" + ov) for f in fs if "/changes" not in d}
+bad = []
+for p in sorted(inc):
+    if p.startswith("herdr-app/mods/") and p.endswith(".js"):
+        for m in re.findall(r'from "(\./[^"]+)"', open(root + "/" + p).read()):
+            q = os.path.normpath(os.path.join(os.path.dirname(p), m))
+            if q not in shipped:
+                bad.append("%s imports %s, which the export does not ship" % (p, q))
+page = open(root + "/" + ov + "herdr-app/README.md").read()
+if page.count("\n") > 80:
+    bad.append("the user page is %d lines, over 80" % page.count("\n"))
+installer = open(root + "/install.sh").read()
+for m in re.findall(r"^ln -sfn ~/brain/(\S+)", page, re.M):   # a path the page links from the brain: install.sh must put it there
+    if '"$BRAIN/%s"' % m not in installer:
+        bad.append("the user page links ~/brain/%s, which install.sh does not mirror into the brain" % m)
+for m in re.findall(r"\]\((?!https?:|#)([^)#]+)", page):
+    q = os.path.normpath(os.path.join("herdr-app", m))
+    if q not in shipped:
+        bad.append("the user page links %s, which the export does not ship" % q)
+print("\n".join(bad))
+PY
+)" || fail "the export's app side could not be checked: $out"
+  [ -z "$out" ] || fail "the export's app side is broken: $out"
+  pass "the exported app mods import only shipped files; the user page is short and its links resolve"
+fi

@@ -115,7 +115,7 @@ func (d *dsp) run(argv []string) {
 		}
 	}
 
-	// An explicit --brief wins; otherwise brain/<project>/briefs/<task>.md when it exists.
+	// An explicit --brief wins; otherwise brain/<lane>/briefs/<task>.md when it exists.
 	if d.brief == "" {
 		d.brief = d.inferBrief()
 		if d.brief != "" {
@@ -159,18 +159,6 @@ func (d *dsp) run(argv []string) {
 	}
 	if !supportedVendor(d.agent) {
 		d.die("--agent must be claude or pi (got: " + d.agent + "). " + unsupportedVendorWords)
-	}
-	switch d.sdd {
-	case "": // none is the default and the only mode (sdd-legado-070; Spec Kit left hw, setup/decisions.md 2026-11-16)
-		d.sdd = "none"
-	case "none":
-	case "speckit": // REMOVED: the Spec Kit flow left hw
-		d.die(speckitRemoved("--sdd speckit was given", "Dispatch without --sdd (or --sdd none, which is the default). NOTHING was built."))
-	case "gentle": // RETIRED SPELLING: gentle-ai left hw (setup/decisions.md, 2026-10-16). Warn, run none.
-		d.warn("--sdd gentle is retired: gentle-ai is no longer part of hw. Running --sdd none.")
-		d.sdd = "none"
-	default:
-		d.die("--sdd must be none (got: " + d.sdd + ")")
 	}
 	d.checkReusableExecutor(d.proj)
 	d.routeNow = "fresh"
@@ -224,9 +212,7 @@ func (d *dsp) run(argv []string) {
 		defer d.dispatchLockTake()()
 	}
 	d.checkAgentNameFree(d.task)
-	if !d.c.t.known(d.proj) {
-		d.die("unknown project: " + d.proj + " (expected: " + d.c.t.namesBar() + ")")
-	}
+	d.requireLane()
 	if d.here && !d.wtExplicit { // # MUTATION-ANCHOR: 844-M10
 		d.wantWT, d.wtSrc = false, "implied by --here"
 	}
@@ -321,10 +307,11 @@ func (d *dsp) parseFlags(rest []string) {
 			rest = rest[2:]
 		case "--sdd":
 			d.needVal(rest)
-			d.sdd = rest[1]
+			d.warn(sddRemoved("--sdd"))
 			rest = rest[2:]
-		case "--dry-run":
+		case "--dry-run", "--dry-run=full":
 			d.dispatchDry = true
+			d.dispatchFull = d.dispatchFull || rest[0] == "--dry-run=full"
 			rest = rest[1:]
 		case "--sandbox":
 			d.die(sandboxRemoved("--sandbox"))
@@ -412,5 +399,12 @@ func (d *dsp) parseFlags(rest []string) {
 		default:
 			d.die("unknown option: " + rest[0])
 		}
+	}
+}
+
+// requireLane refuses a lane that does not exist, naming the lanes that do.
+func (d *dsp) requireLane() {
+	if !d.c.t.known(d.proj) {
+		d.die("unknown lane: " + d.proj + " — try: " + d.c.t.namesBar())
 	}
 }

@@ -35,6 +35,9 @@ usage: brain <lane> [--claude] [--reset [--self] [--force]]
                             resuming its own conversation in its own pane; a working
                             pane is skipped and named. Brainers only: executors are
                             not relaunched (the mod is brainer-only by design).
+                            This is the method for applying a Claude Code update:
+                            each resumes in the account holding its transcript.
+                            From a plain shell the calling brainer is relaunched too.
                             A pane whose agent was stopped and did not come back is
                             FAILED, and the command exits non-zero (--resume: 75).
 
@@ -108,10 +111,6 @@ func (b *brainRun) main(args []string) (rc int) {
 	}
 	tab, errs := loadTable(file, b.home)
 	if tab == nil {
-		if diag, ok := b.laneTableDiag(file); ok {
-			b.errf("%s", diag)
-			return 1
-		}
 		for _, l := range errs {
 			b.errf("%s\n", l)
 		}
@@ -175,7 +174,7 @@ func (b *brainRun) main(args []string) (rc int) {
 			b.outf("\nusage: brain <%s> [--claude] [--reset [--self] [--force]]\n", strings.Join(tab.names, "|"))
 			return 0
 		}
-		b.errf("unknown brainer: %s  (try: %s)\n", first, strings.Join(tab.names, ", "))
+		b.errf("unknown lane: %s — try: %s\n", first, strings.Join(tab.names, ", "))
 		return 64
 	}
 	b.proj = proj
@@ -305,12 +304,13 @@ func (b *brainRun) relaunch(args []string) int {
 			continue
 		}
 		_, conv := b.sessionTranscript(sid, b.laneAccountDir(lane))
+		if !conv { // never a fresh conversation in a brainer's place
+			b.outf("FAILED %s (%s): %s has no transcript under any account, so there is no conversation to resume; the brainer was left running\n", pane, lane, sid)
+			fails++
+			continue
+		}
 		if dry {
-			if conv {
-				b.outf("would relaunch %s (%s) resuming %s\n", pane, lane, sid)
-			} else {
-				b.outf("would relaunch %s (%s) as a NEW conversation: %s has no transcript, so there is nothing to resume\n", pane, lane, sid)
-			}
+			b.outf("would relaunch %s (%s) resuming %s\n", pane, lane, sid)
 			continue
 		}
 		res := b.run(brainCmd{Name: b.binDir + "/brain", Args: []string{lane, "--resume", sid, "--in-pane", pane}, Merge: true}) // # MUTATION-ANCHOR: go-806-M01

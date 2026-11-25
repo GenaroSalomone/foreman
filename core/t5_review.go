@@ -1,6 +1,6 @@
 package main
 
-// The review a build closes with is the brief's choice (`review:`), in every lane and every --sdd mode.
+// The review a build closes with is the brief's choice (`review:`), in every lane.
 // bin/hw: _brief_review_mode, _review_skills_of_plugin, _review_skills_declared, _review_gate, _review_declared,
 // _review_effect, _review_lines, _review_receipt, _plugins_review_note.
 //
@@ -218,7 +218,7 @@ func reviewAgentsClause(plugins []string) string {
 	if ag == "" {
 		return ""
 	}
-	return " Launch the review agent " + ag + " with the Agent tool over the same range, in the foreground — no background launch (`run_in_background`, `async:true`); where the call takes an `async` field, pass `async:false`: a background call proves the launch, not the run. Its subagent_type is that full name."
+	return " Launch the review agent " + ag + " with the Agent tool over the same range. A background launch (`run_in_background`, `async:true`) proves the start alone: wait for its completion notice (the task-notification) before you close, since a run that never completed proves nothing; where the call takes an `async` field, pass `async:false`. Its subagent_type is that full name."
 }
 
 // reviewGateOf is _review_gate over what the brief says: it dies (die is the caller's) on a value that is not
@@ -610,5 +610,8 @@ func (l *lch) reviewerReceipts(dir string) {
 	list, _ := reviewListOf(l.reviewRaw())
 	if pieces := reviewerPieces(list); len(pieces) > 0 {
 		l.receiptInto(dir, "plugin_review_t1", strings.Join(pieces, ","), src+" — done-invoker proves each piece from the transcript, or takes a review-skip: line")
+	}
+	if mode, _ := reviewListMode(list); mode == "judgment-day" {
+		l.receiptInto(dir, "review_jd_t1", "1", src+" — this review runs Judgment Day: review.md owes a `jd:` line")
 	}
 }

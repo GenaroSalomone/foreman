@@ -2,7 +2,8 @@ package main
 
 // The manifest of the dispatch (bin/hw `_dispatch_manifest`) and the helpers only it reads: `_deps_line`,
 // `_deps_contending_others`, `_intended_workdir`, `_task_base`. The text is bash's, byte for byte;
-// it is the contract the suite and the brainers read (CLAUDE.md: "the manifest text never changes").
+// it is the contract the suite and the brainers read. A DRY RUN prints the short form of it (t5_manifest_short.go) unless
+// --dry-run=full asks for the whole text; the launch prints, and writes to the run directory, the whole text always.
 
 import (
 	"path/filepath"
@@ -496,10 +497,13 @@ func (d *dsp) dispatchManifest(dir string) {
 	if d.explorerLine != "" {
 		sb.WriteString("  explorer    " + d.explorerLine + "\n")
 	}
+	var piLines string
 	if d.agent == "pi" { // bash: ${PI_LINES}, between the explorer and the plugins
-		sb.WriteString(d.piManifestLines(dir)[1:] + "\n")
+		piLines = d.piManifestLines(dir)
+		sb.WriteString(piLines[1:] + "\n")
 	}
-	if pl := d.pluginsLines() + d.reviewLines(); pl != "" {
+	pl := d.pluginsLines() + d.reviewLines()
+	if pl != "" {
 		sb.WriteString(pl[1:] + "\n")
 	}
 	sb.WriteString("  permissions " + permissionsLine + "\n")
@@ -541,7 +545,11 @@ func (d *dsp) dispatchManifest(dir string) {
 	} else {
 		d.step("0/3  dispatch")
 	}
-	for _, l := range strings.Split(d.dispatchText, "\n") {
+	shown := d.dispatchText
+	if d.dispatchDry && !d.dispatchFull {
+		shown = d.shortManifest(runLabel, routeLine, modelLine, effortLine, agentLine, permissionsLine, invokerLine, dbLine, wtLine, baseLine, verifyLine, guardLine+piLines+pl)
+	}
+	for _, l := range strings.Split(shown, "\n") {
 		d.printf("  %s%s%s\n", d.cDim, l, d.c0)
 	}
 	if d.verifyFullSuite {
@@ -598,10 +606,18 @@ func (d *dsp) dispatchManifest(dir string) {
 			d.info("route BOUND as fresh by " + fs + " itself; nothing was recorded to bind a later launch, and any earlier forecast for " + d.proj + ":" + d.task + " was dropped")
 		} else {
 			if rf := d.routeForecastWrite(d.proj, d.task, "fresh", d.reuseLine); rf != "" {
-				d.info("route FROZEN as fresh for the next " + d.routeForecastTTL + " s (" + rf + "). If a reusable pane appears before you launch, the launch REFUSES and names the change instead of switching routes.")
+				if d.dispatchFull {
+					d.info("route FROZEN as fresh for the next " + d.routeForecastTTL + " s (" + rf + "). If a reusable pane appears before you launch, the launch REFUSES and names the change instead of switching routes.")
+				} else {
+					d.info("route FROZEN as fresh for the next " + d.routeForecastTTL + " s: a reusable pane appearing before you launch makes the launch refuse (--fresh binds it)")
+				}
 			}
 		}
-		d.ok("dry run — nothing created, no agent started (except the route forecast named above)")
+		if d.dispatchFull {
+			d.ok("dry run — nothing created, no agent started (except the route forecast named above)")
+		} else {
+			d.ok("dry run — nothing created, no agent started (except the route forecast named above). --dry-run=full prints the whole manifest")
+		}
 		return
 	}
 

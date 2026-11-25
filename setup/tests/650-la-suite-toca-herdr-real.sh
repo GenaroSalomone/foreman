@@ -206,7 +206,7 @@ export HERDR_ENV=1 HERDR_SOCKET_PATH="$SOCK" HERDR_PANE_ID="$BRAINER"
 # No session id is published (see the fake), so hw's wait for one is cut short;
 # the receipt then records `none — …` and the Stop hook does not narrow.
 export HW_SESSION_WAIT_MS=2000
-dispatch="$("$BRAIN/bin/hw" "$LANE" "$TASK" --sdd none --fresh 2>&1)" || {
+dispatch="$("$BRAIN/bin/hw" "$LANE" "$TASK" --fresh 2>&1)" || {
   ap="$(printf '%s' "$dispatch" | sed -n 's/.*agent=\([^ ]*\).*/\1/p' | head -1)"
   fail "650 hw $LANE $TASK failed: $dispatch
   agent pane ${ap:-?} screen: $([ -z "$ap" ] || h pane read "$ap" --source recent --lines 30 2>&1 | tail -n 30)"

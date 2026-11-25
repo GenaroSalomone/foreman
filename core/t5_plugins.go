@@ -17,6 +17,11 @@ import (
 // pluginsDir is _plugins_dir.
 func (d *dsp) pluginsDir() string { return d.vdRoot() + "/plugins" }
 
+// pluginAt is whether the plugin n is installed under a brain root: its directory holds a .claude-plugin/plugin.json.
+func pluginAt(root, n string) bool {
+	return isFile(root + "/plugins/" + n + "/.claude-plugin/plugin.json")
+}
+
 // pluginsInstalled is _plugins_installed: the directories that hold a .claude-plugin/plugin.json, sorted as
 // `LC_ALL=C sort` does. The `*/` glob it walks skips what starts with a dot.
 func (d *dsp) pluginsInstalled() []string {
@@ -30,7 +35,7 @@ func (d *dsp) pluginsInstalled() []string {
 		if strings.HasPrefix(n, ".") {
 			continue
 		}
-		if isFile(d.pluginsDir() + "/" + n + "/.claude-plugin/plugin.json") {
+		if pluginAt(d.vdRoot(), n) {
 			out = append(out, n)
 		}
 	}

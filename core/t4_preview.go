@@ -1,6 +1,6 @@
 package main
 
-// hw preview [list] | hw preview release <project> <task> — a port of cmd_preview (bin/hw:8836-8890) and of the
+// hw preview [list] | hw preview release <lane> <task> — a port of cmd_preview (bin/hw:8836-8890) and of the
 // two dispatch lines that reach it (`hw preview` alone lists, `hw preview <action> …`, bin/hw:12646 and 12659),
 // byte for byte. What a preview lease is, who holds it, until when, and how to give it up. It reads the lease
 // file `hw done --keep-preview` writes (`<run>/lease`, bin/hw:8547-8570) and, for `release`, removes it.
@@ -18,8 +18,8 @@ import (
 )
 
 func (a *app) cmdPreview() int {
-	// bin/hw runs `need herdr; need git; need jq` before anything
-	for _, c := range []string{"herdr", "git", "jq"} {
+	// bin/hw runs `need herdr; need git` before anything
+	for _, c := range []string{"herdr", "git"} {
 		if _, err := exec.LookPath(c); err != nil {
 			a.die("missing required command: " + c)
 		}
@@ -48,7 +48,7 @@ func (a *app) cmdPreview() int {
 		}
 		a.previewRelease(a.c.t.canonProject(proj), task) // # MUTATION-ANCHOR: 864-G06
 	default:
-		a.die("usage: hw preview [list] | hw preview release <project> <task>") // # MUTATION-ANCHOR: 864-G05
+		a.die("usage: hw preview [list] | hw preview release <lane> <task>") // # MUTATION-ANCHOR: 864-G05
 	}
 	return 0
 }
@@ -190,7 +190,7 @@ func (a *app) previewList() {
 
 func (a *app) previewRelease(proj, task string) {
 	if task == "" { // # MUTATION-ANCHOR: 864-G12
-		a.die("usage: hw preview release <project> <task>")
+		a.die("usage: hw preview release <lane> <task>")
 	}
 	n := 0
 	for _, r := range a.previewTaskRuns(proj, task) {

@@ -85,7 +85,7 @@ hw_wait() {
 hw_next() {
   # This subject exercises stale lifecycle tokens, not inherited framework
   # selection. Make its direct-delivery contract explicit on every retask.
-  "$BIN/hw" next "$@" --sdd none 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
+  "$BIN/hw" next "$@" 2>&1 | sed 's/\x1b\[[0-9;]*m//g'
 }
 expect_says() {
   local label="$1" pat="$2" out="$3"

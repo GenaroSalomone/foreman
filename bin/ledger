@@ -52,7 +52,9 @@ LOOSE = "loose"  # lines of the file that belong to no known section (a person's
 AUTO = re.compile(r"^- (\S+) running in \S+ \(auto since \d{4}-\d{2}-\d{2}\)(?: — (?:(done|closed) \d{4}-\d{2}-\d{2}|(blocked)))?$")
 REPORTS = ("done", "blocked", "closed")
 RECLAIM_ORDER = ("done", "closed", "blocked", "running")  # what the cap drops first among auto entries
-FOOTER = 'Write: `bin/ledger add order|owed|fact "<text>"` · `bin/ledger done <n>`'
+FOOTER = ('mem_session_summary: only evidence nothing else owns (shas, run ids, lookups) and a pointer here; '
+          'never Next, owed items or orders — this ledger and decisions.md own them.\n'
+          'Write: `bin/ledger add order|owed|fact "<text>"` · `bin/ledger done <n>`')
 
 
 def empty():

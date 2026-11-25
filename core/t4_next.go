@@ -19,7 +19,7 @@ import (
 
 // nextState is cmd_next's locals, and the globals its helpers set.
 type nextState struct {
-	pane, brief, text, waitMS, nextRun, nextSDD string
+	pane, brief, text, waitMS, nextRun string
 	force, dry, allowStale                      bool
 
 	info, cwd, vendor, status string
@@ -46,7 +46,7 @@ func (a *app) cmdNext() int {
 		s.pane, args = args[0], args[1:]
 	}
 	if s.pane == "" {
-		a.die("usage: hw next <executor-pane> [--run <revived-run-id>] [--sdd <mode>] [--force] [--dry-run] \"<next task>\" | --brief <path>  (flags may appear before or after the task text). Exit 0 means DELIVERED and the counter advanced; every refusal — a gate that would not open, an unknown pane, a task that has not reported — exits 1 and moves nothing.")
+		a.die("usage: hw next <executor-pane> [--run <revived-run-id>] [--force] [--dry-run] \"<next task>\" | --brief <path>  (flags may appear before or after the task text). Exit 0 means DELIVERED and the counter advanced; every refusal — a gate that would not open, an unknown pane, a task that has not reported — exits 1 and moves nothing.")
 	}
 	if why := mux.OutsideAppRefusal(a.getenv, s.pane); why != "" {
 		a.die(why)
@@ -80,7 +80,8 @@ loop:
 		case w == "--wait-ms":
 			s.waitMS = needVal()
 		case w == "--sdd":
-			s.nextSDD = needVal()
+			needVal()
+			a.warn(sddRemoved("hw next --sdd"))
 		case w == "--run":
 			s.nextRun = needVal()
 		case w == "--allow-stale-hooks":
@@ -129,15 +130,6 @@ loop:
 		a.nextReviewGate(s.brief)
 		a.nextSddGate(s.brief) // # MUTATION-ANCHOR: 862-G31
 	}
-	switch s.nextSDD {
-	case "", "none":
-	case "gentle": // RETIRED SPELLING (gentle-ai left hw): warn and run none, as the launch does.
-		a.warn("hw next --sdd gentle is retired: gentle-ai is no longer part of hw. Running --sdd none.")
-	case "speckit": // REMOVED: the Spec Kit flow left hw
-		a.die(speckitRemoved("--sdd speckit was given", "Nothing was sent and the task counter did not move. Re-task without --sdd (or --sdd none)."))
-	default:
-		a.die("--sdd must be none (got: " + s.nextSDD + ")")
-	}
 
 	s.info = a.nextAgentGet(s.pane)
 	if s.info == "" {
@@ -169,7 +161,7 @@ loop:
 		if isFile(nextDoneMarker(s.rundir)) && !isFile(nextReopenedMarker(s.rundir)) && lease != "live" { // # MUTATION-ANCHOR: 862-G05
 			proj, rc := a.nextRunEnv(s.rundir, "HW_PROJECT", false)
 			if rc != 0 {
-				proj = "<project>"
+				proj = "<lane>"
 			}
 			task, rc2 := a.nextRunEnv(s.rundir, "HW_TASK", false)
 			if rc2 != 0 {
@@ -190,11 +182,6 @@ loop:
 	}
 	if files := a.nextRefuseIfStaleHooks(s.wtdir, s.allowStale); files != "" {
 		a.receiptInto(s.rundir, "stale_hooks_allowed", files, "--allow-stale-hooks (hw next)")
-	}
-	// A pane launched --sdd gentle before gentle-ai left hw still carries ODD in its system prompt for the whole
-	// session; hw no longer adds anything to it and says so once.
-	if nextDispatchFramework(s.rundir) == "gentle" {
-		a.warn(s.pane + " was launched --sdd gentle, which is retired: its session still carries ODD, and hw adds nothing of it to this task.")
 	}
 	// The model check of `hw next`, and the same ONE effort check the dispatch runs (t5_vendor_agent.go
 	// modelEffortSuffixRefusal): a pane launched with a level inside its model id had that level dropped, and re-tasking
@@ -334,22 +321,4 @@ func nextBasename(p string) string {
 func nextHerdrSub(args ...string) string {
 	out, _ := herdrOut(0, args...)
 	return bashSub(out)
-}
-
-// nextDispatchFramework is _run_dispatch_framework: the second word of the first `  framework ` line of the run's dispatch
-// record. hw no longer writes that line; a pane launched before gentle-ai left hw still has it.
-func nextDispatchFramework(rundir string) string {
-	b, err := os.ReadFile(rundir + "/dispatch")
-	if err != nil {
-		return ""
-	}
-	for _, l := range strings.Split(string(b), "\n") {
-		if strings.HasPrefix(l, "  framework") && len(l) > len("  framework") && strings.ContainsRune(" \t\v\f\r", rune(l[len("  framework")])) {
-			if f := strings.Fields(l); len(f) >= 2 {
-				return f[1]
-			}
-			return ""
-		}
-	}
-	return ""
 }

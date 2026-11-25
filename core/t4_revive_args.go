@@ -138,7 +138,7 @@ docs:
 // reviveProjectWorkspace is _project_workspace: the project's workspace, created on demand and never closed.
 func (a *app) reviveProjectWorkspace(proj, workdir string) (string, bool) {
 	if !a.c.t.known(proj) {
-		a.warn("no workspace label for project '" + proj + "'")
+		a.warn("no workspace label for lane '" + proj + "'")
 		return "", false
 	}
 	label, _, _ := a.reviveLaneFields(proj)

@@ -345,6 +345,21 @@ func (b *brainRun) accountDirOf(acct string) string {
 	return ""
 }
 
+// resumeAccount is the account whose config dir holds the --resume session's transcript, the lane's declared one first
+// ("" when none does or there is no resume).
+func (b *brainRun) resumeAccount(declared string) string {
+	if !reUUID.MatchString(b.resume) {
+		return ""
+	}
+	for _, acct := range []string{declared, "default", "personal"} {
+		d := orStr(b.accountDirOf(acct), b.home+"/.claude")
+		if projs, _ := filepath.Glob(brEscapeGlob(d) + "/projects/*/" + b.resume + ".jsonl"); len(projs) > 0 {
+			return acct
+		}
+	}
+	return ""
+}
+
 // laneAccountDir is the CLAUDE_CONFIG_DIR the lane's declared account names ("" for the default account).
 func (b *brainRun) laneAccountDir(proj string) string {
 	return b.accountDirOf(b.tab.get(proj, "account"))
@@ -355,6 +370,12 @@ func (b *brainRun) accountEnv(proj, kind string) (string, bool) {
 	acct := b.tab.get(proj, "account")
 	if acct == "" {
 		acct = "default"
+	}
+	source := "lane default for " + proj
+	// A RESUME RUNS UNDER THE ACCOUNT THAT HOLDS THE TRANSCRIPT, whatever the lane declares (MEASURED 2026-11-24: a relaunch
+	// of a lane declared `default` whose conversation lived in ~/.claude-personal: "No conversation found").
+	if a := b.resumeAccount(acct); a != "" && kind == "claude" {
+		acct, source = a, "holds the transcript of "+b.resume
 	}
 	dir := b.accountDirOf(acct)
 	if dir == "" {
@@ -369,7 +390,7 @@ func (b *brainRun) accountEnv(proj, kind string) (string, bool) {
 		b.errf("brain: refusing to open a brainer under an unverified account.\n")
 		return "", false
 	}
-	b.errf("brain: account %s → CLAUDE_CONFIG_DIR=%s (lane default for %s, parity verified)\n", acct, dir, proj)
+	b.errf("brain: account %s → CLAUDE_CONFIG_DIR=%s (%s, parity verified)\n", acct, dir, source)
 	return "CLAUDE_CONFIG_DIR=" + dir, true
 }
 
@@ -593,21 +614,6 @@ func (b *brainRun) flushOutbox(proj, pane string) {
 	if out != "" {
 		b.outf("%s\n", out)
 	}
-}
-
-// laneTableDiag is what bin/brain prints for a lane table that does not load, byte for byte: the lines of lane_config_load —
-// jq's own words, which differ from one jq version to the next, a bash crash on an empty file, the error of the first
-// document of a file whose second does not parse — and the closing «brain: the lane table did not load». loadTable words
-// them its own way (the contract hw-core keeps for `hw` leaves jq's diagnostic out), so here the frozen loader is asked, run
-// as bin/brain runs it. Without bash, jq or bin/project-spaces.sh (the bash is deleted in 0.6.0) Go's wording stays, and so
-// it does when the loader accepts a table Go refused.
-func (b *brainRun) laneTableDiag(file string) (string, bool) {
-	prog := `set -euo pipefail; . "$1/project-spaces.sh"; lane_config_load "$2" || { echo "brain: the lane table did not load — fix $2/projects.json (the reason is above)" >&2; exit 1; }`
-	r := b.run(brainCmd{Name: "bash", Args: []string{"-c", prog, "brain", b.binDir, b.brain}, Merge: true, Extra: []string{"HW_PROJECTS_JSON=" + file}})
-	if r.RC == 0 || r.Out == "" { // # MUTATION-ANCHOR: go-p3-M01
-		return "", false
-	}
-	return r.Out, true
 }
 
 // ── version ─────────────────────────────────────────────────────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 package main
 
-// hw done <project> <task> (train T4): the port of lib/hw/done.sh — cmd_done, the in-use guard (_done_*), the
+// hw done <lane> <task> (train T4): the port of lib/hw/done.sh — cmd_done, the in-use guard (_done_*), the
 // close verification (_verify_*) — and of what it reaches in bin/hw and lib/hw/reap.sh (_close_herdr_object,
 // _wt_disposition, _reap_worktree, _wt_shed, _lease_write, _brain_leak_at_close, …), byte for byte, with the
 // same git, herdr and psql calls in the same order (setup/tests/contract-hw/cases-t4-done holds both).
@@ -66,7 +66,7 @@ func (a *app) cmdDone() int {
 	d.occ = occupantsReader{h: herdrClient{getenv: a.getenv}, win: windowsPaths(a.getenv)}
 	args := a.args
 	if len(args) < 2 { // # MUTATION-ANCHOR: 861-G01
-		a.die("usage: hw done <project> <task> [--drop-db] [--force] [--accept-review <why>] [--keep-preview [<duration>] --why <reason>]")
+		a.die("usage: hw done <lane> <task> [--drop-db] [--force] [--accept-review <why>] [--keep-preview [<duration>] --why <reason>]")
 	}
 	dp, dt := args[0], args[1]
 	args = args[2:]
@@ -223,7 +223,7 @@ func (d *doneRun) run(proj, task string) int {
 	a := d.app
 	d.t0 = doneNow()
 	if !a.c.t.known(proj) {
-		a.die("unknown project: " + proj + " (expected: " + a.c.t.namesBar() + ")")
+		a.die("unknown lane: " + proj + " — try: " + a.c.t.namesBar())
 	}
 	main := a.c.checkout(proj)
 	wt := a.c.lanePath(proj, "worktree", task)

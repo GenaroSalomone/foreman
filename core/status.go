@@ -68,11 +68,11 @@ func (a *app) cmdStatusArgs() int {
 		case args[0] == "--all":
 			all = true
 		case strings.HasPrefix(args[0], "-"):
-			a.die("unknown option: " + args[0] + " (usage: hw status [<project>] [--all])")
+			a.die("unknown option: " + args[0] + " (usage: hw status [<lane>] [--all])")
 		default:
 			project = a.c.t.canonProject(args[0])
 			if !a.c.t.known(project) {
-				a.die("unknown project: " + args[0] + " (expected: " + a.laneNamesHint() + ")")
+				a.die("unknown lane: " + args[0] + " — try: " + a.laneNamesHint())
 			}
 		}
 		args = args[1:]
@@ -586,7 +586,7 @@ func (a *app) reportSpaces(out *bufio.Writer, d *statusData) {
 		}
 		drift := ""
 		if strings.Contains(label, ":") {
-			drift = "  " + a.cWarn + "DRIFT" + a.c0 + " — legacy per-task workspace; expected a tab in the project's bare-label space"
+			drift = "  " + a.cWarn + "DRIFT" + a.c0 + " — legacy per-task workspace; expected a tab in the lane's bare-label space"
 		}
 		pl("  " + pyStr(w["workspace_id"]) + "  " + label + drift)
 	}
@@ -901,11 +901,11 @@ func (s *statusRun) reportTasks(out *bufio.Writer) (map[string]bool, []*orphanRe
 			if !wsTruthy {
 				switch {
 				case ownTab != "":
-					detail += " (tab " + ownTab + " in the project's space — a tab has no workspace of its own, by design)"
+					detail += " (tab " + ownTab + " in the lane's space — a tab has no workspace of its own, by design)"
 				case hereRun:
 					detail += " (--here: no space of its own, by design)"
 				case runMode == "tab":
-					detail += " (a tab in the project's space, not a workspace of its own)"
+					detail += " (a tab in the lane's space, not a workspace of its own)"
 				default:
 					detail += " (no workspace of its own, and no --here record either)"
 				}
@@ -1251,7 +1251,7 @@ func (s *statusRun) reportOrphans(out *bufio.Writer, orphans []*orphanRec) {
 		}
 		pl("      " + c.dim + "also: " + shapeOf(o.workdir) + " in " + o.workdir + ", and whatever it saved to engram under `" + engram + "`" + c.z)
 	}
-	pl("  " + c.dim + "·" + c.z + " " + c.dim + "recover or drop each one, then `hw done <project> <task>` takes it off the board" + c.z)
+	pl("  " + c.dim + "·" + c.z + " " + c.dim + "recover or drop each one, then `hw done <lane> <task>` takes it off the board" + c.z)
 }
 
 func atKey(o *orphanRec) float64 {

@@ -29,7 +29,7 @@ func (a *app) hwRunDirs(every bool) []string {
 	}
 	// fd itself, as bash runs it: it honours the .gitignore rules of what it walks, and the order it prints is the contract
 	var found []string
-	if fdOut, _ := toolOut("fd", "-H", "-t", "d", RunIDPattern.String(), work); fdOut != "" {
+	if fdOut, _ := fdFind("-H", "-t", "d", RunIDPattern.String(), work); fdOut != "" {
 		for _, l := range strings.Split(strings.TrimRight(fdOut, "\n"), "\n") {
 			if l != "" {
 				found = append(found, l)

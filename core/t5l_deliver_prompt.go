@@ -27,7 +27,7 @@ func (l *lch) specialistAgents(dir string) string {
 	if st, err := os.Stat(dir + "/.claude/agents"); err != nil || !st.IsDir() {
 		return ""
 	}
-	out, _ := l.sh(cmdSpec{name: "fd", args: []string{"-t", "f", "-t", "l", "-e", "md", ".", dir + "/.claude/agents"}, quiet: true})
+	out, _ := fdFind("-t", "f", "-t", "l", "-e", "md", ".", dir + "/.claude/agents")
 	var names []string
 	for _, ln := range strings.Split(out, "\n") {
 		if ln == "" {

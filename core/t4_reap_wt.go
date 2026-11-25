@@ -54,10 +54,8 @@ func (r *reapApplyRun) disposition(main, wt, branch, base string) {
 	if branch == "" || branch == "detached" {
 		if expiredCacheTree(r.a.getenv, wt, time.Now()) {
 			real, _ := reapApplyPwdP(wt)
-			cwds, rc := reapApplyOut("lsof", "-a", "-d", "cwd", "-Fn")
-			cwds = bashSub(cwds)
-			if unread := rc != 0 && cwds == ""; unread || processInside(cwds, real) {
-				r.set("detached", cacheTreeInUse(unread))
+			if held, ok := cwdsHold(real); held || !ok {
+				r.set("detached", cacheTreeInUse(!ok))
 				return
 			}
 			r.set("safe", "detached tree under the cache, made over "+itoa(int(detachedTreeTTL/time.Hour))+"h ago — a gate, cut or triage base run's; no branch, nothing to merge")

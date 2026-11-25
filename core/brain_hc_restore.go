@@ -66,14 +66,12 @@ func (b *brainRun) laneProjectDirs(acct, lane string) []string {
 // newestSession is the id of the newest conversation of the lane's brainer: the most recently written <uuid>.jsonl under
 // <account>/projects/<a lane directory, every non-alphanumeric as "-"> (laneProjectDirs), which is how claude names a project directory.
 func (b *brainRun) newestSession(lane string) (id string) {
-	acct := b.laneAccountDir(lane)
-	if acct == "" {
-		acct = b.home + "/.claude"
-	}
 	var files []string
-	for _, dir := range b.laneProjectDirs(acct, lane) {
-		f, _ := filepath.Glob(brEscapeGlob(dir) + "/*.jsonl")
-		files = append(files, f...)
+	for _, acct := range claudeAccountDirs(b.home, b.getenv("CLAUDE_CONFIG_DIR")) { // every account: the live conversation may not be the declared one's
+		for _, dir := range b.laneProjectDirs(acct, lane) {
+			f, _ := filepath.Glob(brEscapeGlob(dir) + "/*.jsonl")
+			files = append(files, f...)
+		}
 	}
 	sort.Strings(files)
 	var newest int64

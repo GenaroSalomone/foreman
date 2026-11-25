@@ -80,7 +80,8 @@ func (b *brainRun) hcSessionOf(addr, acctDir string) string {
 	if !ok {
 		return ""
 	}
-	return claudeSessionOf(bjRaw(m["pid"]), hcStr(m, "cwd"), acctDir, b.getenv("CLAUDE_CONFIG_DIR"), b.home+"/.claude")
+	// the lane's own account first, then every account on the machine: a lane declared `default` may run under personal
+	return claudeSessionOf(bjRaw(m["pid"]), hcStr(m, "cwd"), append([]string{acctDir}, claudeAccountDirs(b.home, b.getenv("CLAUDE_CONFIG_DIR"))...)...)
 }
 
 // claudeSessionOf is the session id in <dir>/sessions/<pid>.json for the first config dir that has one whose cwd is the terminal's
@@ -149,10 +150,12 @@ func (b *brainRun) relaunchHC(args []string) int {
 			continue
 		}
 		_, conv := b.sessionTranscript(sid, b.laneAccountDir(lane))
-		how := "resuming " + sid
-		if !conv {
-			how = "as a NEW conversation — " + sid + " has no transcript (it never had a turn), so there is nothing to resume"
+		if !conv { // never a fresh conversation in a brainer's place
+			b.outf("FAILED %s (%s): %s has no transcript under any account, so there is no conversation to resume; the brainer was left running\n", t.addr, lane, sid)
+			fails++
+			continue
 		}
+		how := "resuming " + sid
 		if dry {
 			b.outf("would relaunch %s (%s) %s\n", t.addr, lane, how)
 			continue

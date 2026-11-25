@@ -34,7 +34,7 @@ func (c *Ctx) waitMs() int {
 // its leading and trailing blanks and newlines.
 func trimRead(s string) string { return strings.Trim(s, messageTrimWS) }
 
-// askUsage is what `ask-invoker --help` prints; the unknown-option refusal quotes the same line.
+// askUsage is what `ask-invoker --help` prints, and what a call with no argument at all prints.
 const askUsage = "Usage: ask-invoker \"<one question>\" | ask-invoker --challenge \"<what the brief forbids> :: <what you observed>\" (budget: HW_INVOKER_WAIT_MS in the environment)"
 
 func (c *Ctx) ask(args []string) error {
@@ -54,7 +54,8 @@ func (c *Ctx) ask(args []string) error {
 			args = args[1:]
 		case args[0] == "-":
 		case strings.HasPrefix(args[0], "-"):
-			return die("unknown option: %s — ask-invoker takes only the question, or --challenge. A flag left in the text becomes part of what the brainer is asked. %s", args[0], askUsage)
+			c.exitSpoken = true // nothing was attempted: the piped-exit-code paragraph would bury the one line that says what to do
+			return die("unknown option: %s — ask-invoker takes only the question or --challenge (ask-invoker --help)", args[0])
 		}
 	}
 

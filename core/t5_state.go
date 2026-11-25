@@ -55,7 +55,6 @@ type dsp struct {
 	permissionsFlag                                              string
 	permissions, permissionsSrc, permissionsLine, permissionsErr string
 	agentArgs                                                    string
-	sdd                                                          string
 
 	// flags
 	brief, briefText                          string
@@ -76,6 +75,7 @@ type dsp struct {
 	tab                                       bool
 	tabExplicit, spaceExplicit                bool
 	dispatchDry                               bool
+	dispatchFull                              bool // --dry-run=full: the dry run prints the whole manifest, not the short form
 	checkHandles                              bool
 	allowStaleHooks                           bool
 	checkReuse                                bool

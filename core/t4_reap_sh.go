@@ -40,8 +40,8 @@ func reapApplyGitRC(dir string, args ...string) int {
 	return rc
 }
 
-// reapApplyFd is `fd args… 2>/dev/null`: what fd listed and its status (127 when fd is not installed).
-func reapApplyFd(args ...string) (string, int) { return reapApplyOut("fd", args...) }
+// reapApplyFd is `fd args… 2>/dev/null` without fd: fdFind.
+func reapApplyFd(args ...string) (string, int) { return fdFind(args...) }
 
 // reapApplySort is `sort [-u|-r]` over text, in the locale the case runs under; the text itself when sort cannot run.
 func reapApplySort(text string, flags ...string) string {

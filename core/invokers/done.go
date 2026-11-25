@@ -25,7 +25,7 @@ const (
 	exitHeldForRuling      = 6
 )
 
-// doneUsage is the one-line shape the unknown-option refusal quotes; --help prints doneHelp, which starts with it.
+// doneUsage is the one-line shape a call with no argument prints; --help prints doneHelp, which starts with it.
 const doneUsage = "Usage: done-invoker [--blocked] [--retask] \"<one paragraph>\" (at most 900 characters, counted as characters; artifacts are counted from $HW_ARTIFACTS, do not pass them)"
 
 // doneHelp is what `done-invoker --help` prints: every shape it takes, and what --check does. A run that met an
@@ -105,7 +105,8 @@ loop:
 			args = args[1:]
 		case args[0] == "-":
 		case strings.HasPrefix(args[0], "-"):
-			return die("unknown option: %s — this invoker takes NO flags but [--blocked], [--retask], [--check] and [--help], and the status is that flag, not a value. Silently folding it into the summary is how a blocked task gets filed as done. %s", args[0], doneUsage)
+			c.exitSpoken = true // nothing was attempted: the piped-exit-code paragraph would bury the one line that says what to do
+			return die("unknown option: %s — done-invoker takes --blocked, --retask, --check and --help (done-invoker --help)", args[0])
 		}
 	}
 
@@ -283,6 +284,14 @@ loop:
 		}
 		checksNote += "\n" + note
 		preflight = append(preflight, note)
+		if receiptValue(receipt, "review_jd_t"+c.taskSeq()) != "" { // it ran Judgment Day: its counters are owed
+			jd, err := ReviewerJDLine(artifacts)
+			if err != nil {
+				return err
+			}
+			checksNote += "\n" + jd
+			preflight = append(preflight, jd)
+		}
 	}
 
 	// -- a release: prod closes on a fresh env diff, its screens and its QA run
@@ -673,4 +682,15 @@ func countFiles(root string, skipTmp bool) int {
 		return nil
 	})
 	return n
+}
+
+// BareUsage is what a call with no argument at all prints for prog ("" for another program): its own usage, one line.
+func BareUsage(prog string) string {
+	switch prog {
+	case "ask-invoker":
+		return askUsage
+	case "done-invoker":
+		return doneUsage
+	}
+	return ""
 }

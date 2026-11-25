@@ -826,9 +826,9 @@ HW_TEST_CITATION=(--requested-by "setup test suite fixture")
 # refusal — a brief that IS found is still read — so these helpers pass it; the subject
 # that asserts on the refusal itself, setup/tests/811-*, calls hw directly.
 HW_TEST_NO_BRIEF=(--no-brief)
-hw_dry() { "$ROOT/bin/hw" "$@" "${HW_TEST_CITATION[@]}" "${HW_TEST_NO_BRIEF[@]}" --no-report --dry-run 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
-hw_dry_report() { "$ROOT/bin/hw" "$@" "${HW_TEST_CITATION[@]}" "${HW_TEST_NO_BRIEF[@]}" --dry-run 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
-hw_dry_uncited() { "$ROOT/bin/hw" "$@" "${HW_TEST_NO_BRIEF[@]}" --no-report --dry-run 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
+hw_dry() { "$ROOT/bin/hw" "$@" "${HW_TEST_CITATION[@]}" "${HW_TEST_NO_BRIEF[@]}" --no-report --dry-run=full 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
+hw_dry_report() { "$ROOT/bin/hw" "$@" "${HW_TEST_CITATION[@]}" "${HW_TEST_NO_BRIEF[@]}" --dry-run=full 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
+hw_dry_uncited() { "$ROOT/bin/hw" "$@" "${HW_TEST_NO_BRIEF[@]}" --no-report --dry-run=full 2>&1 | sed 's/\x1b\[[0-9;]*m//g'; }
 
 # expect_out <label> <pattern> <hw args...>
 expect_out() {

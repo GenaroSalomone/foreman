@@ -76,11 +76,11 @@ jq -e '[.hooks.StopFailure[].hooks[].command | select(endswith("hw-stop-hook.sh'
 jq -e '[.hooks.PostToolUse[].hooks[].command | select(endswith("hw-stop-hook.sh'"'"' post-tool"))] | length == 1' "$HOME/.claude/settings.json" >/dev/null \
   || fail "the PostToolUse hook (a queued ruling, delivered between two tool calls) was not merged into ~/.claude/settings.json"
 export TMPDIR="$TMP"
-dry="$(cd "$B" && hw app probe --sdd none --no-report --no-brief --dry-run < /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true)"
+dry="$(cd "$B" && hw app probe --no-report --no-brief --dry-run=full < /dev/null 2>&1 | sed 's/\x1b\[[0-9;]*m//g' || true)"
 for want in "dispatch app:probe" "worktree    $(dirname "$B")/work/app/probe  (new, own branch off trunk)" "engram      app" "agent       claude  (lane default for app)"; do
   has_fixed "$dry" "$want" || fail "the new brain's dry run has no '$want': $(printf '%s' "$dry" | tail -3 | tr '\n' ' ')"
 done
-pass "one command installs a brain whose bin/ is this tree's, links hw and the invokers, merges the Stop hook, and \`hw app probe --dry-run\` dispatches from the table"
+pass "one command installs a brain whose bin/ is this tree's, links hw and the invokers, merges the Stop hook, and \`hw app probe --dry-run=full\` dispatches from the table"
 
 # ── 3. idempotent ───────────────────────────────────────────────────────────
 t0="$(tree)"

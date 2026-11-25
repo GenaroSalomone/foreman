@@ -323,11 +323,13 @@ func roundNoneRefusal(what string) string {
 	return "the brief declares `review: none`, but it is a fix round (" + what + "): a fix round answers a review and owes the next one. Drop `review: none`; `hw review` re-checks only what the fix changed."
 }
 
-// nextSddGate is the check the launch makes on a brief's `sdd:`: the Spec Kit flow was removed (2026-11-16), so a brief that
-// still asks for it refuses the re-task before anything is sent. Any other value is read as none, as the launch reads it.
+// nextSddGate warns once on a brief's `sdd:`, as the launch does: spec-driven development was removed (2026-11-16).
 func (a *app) nextSddGate(brief string) {
-	if nextDecl(nextBriefDeclares(brief), "sdd") == "speckit" {
-		a.die(speckitRemoved("brief declares sdd: speckit", "Nothing was sent and the task counter did not move. Declare sdd: none (or drop the key)."))
+	if nextDecl(nextBriefDeclares(brief), "sdd") != "" {
+		a.warn(sddRemoved("brief key sdd:"))
+	}
+	for _, w := range retiredBodyWarnings(brief) {
+		a.warn(w)
 	}
 }
 
@@ -364,6 +366,9 @@ func (a *app) nextReviewerReceipts(rundir, seq, brief string) {
 	list, _ := reviewListOf(reviewRawOf(nextFmValue("review", brief)))
 	if pieces := reviewerPieces(list); len(pieces) > 0 {
 		a.receiptInto(rundir, "plugin_review_t"+seq, strings.Join(pieces, ","), src+" — done-invoker proves each piece from the transcript, or takes a review-skip: line")
+	}
+	if mode, _ := reviewListMode(list); mode == "judgment-day" {
+		a.receiptInto(rundir, "review_jd_t"+seq, "1", src+" — this review runs Judgment Day: review.md owes a `jd:` line")
 	}
 }
 
@@ -481,5 +486,5 @@ func (a *app) nextCheckBriefPlugins(brief, vendor, pane, rundir string) {
 	if len(loaded) > 0 {
 		have = strings.Join(loaded, ", ")
 	}
-	a.die("the re-task brief declares plugins " + strings.Join(missing, ", ") + " (plugins: or review:), but " + pane + " was launched with " + have + ", and a plugin is loaded when a session starts (" + map[string]string{"claude": "--plugin-dir", "pi": "-e"}[vendor] + "): hw next cannot add one to a live pane. NOTHING was sent and the counter did NOT move. Dispatch a fresh executor, which loads them: hw <project> <task> --fresh. Or change the brief if the brief is what is wrong — an executor that is not given a declared review plugin must not close on a review-skip.")
+	a.die("the re-task brief declares plugins " + strings.Join(missing, ", ") + " (plugins: or review:), but " + pane + " was launched with " + have + ", and a plugin is loaded when a session starts (" + map[string]string{"claude": "--plugin-dir", "pi": "-e"}[vendor] + "): hw next cannot add one to a live pane. NOTHING was sent and the counter did NOT move. Dispatch a fresh executor, which loads them: hw <lane> <task> --fresh. Or change the brief if the brief is what is wrong — an executor that is not given a declared review plugin must not close on a review-skip.")
 }

@@ -1,6 +1,6 @@
 package main
 
-// `hw receipt <project> <task>` and `hw log <project> <task>`: the run
+// `hw receipt <lane> <task>` and `hw log <lane> <task>`: the run
 // directory read back. Ported from cmd_receipt and cmd_log (bin/hw:7727-7795).
 
 import (
@@ -100,7 +100,7 @@ func receiptRefusal(project, task, wt string, hasHW, hasRuns, hasReceipt bool) s
 
 func (a *app) cmdReceiptArgs() {
 	if len(a.args) < 2 { // # MUTATION-ANCHOR: 816-G18
-		a.die("usage: hw receipt <project> <task>")
+		a.die("usage: hw receipt <lane> <task>")
 	}
 	a.receipt(a.c.t.canonProject(a.args[0]), a.args[1])
 }
@@ -120,7 +120,7 @@ func (a *app) workTree(proj, task string) string {
 
 func (a *app) receipt(proj, task string) {
 	if !a.c.t.known(proj) {
-		a.die("unknown project: " + proj + " (expected: " + a.c.t.namesBar() + ")")
+		a.die("unknown lane: " + proj + " — try: " + a.c.t.namesBar())
 	}
 	wt := a.workTree(proj, task)
 	if !isDir(wt + "/.hw") {
@@ -215,14 +215,14 @@ func dimIndent(data []byte, dim, c0 string) string {
 
 func (a *app) cmdLogArgs() {
 	if len(a.args) != 2 {
-		a.die("usage: hw log <project> <task>")
+		a.die("usage: hw log <lane> <task>")
 	}
 	a.log(a.c.t.canonProject(a.args[0]), a.args[1])
 }
 
 func (a *app) log(proj, task string) {
 	if !a.c.t.known(proj) {
-		a.die("unknown project: " + proj + " (expected: " + a.c.t.namesBar() + ")")
+		a.die("unknown lane: " + proj + " — try: " + a.c.t.namesBar())
 	}
 	wt := a.workTree(proj, task)
 	if !isDir(wt + "/.hw") {

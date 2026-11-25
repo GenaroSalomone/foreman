@@ -67,7 +67,7 @@ The reuse route (a live, leased executor in the lane) prints the same manifest a
 The port is in four areas, one file family each, all methods of the dispatch state `dsp` (`t5_state.go`; a bash
 function `_check_brief_contract` is `checkBriefContract`): the flow and the manifest (`t5.go`, `t5_manifest.go`,
 `t5_lanefields.go`: the lane fields the T0/T1 loader left out, with lane_config_load's defaults), the brief and its
-contract (`t5_brief*.go`), vendors, models, accounts and guards (`t5_vendor*.go`), and sdd, reuse discovery, the
+contract (`t5_brief*.go`), vendors, models, accounts and guards (`t5_vendor*.go`), and reuse discovery, the
 route forecast and the invoker (`t5_reuse*.go`, `t5_sdd*.go`). Tests: 843 (contract, ~520 cases, bash/Go),
 844 (one mutant per decision), 845 (the shim), 846 (the `bin/hw: line N:` of the two shell complaints the dry run imitates: hw-core finds the line in `bin/hw` by its anchoring text, and 843 normalizes the number away, so only 846 notices a stale one). The cases are `contract-hw/cases-t5*`, the goldens `golden-t5/`
 (`contract-hw/regen-t5.sh`, bash only).

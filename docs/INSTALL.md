@@ -17,22 +17,19 @@ lines for your shell profile: add them and open a new terminal.
 
 - macOS, or Linux (Debian/Ubuntu-class, bash 5; Linux works, not verified per release, see
   `KNOWN-LIMITATIONS.md` L1). Windows was removed in 0.7.0 (see [Windows](#windows) below).
-- `git` with `user.name` and `user.email` set (a dispatch commits as you; an unset identity can fail it), `jq` 1.7 or newer, `python3` (the pi executor's adapter runs its write guard with `/usr/bin/python3`, an absolute path so a `PATH` entry cannot stand in for it: without one there, every pi tool call is refused), `sd`, `fd` and `rg` (`hw` calls all three).
-  On Linux (Debian: `apt install sd fd-find ripgrep`, then link `fdfind` as `fd`)
-  also Node 22.7 or newer (the pi executor's adapter, `setup/pi/hw-executor.ts`, and the guard's conformance drivers run on it; the guard's decision itself is Python).
-  On macOS, `--check` does not name `sd`, `fd` and `rg` yet; the Homebrew formula
-  and `--with-recommended` install them.
+- `git` with `user.name` and `user.email` set (a dispatch commits as you; an unset identity can fail it), `python3`, which on macOS comes with git's Command Line Tools (the pi executor's adapter runs its write guard with `/usr/bin/python3`, an absolute path so a `PATH` entry cannot stand in for it: without one there, every pi tool call is refused).
+  On Linux, also Node 22.7 or newer (the pi executor's adapter, `setup/pi/hw-executor.ts`, and the guard's conformance drivers run on it; the guard's decision itself is Python).
 - [herdr](https://herdr.dev), running, with its Claude Code integration:
   `herdr integration install claude`
 - [Claude Code](https://claude.com/claude-code), with its first run finished (below)
 - recommended: `engram` (memory, see [Memory](#memory-engram-is-recommended)); optional: `fzf` (the picker behind a bare `hw`)
-- [Go](https://go.dev/dl) 1.22 or newer, which the installer uses to build `hw-core`, the Go binary
-  that runs `hw`, `brain`, `channel-send` and the invokers (see [The Go core and the way back](#the-go-core-and-the-way-back));
-  without it the installer refuses before writing anything, and `--check` lists Go as missing
+- `hw-core`, the Go binary that runs `hw`, `brain`, `channel-send` and the invokers (see [The Go core and the way back](#the-go-core-and-the-way-back)),
+  comes prebuilt with a release (Homebrew, `curl | bash`, `upgrade`): no Go needed. [Go](https://go.dev/dl) 1.22 or newer
+  only for a source checkout that carries no prebuilt for your system
 - optional: the Bitwarden CLI (`npm i -g @bitwarden/cli`), only for a brief that declares `secrets:`
   (see [Secrets](#secrets-bitwarden))
 
-Every version floor above (herdr, Claude Code, Node, jq and engram)
+Every version floor above (herdr, Claude Code, Node and engram)
 is one row of `lib/hw/deps.conf`. `--check` prints each installed version against its floor and
 refuses one below it with the command to update it; `hw preflight --json -- <dispatch>` does the
 same for the tools that dispatch uses (rule `dep-floor`). A tool that is not installed is reported
@@ -53,7 +50,7 @@ only when nothing is left missing.
 
 | Package | Kind | Command it runs |
 |---|---|---|
-| herdr, jq (1.7 or newer), rg, fd, sd | required | `brew install herdr`, `brew install jq`, `brew install ripgrep`, `brew install fd`, `brew install sd` |
+| herdr | required | `brew install herdr` |
 | Claude Code | required | `brew install --cask claude-code@latest` (macOS; see below) |
 | engram | recommended | `brew install gentleman-programming/tap/engram` |
 | fzf | recommended | `brew install fzf` |
@@ -178,7 +175,7 @@ foreman-setup init --dry-run   # prints the plan and changes nothing
 foreman-setup init --yes       # answers its questions yes
 ```
 
-It checks `git`, `jq`, `python3`, `herdr`, `claude`, `rg`, `fd` and `sd`: a missing
+It checks `git`, `python3`, `herdr` and `claude`: a missing
 one is named with its install command. With Homebrew on PATH `init` then asks
 whether to install what Homebrew carries (`--with-recommended`, above; `--yes`
 answers yes) and checks again in the same run, so a machine without `claude` needs
@@ -189,14 +186,14 @@ Claude integration and `engram setup claude-code` (it asks first, and `--yes` an
 for you), builds `~/brain` with a `demo` lane over a toy repository at `~/code/toy`
 (`--lane NAME --repo PATH` for your own), copies a sample brief to
 `~/brain/demo/briefs/hello.md` and ends with `hw demo hello … --dry-run`. Claude
-Code's first run and your PATH stay yours: `init` names them. Without a Go toolchain
-(1.22 or newer) the install it runs refuses before writing anything, naming https://go.dev/dl. A second run changes
+Code's first run and your PATH stay yours: `init` names them. A source checkout with no prebuilt `hw-core` and no Go toolchain
+(1.22 or newer) refuses before writing anything, naming https://go.dev/dl. A second run changes
 nothing and says so. `--brain DIR` and `--bin-dir DIR` move what it writes.
 
 ## The command
 
 On macOS, the Homebrew formula is the shortest way. It installs foreman
-with herdr, jq, rg, fd and sd, and links `foreman-setup`, which is this
+with herdr, and links `foreman-setup`, which is this
 `install.sh` with the same flags:
 
 ```sh
@@ -343,13 +340,9 @@ The cockpit mod needs Claude Code 2.1.289 or newer: below that, `brain` prints
 it on purpose, set `FOREMAN_COCKPIT=0` or pass `brain <lane> --no-cockpit`. What
 it shows is in [REFERENCE.md](REFERENCE.md#the-cockpit).
 
-## `--sdd`
+## Frameworks and `review:`
 
-`--sdd none` is the only mode and the default, so omit it: a dispatch runs outside any framework and needs nothing.
-`--sdd none` and `sdd: none` in a brief are accepted and ignored.
-
-`--sdd gentle` and `sdd: gentle` in a brief are gone and
-warn, then run `--sdd none`; `hw gentle-home` no longer exists; and the
+A dispatch runs outside any framework and needs nothing. `hw gentle-home` no longer exists; and the
 `sdd_modes` lane field is not a field any more, so a `projects.json` that still
 carries it fails to load (`unknown lane field(s)`): delete the key. A
 `review: rdd` brief warns and runs `judgment-day`. What a task closes with is the brief's
@@ -387,9 +380,8 @@ breaks outside the diff, proved by running code (`blast-radius`), needless comme
 `comment-sicko` agent) and maintainability (`thermo-nuclear-code-quality-review`). A piece two plugins carry runs once,
 from the first plugin declared: `[thermo, pstack]` runs thermo's code-quality review and pstack's other three.
 
-**Installing them is an optional step, off by default.** The plugins are pinned copies under
-`setup/vendor/plugins/<name>/` (the upstream sha, a sha256 manifest and the license are in each;
-`setup/vendor/plugins/verify` checks them offline). Installing them only copies them, after checking
+**Installing them is an optional step, off by default.** The plugins are pinned copies (the upstream sha, a sha256
+manifest and the license are in each, checked offline). Installing them only copies them, after checking
 every file against its manifest, into `<brain>/plugins/`, where a brief that declares `plugins:` can
 find them; nothing is written to `~/.claude` or `~/.pi` and nothing becomes active by itself. Without
 the step, a brief with `plugins:` is refused before anything is built, and the refusal names the
@@ -397,7 +389,6 @@ command that installs them and lists what is installed.
 
 ```bash
 ./install.sh --brain ~/brain --with-review-plugins         # a new or existing brain (also: init --with-review-plugins)
-bash setup/vendor/plugins/install                          # a brain that IS a checkout of this repository: <checkout>/plugins
 ./install.sh --brain ~/brain --check                       # says whether they are installed ("Review plugins (optional)")
 ```
 
@@ -411,7 +402,7 @@ skills. A re-task with `hw next` cannot add plugins to a live executor.
 | Where | What |
 |---|---|
 | `~/brain/bin`, `lib/hw`, `layouts`, `lanes/git-worktree.sh`, `setup/guards`, `cockpit` | the mechanism, copied from this checkout; refreshed on every run. `bin/hw` loads its modules from `lib/hw` (`reap`, `status`, `done`, `next`, `ledger`) and stops naming one that is missing |
-| `~/brain/core/dist/<os>-<arch>/hw-core` | the Go binary that runs `hw`, `brain`, `channel-send` and the invokers, built from this checkout with Go 1.22 or newer (required: without it the installer refuses; see [The Go core and the way back](#the-go-core-and-the-way-back)) |
+| `~/brain/core/dist/<os>-<arch>/hw-core` | the Go binary that runs `hw`, `brain`, `channel-send` and the invokers, the release's prebuilt, or built from this checkout with Go 1.22 or newer (required: with neither the installer refuses; see [The Go core and the way back](#the-go-core-and-the-way-back)) |
 | `~/.config/hw/impl` | never written: Go needs no file (`$XDG_CONFIG_HOME` and `HW_IMPL_FILE` are honoured). An install that builds a core removes the byte-identical `default=bash` file an older `--no-core` install wrote; any other file is left as it is (a `bash` line in it is said once at run time, below) |
 | `~/brain/projects.json`, `guards.json` | your lanes and what the guards protect; created, then only added to |
 | `~/brain/<lane>/` | `CLAUDE.md`, `decisions.md`, `briefs/`, and `.claude/` with the read-only guard |
@@ -434,11 +425,15 @@ installer did not make, it refuses and names it before writing anything.
 `hw`, `brain`, `channel-send`, `ask-invoker` and `done-invoker` run in Go, with no
 switch: `hw-core` is a Go binary (built with `invokers`, its twin for the two
 invokers), and each of those commands hands its work to it. 0.5.0 made Go the default and
-kept bash one line away; 0.6.0 removed that bash. `hw-core` is required: the installer
-builds it and refuses without Go, and a command with no `hw-core` stops, naming
+kept bash one line away; 0.6.0 removed that bash. `hw-core` is required: a release carries it prebuilt, a source checkout
+without one builds it and refuses without Go, and a command with no `hw-core` stops, naming
 `setup/build-core --native`. `--agent pi` dispatches run in Go too. macOS and Linux only.
 
-- **What is built.** When a Go toolchain 1.22 or newer is on PATH, the installer
+- **Prebuilt.** Each release attaches `hw-core-<os>-<arch>.tar.gz` (hw-core, the invokers and their `SHA256SUMS`) for
+  darwin and linux, arm64 and amd64; the Homebrew formula has one resource per target and `curl | bash` and `upgrade` fetch
+  the one for this system, checking it against the release's `SHA256SUMS`. When `core/dist/<os>-<arch>/` holds a pair that
+  matches its `SHA256SUMS`, the installer installs it and needs no Go.
+- **What is built.** With no prebuilt, and a Go toolchain 1.22 or newer on PATH, the installer
   builds `hw-core` with `setup/build-core --native` into
   `~/brain/core/dist/<os>-<arch>/hw-core`, where the tools look for it. The build
   is reproducible (the same bytes every run), so a second run writes nothing. No
@@ -454,7 +449,7 @@ builds it and refuses without Go, and a command with no `hw-core` stops, naming
   a tool meets it, when Go is on PATH, and the fresh one runs; with no Go, or a
   build that fails, the old one runs and one line says so, once per state of the
   binary (a failed build is not tried again until the sources change).
-- **Without Go.** With no Go on PATH, or one older than 1.22, or a `go` that does not
+- **Without Go.** With no prebuilt for this system and no Go on PATH, or one older than 1.22, or a `go` that does not
   answer `go version` (unreadable), the installer refuses, exit 1, **before writing
   anything**, and names https://go.dev/dl; `--check` lists Go among the missing
   prerequisites and writes nothing. `--no-core` is refused too (it was removed in
@@ -513,7 +508,7 @@ The session token and the master password are readable by your own processes (`K
 ## Windows
 
 Removed in 0.7.0: the Windows code (the `_windows.go` build files, the Git Bash
-compatibility layer `bin/msys-compat.sh`, and the Windows CI workflow) is gone.
+compatibility layer, and the Windows CI workflow) is gone.
 foreman runs on macOS and Linux only. WSL2 is a Linux, so the Linux path may
 work there, but it is not tested (see `KNOWN-LIMITATIONS.md`, L1).
 
@@ -550,7 +545,7 @@ Then ask a session for "judgment day" over a diff. The judges use engram to
 recall context when it is registered (see Memory above).
 
 **Every build gets an independent review; the brief's `review:` says what that review adds**, in every lane and
-every `--sdd` mode. When a `kind: build` (or no kind) reports done, `hw review <lane> <task>` dispatches a fresh
+every lane. When a `kind: build` (or no kind) reports done, `hw review <lane> <task>` dispatches a fresh
 claude opus reviewer on the build's head, with the tier its size picks: no code-only line changed = none;
 1-400 lines = thermo and test-review; more = those plus `ponytail-review` and the two pstack principles
 (docs, decisions, briefs and changelog fragments do not count as code). Every `review:` value owes it (the key

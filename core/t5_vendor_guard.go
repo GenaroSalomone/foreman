@@ -7,6 +7,8 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -192,10 +194,55 @@ func (d *dsp) artifactsArgs() {
 	d.artifactsLine = "DENIED — --disallowedTools " + vdArtifactTools + " (" + v + ")"
 }
 
-// speckitRemoved is the one message for the removed Spec Kit flow; each surface (flag, brief key, re-task flag, re-task brief)
-// names itself in `what` and says what to do instead in `tail`.
-func speckitRemoved(what, tail string) string {
-	return what + ", but the Spec Kit flow was removed from hw (setup/decisions.md, 2026-11-16). " + tail
+// sddRemoved is the one warning for the removed spec-driven flow (setup/decisions.md, 2026-11-16); each surface (flag, brief
+// key, re-task flag, re-task brief) names itself in `what`. A warning, never a refusal: the old briefs still carry `sdd:`.
+func sddRemoved(what string) string {
+	return what + " — spec-driven development was removed from hw, so it is ignored"
+}
+
+// retiredBodyTokens is the one table of removed mechanisms a brief BODY may still name (briefs are written by copying older
+// ones, so a retired instruction travels). The next removal adds a row here, not code.
+var retiredBodyTokens = []struct {
+	re   *regexp.Regexp
+	what string
+}{
+	{regexp.MustCompile(`--sdd\b|\bsdd:`), "--sdd"},
+}
+
+// retiredBodyWarnings is one warning per brief-body line that names a retired token outside a fenced code block, with its
+// line number. The frontmatter is not the body (its `sdd:` has its own warning). A warning, never a refusal.
+func retiredBodyWarnings(brief string) []string {
+	data, err := os.ReadFile(brief)
+	if err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	start := 0
+	if len(lines) > 0 && strings.TrimSpace(lines[0]) == "---" {
+		for i := 1; i < len(lines); i++ {
+			if strings.TrimSpace(lines[i]) == "---" {
+				start = i + 1
+				break
+			}
+		}
+	}
+	var out []string
+	fence := false
+	for i := start; i < len(lines); i++ {
+		if strings.HasPrefix(strings.TrimSpace(lines[i]), "```") {
+			fence = !fence
+			continue
+		}
+		if fence {
+			continue
+		}
+		for _, t := range retiredBodyTokens {
+			if t.re.MatchString(lines[i]) {
+				out = append(out, sddRemoved("brief line "+strconv.Itoa(i+1)+" names "+t.what)+": delete it from the brief")
+			}
+		}
+	}
+	return out
 }
 
 // sandboxRemoved is the one message for the removed Seatbelt option: a dispatch that asked for confinement must not run without it.

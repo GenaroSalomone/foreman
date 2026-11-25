@@ -752,7 +752,7 @@ func (r *reapApplyRun) runDirsEveryLane() []string {
 	return out
 }
 
-// closeBlocked is `"$HW_BIN_DIR/hw" done <project> <task> --blocked`: the same entry point, the same command line, with
+// closeBlocked is `"$HW_BIN_DIR/hw" done <lane> <task> --blocked`: the same entry point, the same command line, with
 // the child's own output going where it goes in bash.
 func (r *reapApplyRun) closeBlocked(proj, task string) bool {
 	bin := r.a.getenv("HW_CORE_BIN_DIR")

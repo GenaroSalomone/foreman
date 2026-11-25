@@ -520,7 +520,7 @@ func (r *reapRun) irreplaceable(wt string) []string {
 			continue
 		}
 		if isDir(entry) {
-			out, rc := toolOut("fd", "-H", "-t", "f", ".", entry)
+			out, rc := fdFind("-H", "-t", "f", ".", entry)
 			if rc != 0 {
 				keep = append(keep, rel+" (could not be read — fd exited "+itoa(rc)+")")
 			} else if bashSub(out) != "" {
@@ -747,7 +747,7 @@ func (r *reapRun) buildIdle(proj, wt string) bool {
 	if !ok || held {
 		return false
 	}
-	out, _ := toolOut("fd", "-H", "-I", "-t", "d", "-d", "4", "-E", "node_modules", `^\.(next|turbo)$`, wt)
+	out, _ := fdFind("-H", "-I", "-t", "d", "-d", "4", "-E", "node_modules", `^\.(next|turbo)$`, wt)
 	var kb, newest int64
 	var dirs []string
 	for _, d := range strings.Split(out, "\n") {
@@ -919,7 +919,7 @@ func (r *reapRun) workdirDisposition(proj, dir string) {
 	// WHAT THE TASK PRODUCED, read from where the task was TOLD to put it
 	adir := r.artifactsDirFor(proj, dir) // # MUTATION-ANCHOR: 871-G35
 	if isDir(adir) {
-		out, frc := toolOut("fd", "-H", "-t", "f", ".", adir)
+		out, frc := fdFind("-H", "-t", "f", ".", adir)
 		if frc != 0 && frc != 1 {
 			r.wdVerdict = "undetermined"
 			r.wdWhy = "could not read the artifact store " + adir + " — fd exited " + itoa(frc) + ". An unreadable directory is not an empty one, and this is the gate that decides whether anything is being destroyed"
@@ -957,7 +957,7 @@ func (r *reapRun) workdirDisposition(proj, dir string) {
 		return
 	}
 	// AND THE TREE, not just the root
-	recent, rrc := toolOut("fd", "-H", "--changed-within", "24h", ".", dir)
+	recent, rrc := fdFind("-H", "--changed-within", "24h", ".", dir)
 	if rrc != 0 && rrc != 1 {
 		r.wdVerdict, r.wdWhy = "undetermined", "could not read the directory's contents to date them — fd exited "+itoa(rrc)
 		return
@@ -1092,7 +1092,7 @@ func (r *reapRun) run(projFilter string) int {
 		wdRoot := a.c.work + "/" + proj
 		looseSeen := 0
 		if isDir(wdRoot) {
-			out, _ := toolOut("fd", "-H", "-t", "d", "-d", "1", ".", wdRoot)
+			out, _ := fdFind("-H", "-t", "d", "-d", "1", ".", wdRoot)
 			var dirs []string
 			for _, d := range strings.Split(out, "\n") {
 				if d = strings.TrimSuffix(d, "/"); d != "" {
@@ -1132,7 +1132,7 @@ func (r *reapRun) run(projFilter string) int {
 		// ── build output: the weight `df` actually gets back ──
 		bkb := int64(0)
 		if broot, ok := a.canonicalRoot(proj); ok && isDir(broot) {
-			out, _ := toolOut("fd", "-H", "-I", "-t", "d", "-d", "4", "-E", "node_modules", `^\.(next|turbo)$`, broot)
+			out, _ := fdFind("-H", "-I", "-t", "d", "-d", "4", "-E", "node_modules", `^\.(next|turbo)$`, broot)
 			for _, d := range strings.Split(out, "\n") {
 				if d == "" {
 					continue

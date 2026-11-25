@@ -87,11 +87,11 @@ func (a *app) cmdStatusFull() int {
 		case args[0] == "--all":
 			all = true
 		case strings.HasPrefix(args[0], "-"):
-			a.die("unknown option: " + args[0] + " (usage: hw status [<project>] [--all])")
+			a.die("unknown option: " + args[0] + " (usage: hw status [<lane>] [--all])")
 		default:
 			project = a.c.t.canonProject(args[0])
 			if !a.c.t.known(project) {
-				a.die("unknown project: " + args[0] + " (expected: " + a.laneNamesHint() + ")")
+				a.die("unknown lane: " + args[0] + " — try: " + a.laneNamesHint())
 			}
 		}
 		args = args[1:]
@@ -137,7 +137,7 @@ func (a *app) cmdStatusFull() int {
 				return rc
 			}
 		}
-		a.info("scoped to " + project + " — `hw status` with no project adds the cross-lane checks")
+		a.info("scoped to " + project + " — `hw status` with no lane adds the cross-lane checks")
 	}
 	// THE RETRO THE REPORT DID NOT RUN: a reminder, checked here because this is the
 	// screen a brainer opens. It clears itself when engram holds setup/retro/<task>.
@@ -147,7 +147,7 @@ func (a *app) cmdStatusFull() int {
 	// A NEW VERB NOBODY FINDS IS A VERB NOBODY READS: the command that says what those runs REPORTED
 	p := project
 	if p == "" {
-		p = "<project>"
+		p = "<lane>"
 	}
 	a.info("what those runs actually REPORTED, from disk: hw reports " + p)
 	return 0

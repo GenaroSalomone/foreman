@@ -73,7 +73,11 @@ func closedTaskAt(dir string, now time.Time) bool {
 	if !runReported(dir) {
 		return false
 	}
-	st, err := os.Stat(runDoneMarker(dir + "/.hw/" + RunIDs(dir + "/.hw")[0]))
+	ids := RunIDs(dir + "/.hw") // .hw may have vanished since runReported read it
+	if len(ids) == 0 {
+		return false
+	}
+	st, err := os.Stat(runDoneMarker(dir + "/.hw/" + ids[0]))
 	return err == nil && now.Sub(st.ModTime()) > closedTaskGrace
 }
 

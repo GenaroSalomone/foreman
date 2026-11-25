@@ -13,19 +13,14 @@
 # The name must be validated on argv, before a worktree is built, dependencies
 # installed, ports allocated or panes opened — a name herdr will later reject
 # must fail before any of that work starts, not after.
-#
-# `--sdd none` on all four: this asserts about the TASK NAME, not about the
-# setup lane's live framework mode, and omitting --sdd lets hw's --sdd gate
-# answer first instead of the argv name check (same class of bug as
-# setup/tests/02-placement-and-manifest.sh).
 expect_out "task name: uppercase is refused" \
-  "must start with a lowercase letter" setup Mala-Mayuscula --sdd none
+  "must start with a lowercase letter" setup Mala-Mayuscula
 expect_out "task name: a space is refused" \
-  "may only contain" setup "con espacio" --sdd none
+  "may only contain" setup "con espacio"
 expect_out "task name: over 32 chars is refused on argv" \
-  "characters; herdr agent names cap at 32" setup aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --sdd none
+  "characters; herdr agent names cap at 32" setup aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 expect_absent "task name: a legal name is accepted" \
-  "may only contain" setup legal-name_9 --sdd none
+  "may only contain" setup legal-name_9
 
 # The collation trap itself, asserted rather than assumed: if this ever starts
 # failing, bash has changed and the enumerated-alphabet guard can be simplified.
@@ -43,23 +38,16 @@ fi
 # ── --model is validated per vendor ─────────────────────────────────────────
 # `--model terra` dispatched cleanly and the claude CLI then refused to start,
 # leaving an idle pane with the brief inside it and zero context.
-#
-# `--sdd none` throughout: these assert about --model VALIDATION, not the
-# setup lane's live framework mode (same class of bug as
-# setup/tests/02-placement-and-manifest.sh). None of these aliases (terra,
-# future-model-alias, the argv-injection strings below) are sonnet/haiku, so
-# they are not the case the comment further down carves out for 130.
 expect_out "model: claude warns rather than declaring an unknown alias invalid" \
-  "availability is unverified, passing it to the vendor unchanged" setup mp --agent claude --model terra --sdd none
+  "availability is unverified, passing it to the vendor unchanged" setup mp --agent claude --model terra
 expect_out "model: an unknown Claude alias reaches dispatch unchanged" \
-  "model=future-model-alias" setup mp --agent claude --model future-model-alias --sdd none
+  "model=future-model-alias" setup mp --agent claude --model future-model-alias
 for m in 'future --extra-flag' 'future*' '-future' 'claude-future --resume X' 'claude-future*' 'claude-future?' 'claude-future[12]' $'claude-future\t--resume'; do
   expect_out "model: unknown alias $m cannot expand into flags or paths" \
-    "cannot safely pass this Claude model as one literal argument" setup mp --agent claude --model "$m" --sdd none
+    "cannot safely pass this Claude model as one literal argument" setup mp --agent claude --model "$m"
 done
 expect_out "model: claude refuses a provider/model id" \
-  "pi's form, not claude's" setup mp --agent claude --model openai/gpt-5.6-terra --sdd none
-# `--sdd none` is accepted and ignored; the subject here is ALIAS VALIDATION -- does hw accept this spelling and carry it to the manifest.
+  "pi's form, not claude's" setup mp --agent claude --model openai/gpt-5.6-terra
 for m in opus sonnet haiku fable claude-opus-5; do
-  expect_out "model: claude accepts $m" "model=$m" setup mp --agent claude --model "$m" --sdd none
+  expect_out "model: claude accepts $m" "model=$m" setup mp --agent claude --model "$m"
 done

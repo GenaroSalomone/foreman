@@ -14,8 +14,6 @@ repository is, in your own words, after reading its README.
 
 - Nothing else in the repository changes.
 
-**Framework:** `--sdd none`.
-
 ## Verification
 
 ```

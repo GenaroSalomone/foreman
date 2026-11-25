@@ -16,6 +16,7 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -137,6 +138,15 @@ func hcRecordGone(m jmap, asked string) bool {
 	return addr != "" && asked != "" && (addr == asked || hcStr(m, "name") == asked) && hcStr(m, "state") == "finished"
 }
 
+// hcFirstArg is argv[0] of a `foreground` record ("" when it has none).
+func hcFirstArg(fg jmap) string {
+	if argv, _ := fg["argv"].([]any); len(argv) > 0 {
+		s, _ := argv[0].(string)
+		return s
+	}
+	return ""
+}
+
 // hcAgentRead is hcAgentGetJSON that also says whether `hc get` ANSWERED: read=false is a call that failed or a reply that is no
 // record of a terminal in a state this code knows (`{}`, an error object, `starting`, `lost`: unknown), read=true with live=false
 // is a terminal the core says is gone: a record with its address and `finished` (hcRecordGone). A caller that acts on "not live"
@@ -171,6 +181,13 @@ func hcAgentRead(id string) (info string, live, read bool) {
 		app = hcStr(st, "app")
 		if s := hcStr(st, "state"); s != "" {
 			status = s
+		}
+	} else if fg, _ := m["foreground"].(jmap); filepath.Base(hcFirstArg(fg)) == "claude" {
+		// a claude that never reported a status (its startup probe went unanswered) leaves status=null for good; its own title is
+		// the witness hcBriefProved already reads, so the idle gate of `hw next` and channel-send is not blind to it
+		status = "idle"
+		if hcWorkingTitle(hcStr(m, "title")) {
+			status = "working"
 		}
 	}
 	out, err := json.Marshal(map[string]any{"result": map[string]any{"agent": jmap{

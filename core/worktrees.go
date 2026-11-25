@@ -207,7 +207,7 @@ func (a *app) cmdWorktrees() int {
 		case arg == "--quiet":
 			quiet = true
 		case strings.HasPrefix(arg, "-"):
-			a.die("unknown option: " + arg + " — usage: hw worktrees [<project>] [--migrate]")
+			a.die("unknown option: " + arg + " — usage: hw worktrees [<lane>] [--migrate]")
 		default:
 			filter = a.c.t.canonProject(arg)
 		}

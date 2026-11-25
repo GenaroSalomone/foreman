@@ -80,7 +80,7 @@ func (a *app) executorGate(argv []string) {
 	// <task> --dry-run` removed another run's lease (Judgment Day, 2026-11-05). So every named verb's refusal stays.
 	dryRun := false
 	for _, x := range argv {
-		if x == "--dry-run" {
+		if x == "--dry-run" || x == "--dry-run=full" {
 			dryRun = true
 			break
 		}
@@ -133,6 +133,6 @@ func (a *app) executorGate(argv []string) {
 		if dryRun { // a dispatch as a rehearsal: it creates no worktree, agent, database or repo write
 			return
 		}
-		a.executorRefuse(first+" …", "does not dispatch executors") // anything else is `hw <project> <task> …`, a dispatch
+		a.executorRefuse(first+" …", "does not dispatch executors") // anything else is `hw <lane> <task> …`, a dispatch
 	}
 }

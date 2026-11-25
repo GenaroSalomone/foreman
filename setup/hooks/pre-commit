@@ -471,6 +471,11 @@ if [ "$hook_docs" = 1 ] || grep -qE "$SUITE_TRIGGER_PATTERN" <<<"$staged"; then
       printf 'pre-commit: the fast gate passed in %ss (measured on this run; its test count line was not found).\n' \
         "$hook_elapsed" >&2
     fi
+    # WHAT THE GATE LEFT TO THE BRAINER'S BATCH travels with the green verdict: the runner prints its `DEFERRED, names your diff:` lines
+    # (the Go partitions an executor's commit did not queue) into $out, which is kept in hw-precommit-last.out and was never shown, so the
+    # committer read "go partitions 0 of 2" with nothing saying who runs them. `|| true`: no match is the usual case.
+    hook_deferred="$(printf '%s\n' "$out" | grep -E '^DEFERRED' || true)"
+    [ -z "$hook_deferred" ] || printf '%s\n' "$hook_deferred" | sed 's/^/pre-commit: /' >&2
     # SAY IT WHEN IT IS EXPENSIVE. The hook's own argument is that its cost is
     # what decides whether people reach for --no-verify, so a cost that has
     # grown past the point of being paid willingly should say so where it is

@@ -29,7 +29,6 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md lists the ones in use, this is 
     base: <branch>     the branch the worktree is built on; declare it on any task whose
                        result is measured. A check, never a source.
     agent: claude|pi   a check against the resolved vendor, like model:.
-    sdd: none          accepted and ignored.
     requires: browser|subagents|repo|database  (comma-separated)
                        what the task NEEDS. hw warns, never refuses, when the target may
                        not have it: it knows the vendor, not what the session can reach.
@@ -71,7 +70,7 @@ BRIEF KEYS (front-matter; docs/BRIEF-TEMPLATE.md lists the ones in use, this is 
                        (worktree .claude/skills/<name>/SKILL.md, after replication, or the
                        account's user-level skills dir) or hw refuses the dispatch.
     review: judgment-day|plugins|none
-                       the review, in every lane and --sdd mode. A build owes
+                       the review, in every lane. A build owes
                        the independent review for every value, absent too
                        (`hw review`; the builder runs no Judgment Day):
                        judgment-day has the reviewer run Judgment Day; plugins

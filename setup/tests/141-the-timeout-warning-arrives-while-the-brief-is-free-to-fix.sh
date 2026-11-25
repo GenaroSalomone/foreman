@@ -37,7 +37,7 @@ FAST="$(brief fast 'HW_TEST_GATE=fast bash setup/test-hw')"
 OTHER="$(brief other 'bash setup/tests/22-hw-unstick.sh')"
 
 # ── 1. the dispatch says it, in the manifest a human reads ─────────────────
-out="$(hw_dry setup probe-full --brief "$FULL" --sdd none || true)"
+out="$(hw_dry setup probe-full --brief "$FULL" || true)"
 case "$out" in
   *"WILL TIME OUT AT CLOSE"*"~1000s"*"HW_TEST_GATE=fast"*)
     pass "dispatch: a verify block naming the full suite is flagged ON THE MANIFEST LINE, beside the command" ;;
@@ -64,19 +64,19 @@ case "$out" in
 esac
 
 # ── 2. NO FALSE POSITIVES, which is what makes the warning readable ────────
-out="$(hw_dry setup probe-fast --brief "$FAST" --sdd none || true)"
+out="$(hw_dry setup probe-fast --brief "$FAST" || true)"
 case "$out" in
   *"WILL TIME OUT AT CLOSE"*|*"names the full suite without"*)
     fail "dispatch: a brief that already names HW_TEST_GATE=fast was warned about anyway: $out" ;;
   *) pass "dispatch: a verify block that already names the fast gate is not warned about" ;;
 esac
-out="$(hw_dry setup probe-other --brief "$OTHER" --sdd none || true)"
+out="$(hw_dry setup probe-other --brief "$OTHER" || true)"
 case "$out" in
   *"WILL TIME OUT AT CLOSE"*|*"names the full suite without"*)
     fail "dispatch: an unrelated verify command triggered the full-suite warning: $out" ;;
   *) pass "dispatch: an unrelated verify command is not warned about" ;;
 esac
-out="$(hw_dry setup probe-nobrief --sdd none || true)"
+out="$(hw_dry setup probe-nobrief || true)"
 case "$out" in
   *"WILL TIME OUT AT CLOSE"*) fail "dispatch: a dispatch with no brief at all was warned about: $out" ;;
   *) pass "dispatch: no brief means nothing to warn about" ;;
@@ -89,7 +89,7 @@ esac
 # by the line.
 printf '# probe\n\n## Verification\n\n```\nbash setup/tests/22-hw-unstick.sh\nbash setup/test-hw\n```\n' \
   > "$TMP/briefs/second.md"
-out="$(hw_dry setup probe-second --brief "$TMP/briefs/second.md" --sdd none || true)"
+out="$(hw_dry setup probe-second --brief "$TMP/briefs/second.md" || true)"
 case "$out" in
   *"(+1 more)"*) : ;;
   *) fail "dispatch: the two-command fixture did not produce the (+N more) shape this case depends on: $out" ;;

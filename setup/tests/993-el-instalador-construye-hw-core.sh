@@ -21,7 +21,7 @@
 #     per file and kills an executable rewritten in place;
 #   - the mutants 993-M01 (a switch file of the user's is removed, or the one --no-core wrote is kept), 993-M02 (an
 #     old Go is accepted), 993-M03 (--no-core is accepted), 993-M04 (a stale hw-core is kept), 993-M05 (hw-core written in place) and 993-M06
-#     (another architecture is installed) 993-M07 (a go that fails `go version` stops the install with no word) and 993-M08 (a retired switch line is not said) are each caught.
+#     (another architecture is installed) 993-M07 (a go that fails `go version` stops the install with no word), 993-M08 (a retired switch line is not said) and 993-M09 (a prebuilt that does not match its sums is trusted) are each caught.
 #
 # Run by ../test-hw. Alone:  bash setup/tests/993-el-instalador-construye-hw-core.sh
 . "$(dirname "${BASH_SOURCE[0]}")/_common.sh"
@@ -179,6 +179,31 @@ EOF
 chmod +x "$MS/setup/build-core"
 fresh_src() { cp "$ROOT/install.sh" "$MS/install.sh"; chmod +x "$MS/install.sh"; }
 parses() { bash -n "$MS/install.sh" || fail "993: mutant $1 does not parse"; }
+
+# a PREBUILT hw-core (core/dist/<os>-<arch>/ with the SHA256SUMS of its pair, what a release asset or the formula's resource unpacks
+# to) is installed WITHOUT Go: --check and the install pass with no go on PATH, the builder never runs, and a pair that does not match
+# its sums is not trusted (the Go requirement is back)
+PB="$MS/core/dist/$os-$arch"; mkdir -p "$PB"
+printf 'prebuilt core\n' > "$PB/hw-core$ext"; printf 'prebuilt invokers\n' > "$PB/invokers"; chmod +x "$PB/hw-core$ext" "$PB/invokers"
+( cd "$PB" && { shasum -a 256 "hw-core$ext" invokers 2>/dev/null || sha256sum "hw-core$ext" invokers; } > SHA256SUMS )
+fresh; fresh_src; rm -rf "$HOME/nb"
+out="$(PATH="$PATH_NOGO" STUB_FAIL=1 inst "$MS" "$HOME/nb" --check)" || true
+case "$out" in *"hw-core (prebuilt, $os-$arch"*) ;; *) fail "993: --check with a prebuilt and no go did not say the prebuilt is used: $out" ;; esac
+case "$out" in *"MISSING go"*) fail "993: --check with a prebuilt still asked for go: $out" ;; esac
+fresh; rc=0; out="$(PATH="$PATH_NOGO" STUB_FAIL=1 inst "$MS" "$HOME/b")" || rc=$?
+[ "$rc" = 0 ] || fail "993: an install with a prebuilt and no go exited $rc: $(printf '%s' "$out" | tail -6)"
+[ "$(cat "$HOME/b/core/dist/$os-$arch/hw-core$ext")" = "prebuilt core" ] && [ -x "$HOME/b/core/dist/$os-$arch/invokers" ] && [ ! -e "$HOME/b/core/dist/$os-$arch/SHA256SUMS" ] \
+  || fail "993: the prebuilt pair was not installed as it is: $(ls "$HOME/b/core/dist/$os-$arch" 2>&1)"
+printf 'tampered\n' > "$PB/hw-core$ext"
+rm -rf "$HOME/nb"; rc=0; out="$(PATH="$PATH_NOGO" inst "$MS" "$HOME/nb" --check)" || rc=$?
+case "$out" in *"MISSING go >= 1.22"*) ;; *) fail "993: a prebuilt that does not match its sums was trusted: $out" ;; esac
+pass "993: a prebuilt hw-core matching its SHA256SUMS installs with no Go on PATH (--check says so, the builder never runs); one that does not match is not trusted"
+# M09: a prebuilt whose bytes do not match its SHA256SUMS is trusted (the tampered pair above, with no Go on PATH)
+fresh_src; mutate_anchor 993-M09 "$MS/install.sh" 'if [ -f "$_pd/hw-core" ]; then PREBUILT="$_pd"; fi'; parses 993-M09
+rm -rf "$HOME/nb"; m9out="$(PATH="$PATH_NOGO" inst "$MS" "$HOME/nb" --check)" || true
+m9said=refused; case "$m9out" in *"hw-core (prebuilt"*) m9said=trusted ;; esac
+saw_mutant "M09 a prebuilt that does not match its sums trusted" "tampered pair: $m9said" "tampered pair: trusted"
+rm -rf "$MS/core/dist"
 
 # the stub builder, as real arms: a new hw-core is a new file, and another architecture installs nothing
 fresh; fresh_src

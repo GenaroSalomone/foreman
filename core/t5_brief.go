@@ -264,6 +264,7 @@ func (d *dsp) brieflessGate() {
 		d.warn("launching " + d.proj + ":" + d.task + " WITHOUT a brief (--no-brief): the executor has no contract, no verification and no authorization to quote")
 		return
 	}
+	d.requireLane() // a lane that does not exist is named as that, not reported as a missing brief
 	want := d.c.brain + "/" + d.proj + "/briefs/" + d.task + ".md"
 	near := ""
 	for _, n := range d.brBrieflessNearest(d.proj, d.task) {
@@ -335,7 +336,7 @@ func brGlobMd(dir string) []string {
 
 // brBrieflessArchiveHint is _briefless_archive_hint (fd and git, called as bash calls them).
 func (d *dsp) brBrieflessArchiveHint(lane, task string) string {
-	out, _ := brExec("", "fd", "-t", "f", "-g", task+".md", d.c.brain+"/"+lane+"/briefs")
+	out, _ := fdFind("-t", "f", "-g", task+".md", d.c.brain+"/"+lane+"/briefs")
 	if hit := brFirstLine(out); hit != "" { // # MUTATION-ANCHOR: 844-A10
 		return "it exists at " + hit + " (moved into a subfolder?): pass it with --brief"
 	}
@@ -706,8 +707,6 @@ func (d *dsp) brDispatchActual(key string) string {
 			return orDefaultStr(d.nextDispatchEffort(d.reuseRundir), "<unmeasured>")
 		}
 		return orDefaultStr(d.effort, "<agent default>")
-	case "sdd":
-		return orDefaultStr(d.sdd, "none")
 	case "placement":
 		if d.here { // # MUTATION-ANCHOR: 844-A33
 			return "here"
@@ -1058,6 +1057,9 @@ func (d *dsp) checkBriefContract() {
 	d.checkBriefAffectedPlaceholder()
 	d.checkBriefBrainLanePath()
 	d.checkBriefTestHwOrder()
+	for _, w := range retiredBodyWarnings(d.brief) {
+		d.warn(w)
+	}
 	d.warnTaskOverlap() // two live tasks in one file: a warning, never a refusal (2026-11-04)
 	decls := d.loadBriefDecls()
 	inferred := brTaskKindFromName(d.task)
@@ -1134,7 +1136,11 @@ func (d *dsp) checkBriefContract() {
 		if key == "delivery" { // was the gentle gate's; with gentle gone it fixes nothing and is ignored
 			continue
 		}
-		if key == "review" { // fixes no dispatch field: it picks the closing review, in every lane and every --sdd mode
+		if key == "sdd" { // REMOVED (2026-11-16): any value is ignored, and says so
+			d.warn(sddRemoved("brief key sdd:"))
+			continue
+		}
+		if key == "review" { // fixes no dispatch field: it picks the closing review, in every lane
 			d.reviewGate()
 			d.brAppendDeclared("review")
 			continue
@@ -1166,13 +1172,6 @@ func (d *dsp) checkBriefContract() {
 			d.warn("brief declares base=" + val + " but " + d.proj + " has no repository, so there is no base branch to build on")
 			bad = true
 			continue
-		}
-		if key == "sdd" && val == "speckit" { // REMOVED: the Spec Kit flow left hw
-			d.die(speckitRemoved("brief declares sdd: speckit", "Declare sdd: none (or drop the key)."))
-		}
-		if key == "sdd" && val == "gentle" { // RETIRED SPELLING: `sdd: gentle` is read as `sdd: none` (gentle-ai left hw)
-			d.warn("brief declares sdd: gentle, which is retired (gentle-ai left hw): read as sdd: none")
-			val = "none"
 		}
 		if key == "model" { // the brief door of the ONE effort check: a level inside the id is refused, not compared away
 			if msg := modelEffortSuffixRefusal(val, "the brief's model:"); msg != "" {
@@ -1701,7 +1700,7 @@ func (d *dsp) checkBriefMeasuredEvidence() {
 		}
 	}
 	if bad { // # MUTATION-ANCHOR: 844-A100
-		d.die("brief " + d.brief + " has an invalid ## MEASURED block. Accepted: Claim: ... then exactly one of Evidence-Command: ... plus an immediate fenced transcript with a $ command and literal output; Evidence-Report: engram #<numeric-id>; Evidence-Receipt: <project>:<task> key=<named-key>; Evidence-File: <path>:<line-or-range> plus an immediate fenced quote. This lint checks shape, adjacency, and auditable identity only — not authenticity, freshness, semantic support, causality, completeness, or omitted contradictions.")
+		d.die("brief " + d.brief + " has an invalid ## MEASURED block. Accepted: Claim: ... then exactly one of Evidence-Command: ... plus an immediate fenced transcript with a $ command and literal output; Evidence-Report: engram #<numeric-id>; Evidence-Receipt: <lane>:<task> key=<named-key>; Evidence-File: <path>:<line-or-range> plus an immediate fenced quote. This lint checks shape, adjacency, and auditable identity only — not authenticity, freshness, semantic support, causality, completeness, or omitted contradictions.")
 	}
 }
 

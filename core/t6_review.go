@@ -122,6 +122,19 @@ func reviewTierListWith(tier string, jd bool, extra []string) []string {
 	return out
 }
 
+// reviewTierMissing is the plugins the tier loads by default that this brain has not installed (the pinned review plugins are an
+// optional install step, so a public install has none): the review falls back to what the install has. A plugin the build's review: or
+// the lane's review_default named is not a default: it stays, and is refused where it was declared.
+func (a *app) reviewTierMissing(tier string, extra []string) []string {
+	var out []string
+	for _, n := range reviewTierListWith(tier, false, nil) {
+		if !has(extra, n) && !pluginAt(a.c.brain, n) {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
 // reviewerPieces is the pieces a reviewer proves, by full name, from its `review:` list. In a review_of brief `pstack` stands
 // for its two principles (a Skill call each, like every other piece), not for the four reviewers it carries on a build.
 func reviewerPieces(list []string) []string {
@@ -250,6 +263,7 @@ type reviewPlan struct {
 	tier                                    string
 	jd                                      bool
 	list, pieces                            []string
+	tierMissing                             []string // the tier's own plugins this brain has not installed: the review runs without them
 	extraBrief, extraLane                   []string // what the reviewer's tier adds: the build's review: items, then the lane's review_default ones
 	uiFiles                                 []string // the code files the lane's ui_paths call UI, when they add qa by default (reviewQADefault)
 	post                                    string   // the lane's review_post: pr-description or none
@@ -297,6 +311,14 @@ func reviewValuedFlag(args []string, i int, x string) (flag, v string, next int,
 	return "", "", i, false
 }
 
+// reviewIsFlag is true when x is one of hw review's own options, valued or not.
+func reviewIsFlag(x string) bool {
+	if _, _, _, ok := reviewValuedFlag(nil, 0, x); ok {
+		return true
+	}
+	return x == "--dry-run" || x == "--here" || x == "--no-report"
+}
+
 func (a *app) cmdReview() int {
 	dry, here, noReport := false, false, false
 	at, account, liftCap, model, effort := "", "", "", "", ""
@@ -304,7 +326,7 @@ func (a *app) cmdReview() int {
 	for i := 0; i < len(a.args); i++ {
 		x := a.args[i]
 		if flag, v, next, ok := reviewValuedFlag(a.args, i, x); ok {
-			if i = next; v == "" || (strings.HasPrefix(v, "-") && flag != "--lift-cap") { // a reason may start with a dash; a commit or an account may not
+			if i = next; v == "" || (strings.HasPrefix(v, "-") && flag != "--lift-cap") || (flag == "--lift-cap" && reviewIsFlag(v)) { // a reason may start with a dash, but not be one of our flags (`--lift-cap --dry-run` made the dry run real); a commit or an account may not start with one
 				a.die("hw review: " + flag + " needs " + reviewValuedNeeds[flag] + " (usage: " + reviewUsage + ")")
 			}
 			switch flag {
@@ -615,7 +637,8 @@ func (a *app) reviewPlan(laneArg, task, at string) *reviewPlan {
 	if p.uiFiles = a.reviewQADefault(lane, review, p.codeFiles); p.uiFiles != nil {
 		extra = append(extra, reviewQAItem)
 	}
-	p.list = reviewTierListWith(p.tier, p.jd, extra)
+	p.tierMissing = a.reviewTierMissing(p.tier, extra)
+	p.list = slices.DeleteFunc(reviewTierListWith(p.tier, p.jd, extra), func(n string) bool { return has(p.tierMissing, n) })
 	p.pieces = reviewerPieces(p.list)
 	short := p.head
 	if len(short) > reviewShortLen {
@@ -762,7 +785,10 @@ func (a *app) reviewPrint(p *reviewPlan, dry bool) {
 	if !p.reviewerOwed() {
 		return
 	}
-	a.printf("  pieces       %s\n", strings.Join(p.pieces, ", "))
+	a.printf("  pieces       %s\n", orDefaultStr(strings.Join(p.pieces, ", "), "none"))
+	if len(p.tierMissing) > 0 {
+		a.printf("  - plugins    %s not installed here: this tier reviews without them (optional: install.sh --brain %s --with-review-plugins)\n", strings.Join(p.tierMissing, ", "), a.c.brain)
+	}
 	if p.jdDropped {
 		a.printf("  - JD         the build brief's review: names judgment-day, which a delta runs only at tier L\n")
 	}
@@ -860,6 +886,63 @@ func (a *app) reviewWriteFunctions(p *reviewPlan) {
 		return
 	}
 	a.ok("functions.txt: " + strconv.Itoa(len(p.functions)) + " function(s) in " + art)
+	calls := strings.Join(a.reviewCallersOf(a.c.checkout(p.lane), p), "\n")
+	if calls != "" {
+		calls += "\n"
+	}
+	if err := os.WriteFile(art+"/callers.txt", []byte(calls), 0o666); err != nil {
+		a.warn("callers.txt was NOT written: " + err.Error())
+	}
+}
+
+const (
+	reviewCallersCap     = 5 // hits listed per function
+	reviewCallersMinName = 4 // a shorter name (`run`, `get`) matches everything: it is not searched
+)
+
+// reviewCallersOf is `name<TAB>file:line<TAB>text` for the places the changed functions are used, read from the tree at the head
+// (git grep -w), once per name.
+func (a *app) reviewCallersOf(checkout string, p *reviewPlan) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, f := range p.functions {
+		name, _, _ := strings.Cut(f, "\t")
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if len(name) < reviewCallersMinName {
+			out = append(out, name+"\t(not searched: a name under "+strconv.Itoa(reviewCallersMinName)+" characters matches too much)")
+			continue
+		}
+		grep, _ := gitRun(checkout, nil, "grep", "-n", "-w", "-I", "--no-color", "-e", name, p.head, "--")
+		out = append(out, reviewCallerLines(name, p.head+":", string(grep))...)
+	}
+	return out
+}
+
+// reviewCallerLines turns one name's `git grep -n` output (each line `<prefix>file:line:text`) into its callers.txt lines: the
+// line that defines the name is not a caller, and at most reviewCallersCap hits are listed, the rest counted.
+func reviewCallerLines(name, prefix, grep string) []string {
+	var out []string
+	hits := 0
+	for _, l := range strings.Split(grep, "\n") {
+		c := strings.SplitN(strings.TrimPrefix(l, prefix), ":", 3)
+		if len(c) < 3 || reviewDefName(c[2]) == name {
+			continue
+		}
+		if hits++; hits <= reviewCallersCap {
+			text := strings.TrimSpace(c[2])
+			if r := []rune(text); len(r) > 140 {
+				text = string(r[:140])
+			}
+			out = append(out, name+"\t"+c[0]+":"+c[1]+"\t"+text)
+		}
+	}
+	if hits > reviewCallersCap {
+		out = append(out, name+"\t("+strconv.Itoa(hits-reviewCallersCap)+" more hit(s) not listed)")
+	}
+	return out
 }
 
 // ── the reviewer's brief ────────────────────────────────────────────────────
@@ -901,9 +984,12 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 	for _, q := range p.pieces {
 		skills += "- `" + q + "`\n"
 	}
+	if skills == "" && len(p.tierMissing) > 0 {
+		skills = "- none: " + strings.Join(p.tierMissing, ", ") + " are not installed here, so read the diff yourself against the list below"
+	}
 	jd := ""
 	if p.jd {
-		jd = "This build is declared high risk (its brief lists `judgment-day`: money, mail or live data). After the pieces above, run Judgment Day over the same range with the `judgment-day` skill, once, and fold its confirmed findings into `review.md`."
+		jd = "This build is declared high risk (its brief lists `judgment-day`: money, mail or live data). After the pieces above, run Judgment Day over the same range with the `judgment-day` skill, once, and fold its confirmed findings into `review.md`. Then write ONE line in `review.md`, with no `|` in it: `jd: confirmed=<n> suspects=<n> exclusive=<n>` (confirmed: findings both judges agreed on; suspects: findings one judge raised that you could not confirm; exclusive: findings only Judgment Day found, that no other piece of this review did). `done-invoker` refuses a review that ran Judgment Day without it."
 	}
 	// a slot's value is not rescanned by the replacer below, so the two clauses take their own slots here
 	own := strings.NewReplacer("{{base}}", p.from, "{{head}}", p.head, "{{branch}}", p.branch)
@@ -927,6 +1013,7 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 		}
 		qa = strings.NewReplacer("{{brain}}", a.c.brain, "{{qa_cases}}", cases).Replace(own.Replace(reviewQAPrompt))
 	}
+	guards := a.reviewGuardsSlot(p)
 	asked := "investigate"
 	rb := p.requestedBy
 	if rb == "" {
@@ -938,11 +1025,27 @@ func (a *app) reviewBriefText(p *reviewPlan) (string, error) {
 		"{{lane}}", p.lane, "{{task}}", p.task, "{{head}}", p.head, "{{base}}", p.from,
 		"{{tier}}", reviewTierLabel(p.tier, p.jd), "{{code_lines}}", strconv.Itoa(p.code),
 		"{{build_brief}}", orDefaultStr(p.buildBrief, "(the build had no brief on disk)"),
-		"{{skills}}", strings.TrimRight(skills, "\n"), "{{jd}}", jd, "{{agents}}", agents, "{{qa}}", qa, "{{post_exception}}", post, "{{functions}}", fns,
+		"{{skills}}", strings.TrimRight(skills, "\n"), "{{jd}}", jd, "{{agents}}", agents, "{{qa}}", qa, "{{guards}}", guards, "{{post_exception}}", post, "{{functions}}", fns,
 		"{{requested_by}}", strings.ReplaceAll(rb, `"`, `'`), "{{asked}}", asked, "{{model}}", p.model,
 		"{{delta_from}}", p.from, "{{delta_how}}", prior.tHow, "{{prior_head}}", prior.v, "{{prior_verdict}}", prior.verdict, "{{prior_review}}", prior.priorPath(),
 	)
 	return r.Replace(string(tpl)), nil
+}
+
+// reviewGuardsPath is the one path whose reviews carry a checklist (setup/guards/REVIEW.md): the 2026-11 retro found 22 of the 82
+// blocker rows in 13 of 167 reviews under it. It is not a general per-path mechanism.
+const reviewGuardsPath = "setup/guards/"
+
+// reviewGuardsSlot fills {{guards}}: the guards checklist when the diff changes a file under setup/guards/, "" otherwise.
+func (a *app) reviewGuardsSlot(p *reviewPlan) string {
+	if !slices.ContainsFunc(p.codeFiles, func(f string) bool { return strings.HasPrefix(f, reviewGuardsPath) }) {
+		return ""
+	}
+	b, err := os.ReadFile(a.c.brain + "/" + reviewGuardsPath + "REVIEW.md")
+	if err != nil {
+		return "## Guard changes\n\nThis diff touches `setup/guards/` and this brain has no `setup/guards/REVIEW.md`: walk the guard bypass classes of `setup/decisions.md` (`decisions index setup --all | rg guard`) yourself."
+	}
+	return strings.TrimSpace(string(b))
 }
 
 // reviewPostPR is the lane's `review_post` that has the reviewer write its findings into the PR.

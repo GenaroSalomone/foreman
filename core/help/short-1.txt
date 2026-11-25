@@ -1,26 +1,30 @@
 hw — launch one executor per task, in its own tab, with its own worktree.
 
 SYNOPSIS
-    hw <project> <task> --brief <path> [flags]
+    hw <lane> <task> --brief <path> [flags]
     hw <command> [args]                hw help <topic>
 
 COMMANDS
-    brain <project>                    open the project's long-lived brainer
+    brain <lane>                       open the lane's long-lived brainer
         brain demo
-    hw <project> <task> --brief <path>
+    hw <lane> <task> --brief <path>
         launch an executor on a brief; --dry-run prints the dispatch and
         builds nothing
         hw demo hello --brief ~/brain/demo/briefs/hello.md
-    hw <project> <task> --brief <path> --worktree none --no-db
+    hw <lane> <task> --brief <path> --worktree none --no-db
         read-only work (an audit, a review): a tab, no branch, no database
-    hw status [<project>]              what is running, and what never closed
+    hw status [<lane>]                 what is running, and what never closed
         hw status demo
-    hw receipt <project> <task>        what was measured, next to what was dispatched
+    hw receipt <lane> <task>           what was measured, next to what was dispatched
         hw receipt demo hello
-    hw done <project> <task>           close the task's tab once its report is
+    hw done <lane> <task>              close the task's tab once its report is
         hw done demo hello             accepted; removes no worktree, no branch
-    hw retro-done <task>               clear a setup run's retro reminder
-        hw retro-done hello
+    hw review <lane> <task>            the independent review of a build's branch tip
+        hw review demo hello
+    hw reap [<lane>] [--apply]         list merged worktrees and branches that are safe
+        hw reap demo                   to remove; --apply removes them
+    hw train add|push <lane> [<task>]  merge reported tasks into train-<lane>, run the
+                                       suite and move the base; a lane whose repo is brain
 
 HELP TOPICS                            hw help <topic>
     dispatch     the launch form per lane, placement and isolation

@@ -5,7 +5,6 @@ review: [{{review_list}}]
 review_of: {{review_of}}
 requested_by: "{{requested_by}}"
 asked: {{asked}}
-sdd: none
 ---
 
 # Independent review of {{lane}}:{{task}} @ {{head}}
@@ -22,10 +21,18 @@ the builder's. Judge the bytes at `{{head}}`; change nothing and post nothing to
 - The builder's `checks.md`, PR body and test results are **claims, not evidence**. Re-derive what you rely on: run the
   tests yourself when one decides a finding, and read the files outside the diff that the diff depends on.
 - Read `git diff {{base}}..{{head}}` once, then whatever else of the tree you need. Not the builder's transcript.
+- **Tests: one command, in the background.** `git diff --name-only {{base}} > "$HW_ARTIFACTS/changed"`, then run
+  `setup/go-test-core.sh --affected "$HW_ARTIFACTS/changed" --run` with `run_in_background: true` and wait for its completion
+  notice: a foreground `go test` in `core/` is refused by `deny-executor-sleep-poll`, and so is a `sleep` poll. It runs the
+  partitions the diff reaches, not the whole suite: a test outside that list is yours to name, not to assume.
+- **Your tools:** `Glob` and `Grep` may be absent from this session. Search with `rg` and `fd` in Bash and read ranges with
+  `sed -n 'A,Bp' file` (or `Read`, if you have it).
+- **Reading a skill's references** (`~/.claude/skills/judgment-day/references/*`): `cat` or `sed -n` them in a command with no
+  `mkdir`, redirect or other write: the brain-checkout guard refuses a command that reads there and writes anywhere else.
 
 ## What you run, in this one session
 
-Each with the Skill tool under its full name; done-invoker reads your transcript for each call:
+Run each skill piece yourself with the Skill tool under its full name; done-invoker reads your transcript (and your subagents') for each call. To parallelise one, use the Agent tool with `model: sonnet` and have that subagent invoke the skill (a subagent sees this session's plugin skills); never leave a skill piece to a `general-purpose` agent you did not ask to invoke it:
 
 {{skills}}
 
@@ -34,6 +41,8 @@ Each with the Skill tool under its full name; done-invoker reads your transcript
 {{agents}}
 
 {{qa}}
+
+{{guards}}
 
 If you run Judgment Day: **a binary (an image, a font, a compiled file) is checked by you, never by a judge.** The diff counts it as
 owed, so open it yourself and write what you saw in `review.md`; keep every binary out of a judge's target paths, since a judge
@@ -83,6 +92,11 @@ then one row per finding: `id | blocker|should|follow-up | file:line | failure s
 {{functions}}
 
   A row for a function this list missed is welcome.
+
+  Where each of them is called is in `$HW_ARTIFACTS/callers.txt`, one hit per line, `name<TAB>file:line<TAB>text`, from the tree at
+  `{{head}}`: at most 5 hits per function, the definition itself left out, and no search for a name under 4 characters (the line
+  says so). Read the callers of a function whose behaviour the diff changes before you judge it: a defect outside the diff is a
+  `follow-up`, never a `blocker`.
 
 {{post_exception}}
 

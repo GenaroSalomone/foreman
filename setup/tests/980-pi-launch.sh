@@ -9,7 +9,7 @@ table_mutant "$TMP/pi-go-roster.json" 't["pi_roster"] = "go"' && export HW_PROJE
 SOURCE="${HW_SOURCE:-$ROOT/bin/hw}"
 launch() {  # <task> <extra args...>
   local t="$1"; shift
-  env -u HW_INVOKER_PANE -u HW_CHAINING_ENABLED "$SOURCE" setup "$t" --agent pi "$@" --no-report --dry-run 2>&1 || true
+  env -u HW_INVOKER_PANE -u HW_CHAINING_ENABLED "$SOURCE" setup "$t" --agent pi "$@" --no-report --dry-run=full 2>&1 || true
 }
 brief() {  # <kind> -> path of a brief declaring it
   local f="$TMP/pi-$1.md"
@@ -17,8 +17,8 @@ brief() {  # <kind> -> path of a brief declaring it
   printf '%s' "$f"
 }
 
-out="$(launch pi-none --sdd none --no-brief --model opencode-go/deepseek-v4.1-flash)"
-case "$out" in *"dry run — nothing created"*) pass "--agent pi --sdd none reaches the dry-run manifest" ;; *) fail "--agent pi was not accepted: $out" ;; esac
+out="$(launch pi-none --no-brief --model opencode-go/deepseek-v4.1-flash)"
+case "$out" in *"dry run — nothing created"*) pass "--agent pi reaches the dry-run manifest" ;; *) fail "--agent pi was not accepted: $out" ;; esac
 case "$out" in *"--agent must be"*) fail "--agent pi refused as an unknown vendor: $out" ;; esac
 case "$out" in *"--model opencode-go/deepseek-v4.1-flash"*) pass "the pi model rides as --model provider/id" ;; *) fail "no --model provider/id in the agent args: $out" ;; esac
 case "$out" in *"-ne -na -e builtin:mcp"*"setup/pi/hw-executor.ts"*) pass "pi launches with an explicit extension set ending in hw's adapter" ;; *) fail "pi's extension set is missing: $out" ;; esac
@@ -26,45 +26,45 @@ case "$out" in *"setup/pi/hw-executor.ts --exclude-tools mcp__engram__* -ns"*) p
 case "$out" in *"hw_engram"*) pass "the manifest names the engram proxy as the pi extension's hw_engram" ;; *) fail "no hw_engram proxy line: $out" ;; esac
 case "$out" in *"pi has no permission prompts"*) pass "the permissions line says pi has none" ;; *) fail "permissions line wrong for pi: $out" ;; esac
 
-out="$(launch pi-bare --sdd none --no-brief --model deepseek-v4-pro)"
+out="$(launch pi-bare --no-brief --model deepseek-v4-pro)"
 case "$out" in *"pi needs provider/model"*) pass "a bare pi model id is refused with the provider/model form" ;; *) fail "bare pi model not refused: $out" ;; esac
 
-out="$(launch pi-ask --sdd none --no-brief --model opencode-go/glm-5.3 --permissions ask)"
+out="$(launch pi-ask --no-brief --model opencode-go/glm-5.3 --permissions ask)"
 case "$out" in *"--permissions ask cannot be honoured on pi"*) pass "--permissions ask is refused on pi" ;; *) fail "pi ask not refused: $out" ;; esac
 
 for row in "build opencode-go/deepseek-v4.1-flash" "design opencode-go/deepseek-v4.1-flash" "audit opencode-go/deepseek-v4.1-flash" \
            "review opencode-go/glm-5.3-flash" "explore opencode-go/deepseek-v4.1-flash"; do
   k="${row%% *}"; m="${row#* }"
-  out="$(launch "pi-roster-$k" --sdd none --brief "$(brief "$k")")"
+  out="$(launch "pi-roster-$k" --brief "$(brief "$k")")"
   case "$out" in
     *"--model $m "*|*"--model $m"$'\n'*) pass "kind $k with no --model defaults to $m" ;;
     *) fail "kind $k did not default to $m: $out" ;;
   esac
 done
 
-out="$(launch pi-account --sdd none --no-brief --model opencode-go/deepseek-v4.1-flash)"
+out="$(launch pi-account --no-brief --model opencode-go/deepseek-v4.1-flash)"
 case "$out" in *"NOT APPLIED"*) pass "the account reaches Claude Code only: pi's manifest says NOT APPLIED" ;; *) fail "no NOT APPLIED for pi's account: $out" ;; esac
 
 # THINKING BY KIND (the operator, 2026-10-11; the brainer's roster ruling): explore off, every other kind low, never high by default;
 # else medium; --effort overrides; the manifest says it is a default.
 for row in "build low" "design low" "audit low" "review low" "explore off"; do
   k="${row%% *}"; e="${row#* }"
-  out="$(launch "pi-think-$k" --sdd none --brief "$(brief "$k")")"
+  out="$(launch "pi-think-$k" --brief "$(brief "$k")")"
   case "$out" in *"--thinking $e"*) pass "kind $k thinks at $e by default" ;; *) fail "kind $k did not default to --thinking $e: $out" ;; esac
   case "$out" in *"effort=$e  (default; pi roster, kind $k)"*) pass "the manifest shows kind $k's thinking as a pi-roster default" ;; *) fail "manifest effort line for kind $k: $out" ;; esac
 done
-out="$(launch pi-think-flag --sdd none --brief "$(brief explore)" --effort minimal)"
+out="$(launch pi-think-flag --brief "$(brief explore)" --effort minimal)"
 case "$out" in *"--thinking minimal"*) pass "--effort overrides the roster's thinking" ;; *) fail "--effort minimal did not reach pi: $out" ;; esac
-out="$(launch pi-think-bad --sdd none --no-brief --model opencode-go/glm-5.3 --effort ultra)"
+out="$(launch pi-think-bad --no-brief --model opencode-go/glm-5.3 --effort ultra)"
 case "$out" in *"pi --effort must be one of: off minimal"*) pass "an effort pi does not know is refused" ;; *) fail "pi accepted --effort ultra: $out" ;; esac
 
 # ── the free roster (projects.json pi_roster = free): the free pair, the roster named, and the testing-only warning ──
 table_mutant "$TMP/pi-free-roster.json" 't["pi_roster"] = "free"'
-fout="$(HW_PROJECTS_JSON="$TMP/pi-free-roster.json" launch pi-freecheck --sdd none --brief "$(brief build)")"
+fout="$(HW_PROJECTS_JSON="$TMP/pi-free-roster.json" launch pi-freecheck --brief "$(brief build)")"
 case "$fout" in *"model=opencode-go/crouton-alpha-free "*) pass "free roster: a build defaults to crouton-alpha-free" ;; *) fail "free roster build model: $fout" ;; esac
 case "$fout" in *"pi roster    free"*) pass "free roster: the dry run names the active roster" ;; *) fail "free roster not named: $fout" ;; esac
 case "$fout" in *"pi runs on opencode's free models for testing only"*) pass "free roster: a real dispatch is warned that pi is for testing only" ;; *) fail "no testing-only warning under free: $fout" ;; esac
-gout="$(HW_PROJECTS_JSON="$TMP/pi-go-roster.json" launch pi-gocheck --sdd none --brief "$(brief build)")"
+gout="$(HW_PROJECTS_JSON="$TMP/pi-go-roster.json" launch pi-gocheck --brief "$(brief build)")"
 case "$gout" in *"for testing only"*) fail "go roster printed the testing-only warning: $gout" ;; *) pass "go roster: no testing-only warning" ;; esac
 
 # ── the shell reader of projects.json accepts pi_roster (go|free) and refuses any other word ──

@@ -351,7 +351,7 @@ func (d *doneRun) irreplaceable(wt string) []string {
 			continue
 		}
 		if isDir(entry) {
-			out, rc := doneTool("", nil, "fd", "-H", "-t", "f", ".", entry)
+			out, rc := fdFind("-H", "-t", "f", ".", entry)
 			if rc != 0 {
 				keep = append(keep, rel+" (could not be read — fd exited "+itoa(rc)+")")
 			} else if bashSub(out) != "" {

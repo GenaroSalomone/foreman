@@ -13,7 +13,7 @@ package main
 type lch struct {
 	*dsp
 	hcLiveRun    string // hcLive: the hw_run label of the live executor terminal it found, "" when none
-	lenvState           // t5l_env.go     the run's environment, trust, sdd, artifacts
+	lenvState           // t5l_env.go     the run's environment, trust, artifacts
 	lrcState            // t5l_receipt.go the receipt, the ledger, the engram session, stale-hook refusal
 	lspState            // t5l_space.go   workspace/tab/layout, --here
 	llnState            // t5l_lanes.go   the lane builders (worktree, ports, database, dependencies)

@@ -62,7 +62,7 @@ loop:
 					agent = av[i+1]
 				}
 				i++
-			case "--sdd": // read by nothing now: gentle's dep row was the only reader
+			case "--sdd": // removed flag: only its value is skipped
 				i++
 			}
 		}

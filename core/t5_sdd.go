@@ -1,7 +1,6 @@
 package main
 
-// Train T5, area C: what is left of the SDD mode of a dispatch once Spec Kit left hw (`--sdd none` is the only mode),
-// plus `_next_dispatch_model` and `_next_dispatch_effort`.
+// Train T5, area C: `_next_dispatch_model` and `_next_dispatch_effort`.
 
 import (
 	"os"

@@ -668,6 +668,12 @@ func (t *t3) resumeBlocked(pane, rundir, seq, text string, dry bool) int {
 	if since == "" {
 		since = "?"
 	}
+	// A --blocked filed while the send waited (the turn end found no `done`, the stop hook nudged) is answered by this ruling:
+	// consume its fresh markers. A lone `done` is a report this ruling did not answer.
+	if isFile(marker) {
+		t.fs.remove(marker)
+		t.fs.remove(taskdir + "/done")
+	}
 	t.fs.appendTo(taskdir+"/blocked-resumed", []byte(strconv.FormatInt(time.Now().Unix(), 10)+" "+since+"\n"), 0o666)
 	// The task is open again: turns after the NEXT report are counted from zero, not on top of whatever happened while it waited.
 	t.fs.remove(rundir + "/turns-post-report")

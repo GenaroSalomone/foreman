@@ -43,7 +43,7 @@
                                     decision; names why the ordinary exits do not apply
 
   SUITES
-    hw suite <project> [--status|--dry-run] [--wait-ms N] -- <command...>
+    hw suite <lane> [--status|--dry-run] [--wait-ms N] -- <command...>
         Run one command at a time per lane, behind that lane's suite lock.
         Names the holder instead of waiting mutely, and breaks an
         ORPHANED lock on the first pass rather than waiting it out. NEVER kill a

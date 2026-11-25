@@ -632,7 +632,11 @@ func (d *dsp) reuseRoute() {
 	}
 	if d.dispatchDry {
 		if rf := d.routeForecastWrite(d.proj, d.task, "reuse", d.reuseLine); rf != "" { // # MUTATION-ANCHOR: 844-R68
-			d.info("route FROZEN as REUSE of " + d.reusePane + " for the next " + d.routeForecastTTL + " s (" + rf + "). If that lease expires or the pane goes before you launch, the launch REFUSES and names the change instead of quietly building a fresh executor.") // # MUTATION-ANCHOR: 844-R69
+			if d.dispatchFull {
+				d.info("route FROZEN as REUSE of " + d.reusePane + " for the next " + d.routeForecastTTL + " s (" + rf + "). If that lease expires or the pane goes before you launch, the launch REFUSES and names the change instead of quietly building a fresh executor.") // # MUTATION-ANCHOR: 844-R69
+			} else {
+				d.info("route FROZEN as REUSE of " + d.reusePane + " for the next " + d.routeForecastTTL + " s: if that pane goes before you launch, the launch refuses (--fresh builds a new one)")
+			}
 		}
 	}
 	d.rtCmdNext(args)
@@ -713,7 +717,7 @@ func (d *dsp) rtCmdNext(args []string) {
 
 // ── the route forecast ──────────────────────────────────────────────────────
 
-// routeForecastPath is `_route_forecast_path`: ${TMPDIR:-/tmp}/hw-route-forecast-<project>__<task>, the name
+// routeForecastPath is `_route_forecast_path`: ${TMPDIR:-/tmp}/hw-route-forecast-<lane>__<task>, the name
 // reduced to [A-Za-z0-9_.-].
 func (d *dsp) routeForecastPath(proj, task string) string {
 	key := strings.Map(func(r rune) rune {

@@ -5,7 +5,7 @@
 # are the interface (setup/release-standard.md «Versioning»): hooks, invokers and people call `hw`.
 #
 # What the shim decides, and nothing else:
-#   · where the brain is (the link ~/bin/hw is followed to the real bin/), and that herdr, git and jq exist;
+#   · where the brain is (the link ~/bin/hw is followed to the real bin/), and that herdr and git exist;
 #   · which hw-core to run: HW_CORE (a seam of the suite, never rebuilt), else bin/hw-core or core/dist/<os>-<arch>/hw-core.
 #     Missing: it dies naming setup/build-core --native. Older than core/'s sources with a Go toolchain on PATH: rebuilt by
 #     bin/core-rebuild and the fresh one runs; with none, or a build that failed, the old one runs and ONE line says so;
@@ -21,7 +21,7 @@ _c_err=""; _c_warn=""; _c_0=""
 if [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ] && [ -t 1 ] && [ -t 2 ]; then _c_err=$'\033[31m'; _c_warn=$'\033[33m'; _c_0=$'\033[0m'; fi
 warn() { printf '  %s!%s %s\n' "$_c_warn" "$_c_0" "$*" >&2; }
 die()  { printf '  %s✗%s %s\n' "$_c_err" "$_c_0" "$*" >&2; exit 1; }
-for _t in herdr git jq; do command -v "$_t" >/dev/null 2>&1 || die "missing required command: $_t"; done
+for _t in herdr git; do command -v "$_t" >/dev/null 2>&1 || die "missing required command: $_t"; done
 
 # locate the real brain/bin through the ~/bin symlink: hop by hop (`readlink -f` reached macOS only in 12.3); a relative link is
 # relative to the directory of the link itself

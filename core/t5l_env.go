@@ -307,7 +307,7 @@ func (l *lch) exportHwEnv(cwd string) {
 
 // ── _artifacts_dir_for, _ensure_artifacts_dir ────────────────────────────────
 
-// artifactsDirFor is `_artifacts_dir_for <project> <work directory>`: where a task's artifacts go. Keyed on the
+// artifactsDirFor is `_artifacts_dir_for <lane> <work directory>`: where a task's artifacts go. Keyed on the
 // directory as well as the lane, because for `setup` a worktree and a plain work directory are the same path.
 func (l *lch) artifactsDirFor(proj, wd string) string {
 	if l.c.checkout(proj) == "" { // # MUTATION-ANCHOR: 847-A1-11
@@ -333,7 +333,7 @@ func (l *lch) ensureArtifactsDir(wt string) {
 	}
 	l.fs.mkdirAll(filepath.Dir(ex))
 	for _, line := range []string{".artifacts/", ".hw/"} {
-		if _, rc := l.sh(cmdSpec{name: "rg", args: []string{"-qxF", line, ex}, quiet: true}); rc != 0 {
+		if !l.excludeHas(ex, line) {
 			l.fs.appendTo(ex, []byte(line+"\n"), 0o666)
 		}
 	}
@@ -1246,4 +1246,18 @@ func ceDumpStr(sb *strings.Builder, s string) {
 		}
 	}
 	sb.WriteByte('"')
+}
+
+// excludeHas is `rg -qxF line ex`: whether a whole line of the exclude file is line.
+func (l *lch) excludeHas(ex, line string) bool {
+	b, err := os.ReadFile(ex)
+	if err != nil {
+		return false
+	}
+	for _, ln := range strings.Split(string(b), "\n") {
+		if ln == line {
+			return true
+		}
+	}
+	return false
 }

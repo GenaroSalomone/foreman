@@ -986,18 +986,20 @@ func TestHCDeliveryIsProvenFromTheReceiversTranscriptWhileItsTurnRuns(t *testing
 	for _, tc := range []struct {
 		name, acct string // the account folder under HOME that holds the session and its transcript
 		enqueue    bool   // whether claude writes the queue record on the send
+		idle       bool   // the receiver is IDLE: claude records the message as a user record (a pasted prompt), never a queue record
 		session    bool   // whether a sessions/<pid>.json names this terminal's claude
 		old        bool   // an EARLIER send of the same bytes is already in the transcript
 		rc         int
 		note       string
 		badMark    bool // the watermark could not be taken (--mark fails)
 	}{
-		{"default account", ".claude", true, true, false, 0, "delivery PROVEN in receiver session " + sid, false},
-		{"a personal account", ".claude-personal", true, true, false, 0, "delivery PROVEN in receiver session " + sid, false},
-		{"an earlier send of the same bytes is not a receipt", ".claude", false, true, true, 5, "UNCONFIRMED", false},
-		{"claude never queued it", ".claude", false, true, false, 5, "UNCONFIRMED", false},
-		{"not a claude session: the counters decide, as they did", ".claude", true, false, false, 5, "UNCONFIRMED", false},
-		{"an unreadable watermark is not an empty one: an earlier send of the same bytes must not count", ".claude", false, true, true, 5, "UNCONFIRMED", true},
+		{"default account", ".claude", true, false, true, false, 0, "delivery PROVEN in receiver session " + sid, false},
+		{"a personal account", ".claude-personal", true, false, true, false, 0, "delivery PROVEN in receiver session " + sid, false},
+		{"an earlier send of the same bytes is not a receipt", ".claude", false, false, true, true, 5, "UNCONFIRMED", false},
+		{"claude never queued it", ".claude", false, false, true, false, 5, "UNCONFIRMED", false},
+		{"not a claude session: the counters decide, as they did", ".claude", true, false, false, false, 5, "UNCONFIRMED", false},
+		{"an unreadable watermark is not an empty one: an earlier send of the same bytes must not count", ".claude", false, false, true, true, 5, "UNCONFIRMED", true},
+		{"an idle receiver records it as a user record, and its counters never moved", ".claude", false, true, true, false, 0, "delivery PROVEN in receiver session " + sid, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			w := newCSWorld(t)
@@ -1028,10 +1030,16 @@ func TestHCDeliveryIsProvenFromTheReceiversTranscriptWhileItsTurnRuns(t *testing
 			if tc.enqueue {
 				enq = `printf '%s\n' '` + strings.TrimSuffix(rec, "\n") + `' >> '` + tr + `'`
 			}
-			// the receiver is WORKING and its counters never move: only the transcript can say
+			state := "working"
+			if tc.idle { // MEASURED in brain-setup's transcript: a report to an idle brainer is {"type":"user","message":{"content":"\n\n<pasted_content id=..>\n<payload>…"}}
+				state = "idle"
+				user := `{"type":"user","message":{"role":"user","content":"\n\n<pasted_content id=\"ab12\">\n` + msg + `\n</pasted_content>"}}`
+				enq = `printf '%s\n' '` + user + `' >> '` + tr + `'`
+			}
+			// the receiver's counters never move: only the transcript can say
 			os.WriteFile(w.bin+"/hc", []byte(`#!/bin/bash
 case "$1" in
-  get) printf '{"address":"%s","state":"live","pid":111,"cwd":"`+cwd+`","foreground":{"pid":222},"turn":5,"status":{"app":"claude-code","state":"working"},"labels":{}}\n' "$2" ;;
+  get) printf '{"address":"%s","state":"live","pid":111,"cwd":"`+cwd+`","foreground":{"pid":222},"turn":5,"status":{"app":"claude-code","state":"`+state+`"},"labels":{}}\n' "$2" ;;
   send) `+enq+` ;;
 esac
 exit 0
@@ -1041,7 +1049,7 @@ exit 0
 			r := w.cs("--report", "hc", "t7", "-", msg)
 			r.rcIs(t, tc.rc)
 			r.has(t, tc.note)
-			if tc.rc == 0 {
+			if tc.rc == 0 && !tc.idle {
 				r.has(t, "was MID-TURN when this was sent") // the receiver was working: the caller is told where it landed
 			}
 		})

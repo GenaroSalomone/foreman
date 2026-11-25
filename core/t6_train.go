@@ -1,7 +1,7 @@
 package main
 
 // hw train add|status|push (bin/hw cmd_train + bin/hw-train): the merge train for a lane whose repo is brain itself.
-// Accepted task branches go into one integration branch `train-<project>`, the full suite runs ONCE on it, and the
+// Accepted task branches go into one integration branch `train-<lane>`, the full suite runs ONCE on it, and the
 // base advances to it without touching other brainers' uncommitted edits.
 //
 // A merge here never touches a working tree: `git merge-tree --write-tree` computes it, `commit-tree` records it,
@@ -26,7 +26,7 @@ import (
 	"time"
 )
 
-const trainUsage = "usage: hw train add <project> <task> | status <project> | push <project>"
+const trainUsage = "usage: hw train add <lane> <task> | status <lane> | push <lane>"
 
 // trainBudgetsPath is the one file whose conflict the train resolves.
 const trainBudgetsPath = "setup/suite-data/test-budgets.json"
@@ -36,7 +36,7 @@ type trainRun struct {
 	co, base, proj string // HW_TRAIN_CHECKOUT, HW_TRAIN_BASE, the canonical project
 	taskBranch     string // HW_TRAIN_TASK_BRANCH
 	taskWT         string // HW_TRAIN_TASK_WT
-	t, tref        string // train-<project>, refs/heads/train-<project>
+	t, tref        string // train-<lane>, refs/heads/train-<lane>
 	state          string // <git common dir>/hw-train
 	lockDir, pushL string
 
@@ -60,11 +60,11 @@ func (a *app) cmdTrain() int {
 		if verb == "add" {
 			suffix = " <task>"
 		}
-		a.die("usage: hw train " + verb + " <project>" + suffix)
+		a.die("usage: hw train " + verb + " <lane>" + suffix)
 	}
 	proj := a.c.t.canonProject(args[1])
 	if !a.c.t.known(proj) {
-		a.die("unknown project: " + args[1] + " (expected: " + a.laneNamesHint() + ")")
+		a.die("unknown lane: " + args[1] + " — try: " + a.laneNamesHint())
 	}
 	co := a.c.checkout(proj)
 	if co == "" || !isDir(co) || trainPhys(co) != trainPhys(a.c.brain) {
@@ -73,13 +73,13 @@ func (a *app) cmdTrain() int {
 	r := &trainRun{app: a, co: co, proj: proj}
 	if verb == "add" {
 		if len(args) != 3 {
-			a.die("usage: hw train add <project> <task>")
+			a.die("usage: hw train add <lane> <task>")
 		}
 		(&dsp{app: a}).checkTask(args[2])
 		r.taskBranch = a.c.lanePath(proj, "branch", args[2])
 		r.taskWT = a.c.lanePath(proj, "worktree", args[2])
 	} else if len(args) != 2 {
-		a.die("usage: hw train " + verb + " <project>")
+		a.die("usage: hw train " + verb + " <lane>")
 	}
 	r.base = a.c.t.get(proj, "base_ref_prefix") + a.c.t.get(proj, "base")
 	return r.main(verb, args[2:])
@@ -454,7 +454,7 @@ func (r *trainRun) cmdAdd(rest []string) {
 	}
 	br, wt := r.taskBranch, r.taskWT
 	if task == "" || br == "" {
-		r.refuse("usage: hw train add <project> <task>")
+		r.refuse("usage: hw train add <lane> <task>")
 	}
 	sha, ok := r.tip("refs/heads/" + br)
 	if !ok {

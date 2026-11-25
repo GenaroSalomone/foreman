@@ -55,12 +55,12 @@ npm test -- login
 
 From 1.0.0 a change that breaks a working setup takes a new major version. That
 covers `hw`, `brain`, the invokers, the brief format, the install and the herdr
-app: foreman's mods and layouts for it, and the `hc` backend it runs on. Claude Code and pi are the agents the promise is made for
+app: its Cockpit mod, and the `hc` backend it runs on. Claude Code and pi are the agents the promise is made for
 ([REFERENCE.md](docs/REFERENCE.md#what-10-promises)).
 
 ## Requirements
 
-- **macOS or Linux**, with `git` (`user.name` and `user.email` set), `jq` 1.7+, `python3`, `rg`, `fd`, `sd` and Go 1.22+ (`install.sh` builds `hw-core` with it).
+- **macOS** (Linux is checked by the test suite only: [L1](docs/KNOWN-LIMITATIONS.md)), with `git` (`user.name` and `user.email` set). On macOS git's Command Line Tools also bring the `python3` foreman uses; on Linux install python3 3.9 or newer. `hw-core` comes prebuilt with a release; Go 1.22+ is needed only to build from source.
 - **[herdr](https://herdr.dev)**, running, with `herdr integration install claude`.
 - **[Claude Code](https://claude.com/claude-code)**, first run finished: `claude --dangerously-skip-permissions`, welcome and login, then `/exit`.
 
@@ -93,7 +93,7 @@ git -C ~/code/toy add README.md && git -C ~/code/toy commit -m init
 ./install.sh --brain ~/brain --lane demo --repo ~/code/toy
 cp docs/examples/demo/briefs/hello.md ~/brain/demo/briefs/
 brain demo   # opens the brainer: type the next two lines in it with the ! prefix, or ask it to run them
-hw demo hello --brief ~/brain/demo/briefs/hello.md --dry-run   # shows the plan, creates nothing
+hw demo hello --brief ~/brain/demo/briefs/hello.md --dry-run   # shows what it would launch, builds nothing
 hw demo hello --brief ~/brain/demo/briefs/hello.md                         # launches it
 ```
 
@@ -111,7 +111,7 @@ reaches the brainer without polling. `hw done` runs the brief's verification and
 | Command | What it does |
 |---|---|
 | `brain <lane>` | Open the lane's brainer. |
-| `hw <lane> <task> --brief <path>` | Launch an executor. Add `--dry-run` to preview. |
+| `hw <lane> <task> --brief <path>` | Launch an executor. Add `--dry-run` to preview what it would launch (`--dry-run=full` prints the whole manifest). |
 | `hw status` | What is running, what reported and what is left over. |
 | `hw done <lane> <task>` | Run the brief's verification and close the task's tab. |
 | `hw reap [<lane>]` | List merged worktrees and branches that are safe to remove; `--apply` removes them. |
@@ -123,7 +123,7 @@ reaches the brainer without polling. `hw done` runs the brief's verification and
 
 [`INSTALL.md`](docs/INSTALL.md) (install options, engram, secrets) · [`REFERENCE.md`](docs/REFERENCE.md) (commands, brief fields, herdr app, tools, lane settings) ·
 [`BRIEF-TEMPLATE.md`](docs/BRIEF-TEMPLATE.md) · [`THREAT-MODEL.md`](docs/THREAT-MODEL.md) (the guards) ·
-[`KNOWN-LIMITATIONS.md`](docs/KNOWN-LIMITATIONS.md) · [`CHANGELOG.md`](CHANGELOG.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`SECURITY.md`](SECURITY.md)
+[`KNOWN-LIMITATIONS.md`](docs/KNOWN-LIMITATIONS.md) · [`CHANGELOG.md`](CHANGELOG.md) · [`CONTRIBUTING.md`](CONTRIBUTING.md) · [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md) · [`SECURITY.md`](SECURITY.md)
 
 ## License
 

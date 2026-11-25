@@ -26,16 +26,16 @@
 # lane_get / lane_path read them back. A lane added there reaches every
 # function here without an edit in bin/.
 #
-# WHY SHELL VARIABLES AND NOT A jq CALL PER LOOKUP. bin/hw asks these questions
+# WHY SHELL VARIABLES AND NOT A hw-core CALL PER LOOKUP. bin/hw asked these questions
 # dozens of times per dispatch, from bash 3.2 (no associative arrays) and from
-# zsh (shell/hw-restore-env.zsh sources this file). One jq pass that prints
+# zsh (shell/hw-restore-env.zsh sources this file). One `hw-core json lane-env` pass that prints
 # `_LC_<lane>__<field>='value'` assignments, eval'd once, answers both without a
 # second dialect.
 #
 # WHAT IS CHECKED AT LOAD, because eval'ing a file demands it: lane names and
 # aliases are lowercase words (they become parts of variable names), a
 # checkout_var is an upper-case identifier, every value is emitted through
-# jq's @sh quoting, and an alias may not shadow a lane or another alias. A
+# @sh quoting, and an alias may not shadow a lane or another alias. A
 # file that fails any of these loads NOTHING, and the caller decides whether
 # that is fatal (bin/hw and bin/brain die; the invokers keep their fallback).
 #
@@ -47,162 +47,23 @@
 # HW_PROJECTS_JSON names another table file, for a test or a second checkout
 # that has to read a table other than its root's; the brain root itself is
 # still $1.
+# _hw_json <root> <op> … — `hw-core json` (core/json_verb.go), the one reader of JSON this file has: HW_CORE, else <root>/bin/hw-core,
+# else <root>/core/dist/<os>-<arch>/hw-core (what bin/hw looks for). No hw-core is exit 127, and the caller says what it could not read.
+_hw_json() {
+  local _r="$1" _c="${HW_CORE:-}" _o _a; shift
+  [ -x "$_c" ] || _c="$_r/bin/hw-core"
+  if [ ! -x "$_c" ]; then
+    case "$(uname -s)" in Darwin) _o=darwin ;; *) _o=linux ;; esac; case "$(uname -m)" in x86_64) _a=amd64 ;; *) _a=arm64 ;; esac
+    _c="$_r/core/dist/$_o-$_a/hw-core"
+  fi
+  [ -x "$_c" ] || return 127
+  "$_c" json "$@"
+}
 lane_config_load() {  # $1 = brain root; reads $1/projects.json
   local _lc_root="$1" _lc_file="${HW_PROJECTS_JSON:-$1/projects.json}" _lc_out
   [ -r "$_lc_file" ] || { printf 'lane table: cannot read %s\n' "$_lc_file" >&2; return 1; }
-  command -v jq >/dev/null 2>&1 || { printf 'lane table: jq is not on PATH, so %s cannot be read\n' "$_lc_file" >&2; return 1; }
-  _lc_out="$(jq -r --arg home "$HOME" --arg brain "$_lc_root" '
-    def word: test("^[a-z][a-z0-9-]*$");
-    def key: gsub("-"; "_");
-    def exp: if type == "string" then sub("^~(?=/|$)"; $home) else . end;
-    def emit($lane; $field; $v): "_LC_\($lane | key)__\($field)=\($v | tostring | @sh)";
-    (.lanes // error("no `lanes` object")) as $lanes
-    | ($lanes | keys_unsorted) as $names
-    | if ($names | length) == 0 then error("`lanes` is empty") else . end
-    | if ($names | all(word)) then . else error("a lane name is not a lowercase word: \($names | map(select(word | not)))") end
-    | (["product_repo","hw_aliases","brain_aliases","space","engram","vendor","model","account","artifacts","repoless",
-        "checkout","checkout_var","base","base_ref_prefix","branch","worktree_root","worktree","ports",
-        "hint_aliases","build","agents_from","deps","db","devserver","reap","sweep","brain_guard","brief_note","qa_target",
-        "model_floor","model_pins","subagent_model","pi_subagent_models","requested_by","suite_lock","org",
-        "review_default","review_post","ui_paths","opencode_config_dir"]) as $fields  # opencode_config_dir: RETIRED, accepted and ignored for one release (core/lanes.go agrees)
-    | ({model_floor: ["tier","accepts"], deps: ["line","contention"], db: ["line","provisioned","no_worktree","no_db_inert"],
-        devserver: ["start","line","off"], reap: ["copies","copies_from","max_worktrees","max_disk_pct","max_build_gb"]}) as $sub
-    | ([$lanes | to_entries[] | .key as $l | .value | to_entries[] | select($sub[.key] != null) | .key as $f
-        | if (.value | type) == "object" then (.value | keys[] | select(. as $k | $sub[$f] | index([$k]) | not) | "\($l).\($f).\(.)")
-          else "\($l).\($f) (not an object)" end]) as $badsub
-    | if ($badsub | length) == 0 then . else error("unknown lane field(s): \($badsub | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | (.value | keys[]) | select(. as $k | $fields | index([$k]) | not) | "\($l).\(.)"]) as $unknown
-    | if ($unknown | length) == 0 then . else error("unknown lane field(s): \($unknown | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.requested_by != null)
-        | if (.value.requested_by | IN("required", "warn")) then empty else "\($l).requested_by" end]) as $badreq
-    | if ($badreq | length) == 0 then . else error("requested_by is required or warn: \($badreq | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.suite_lock != null)
-        | if (.value.suite_lock | IN("lane", "none")) then empty else "\($l).suite_lock" end]) as $badlock
-    | if ($badlock | length) == 0 then . else error("suite_lock is lane or none: \($badlock | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.review_default != null)
-        | if (.value.review_default | type == "array" and all(IN("thermo", "tests", "ponytail", "pstack", "comment-sicko"))) then empty else "\($l).review_default" end]) as $badrd
-    | if ($badrd | length) == 0 then . else error("review_default is a list of thermo, tests, ponytail, pstack, comment-sicko (judgment-day is a risk call made per brief, never a lane default): \($badrd | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.review_post != null)
-        | if (.value.review_post | IN("pr-description", "none")) then empty else "\($l).review_post" end]) as $badrp
-    | if ($badrp | length) == 0 then . else error("review_post is pr-description or none: \($badrp | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.ui_paths != null)
-        | if (.value.ui_paths | type == "array" and all(type == "string" and length > 0 and (contains(",") | not))) then empty else "\($l).ui_paths" end]) as $badui
-    | if ($badui | length) == 0 then . else error("ui_paths is a list of non-empty paths or globs, with no comma: \($badui | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.artifacts != null)
-        | if (.value.artifacts | IN("deny", "default", "personal")) then empty else "\($l).artifacts" end]) as $badart
-    | if ($badart | length) == 0 then . else error("artifacts is deny or an account (default, personal): \($badart | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.model_floor != null) | .value.model_floor
-        | if (.tier | IN("haiku", "sonnet", "opus")) and ((.accepts // []) | type == "array" and all(type == "string"))
-          then empty else "\($l).model_floor" end]) as $badfloor
-    | ([$lanes | to_entries[] | .key as $l | select(.value.model_pins != null) | .value.model_pins
-        | if type == "object" and (to_entries | all(.key | IN("haiku", "sonnet", "opus", "fable")) and all(.value | type == "string" and test("^claude-[a-z0-9.-]+$")))
-          then empty else "\($l).model_pins" end]) as $badpins
-    | ([$lanes | to_entries[] | .key as $l | select(.value.pi_subagent_models != null) | .value.pi_subagent_models
-        | if type == "object" and (to_entries | all(
-            (.key | test("^[a-z][a-z0-9-]*$"))
-            and (.key != "default")
-            and (.value | type == "object")
-            and ((.value | keys) - ["model","thinking"] | length == 0)
-            and (.value.model | type == "string" and test("^(inherit|[a-z][a-z0-9-]*/[A-Za-z0-9][A-Za-z0-9._-]*)$"))
-            and ((.value.thinking == null) or (.value.thinking | IN("inherit","off","minimal","low","medium","high","xhigh","max")))
-            and ((.value.model != "inherit") or (.value.thinking == null))))
-          then empty else "\($l).pi_subagent_models" end]) as $badpi
-    | if ($badpi | length) == 0 then . else error("pi_subagent_models maps a tier (haiku, sonnet, opus) or an agent name to {model: provider/id, or inherit with no thinking, thinking: a pi level or inherit}; `default` is not a key (subagent_model decides it): \($badpi | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | select(.value.subagent_model != null)
-        | if (.value.subagent_model | type == "string" and test("^(inherit|haiku|sonnet|opus|fable|claude-[a-z0-9.-]+)$")) then empty else "\($l).subagent_model" end]) as $badsub
-    | if ($badsub | length) == 0 then . else error("subagent_model is inherit, a Claude alias (haiku, sonnet, opus, fable) or a claude-* id: \($badsub | join(", "))") end
-    | if ($badpins | length) == 0 then . else error("model_pins maps an alias (haiku, sonnet, opus, fable) to a full claude-* id: \($badpins | join(", "))") end
-    | if ($badfloor | length) == 0 then . else error("model_floor.tier is haiku, sonnet or opus, and accepts is a list of model ids: \($badfloor | join(", "))") end
-    | if (.pi_roster == null) or (.pi_roster | IN("go","free")) then . else error("pi_roster is go (the paid opencode-go roster) or free (opencode'"'"'s free models)") end
-    | ((keys - ["comment","root","work","orgs","operator","metrics_direct","survey_order","retention","pi_roster","lanes"])) as $top
-    | if ($top | length) == 0 then . else error("unknown top-level key(s): \($top | join(", "))") end
-    | if (.root == null) or (.root | type == "string" and length > 0) then . else error("root is the agents root, a path string") end
-    | (.orgs // null) as $orgs
-    | if ($orgs == null) or (($orgs | type == "object") and ($orgs | length > 0) and ($orgs | to_entries | all((.key | word) and (.value | type == "string" and length > 0))))
-      then . else error("orgs maps an organisation (a lowercase word) to the directory its product checkouts live under") end
-    | ([$lanes | to_entries[] | .key as $l | .value.org as $o
-        | if $orgs == null then (if $o == null then empty else "\($l).org (no top-level orgs)" end)
-          elif $o == null then empty
-          elif ($o | type == "string") and ($orgs | has($o)) then empty
-          else "\($l).org" end]) as $badorg
-    | if ($badorg | length) == 0 then . else error("org is one of the keys of the top-level orgs: \($badorg | join(", "))") end
-    | ([$lanes | to_entries[] | .key as $l | .value as $v | select($orgs != null and $v.product_repo == true and $v.org != null)
-        | ($orgs[$v.org] | exp) as $h | ($v.checkout // "" | exp) as $c
-        | if ($c | startswith($h + "/")) then empty else "\($l) (\($v.org): \($c) is not under \($h))" end]) as $badhome
-    | if ($badhome | length) == 0 then . else error("a product checkout lives outside the directory of its org: \($badhome | join(", "))") end
-    | ((.retention // {}) as $r
-       | if ($r | type == "object") and ((($r | keys_unsorted) - ["artifact_retention_days","backup_retention_days","build_output_days"]) | length) == 0
-            and ([$r.artifact_retention_days // 14, $r.backup_retention_days // 60, $r.build_output_days // 7] | all(type == "number" and . >= 0 and . == floor))
-         then . else error("retention is {artifact_retention_days, backup_retention_days, build_output_days}, each a whole number of days >= 0 (0 disables that window)") end) as $_ret
-    | ((.survey_order // []) as $so
-       | if ($so | all(. as $n | $names | index([$n]))) then . else error("survey_order names a lane that `lanes` does not have") end
-       | ($so + ($names - $so))) as $survey
-    | ([$lanes | to_entries[] | .key as $l | ((.value.hw_aliases // [])[] | {kind: "hw", alias: ., lane: $l}),
-                                          ((.value.brain_aliases // [])[] | {kind: "brain", alias: ., lane: $l})]) as $aliases
-    | if ($aliases | all(.alias | type == "string" and word)) then . else error("an alias is not a lowercase word") end
-    | if ($aliases | all(.alias as $a | $names | index([$a]) | not)) then . else error("an alias shadows a lane name") end
-    | if ([$aliases | group_by(.kind)[] | group_by(.alias)[] | select(length > 1)] | length) == 0 then . else error("an alias is claimed twice") end
-    | "HW_LANES=\($names | join(" ") | @sh)",
-      "HW_LANES_SURVEY=\($survey | join("\n") | @sh)",
-      "_LC_WORK_DEFAULT=\(.work // (if .root == null then error("no top-level `work`") else .root + "/work" end) | exp | @sh)",
-      "_LC_RETENTION_ARTIFACT_DAYS=\(.retention.artifact_retention_days // 14 | tostring | @sh)",
-      "_LC_RETENTION_BACKUP_DAYS=\(.retention.backup_retention_days // 60 | tostring | @sh)",
-      "_LC_RETENTION_BUILD_DAYS=\(.retention.build_output_days // 7 | tostring | @sh)",
-      "_LC_OPERATOR_DEFAULT=\(.operator // "the operator" | tostring | @sh)",
-      ($aliases[] | "_LA_\(.kind)__\(.alias | key)=\(.lane | @sh)"),
-      ($lanes | to_entries[] | .key as $l | .value as $v
-        | if ($v.checkout_var // "" | test("^([A-Z_][A-Z0-9_]*)?$")) then . else error("checkout_var of \($l) is not an identifier") end
-        | emit($l; "space"; $v.space // error("lane \($l) has no space label")),
-          emit($l; "engram"; $v.engram // "brain"),
-          emit($l; "org"; $v.org // ""),
-          emit($l; "vendor"; $v.vendor // "claude"),
-          emit($l; "model"; $v.model // ""),
-          emit($l; "model_floor"; $v.model_floor.tier // ""),
-          emit($l; "model_floor_accepts"; ($v.model_floor.accepts // []) | join(" ")),
-          emit($l; "model_pins"; ($v.model_pins // {}) | to_entries | map("\(.key)=\(.value)") | join(" ")),
-          emit($l; "subagent_model"; $v.subagent_model // "inherit"),
-          emit($l; "pi_subagent_models"; ($v.pi_subagent_models // {}) | to_entries | map("\(.key)=\(.value.model)|\(.value.thinking // "inherit")") | join(" ")),
-          emit($l; "requested_by"; $v.requested_by // ""),
-          emit($l; "suite_lock"; $v.suite_lock // ""),
-          emit($l; "review_default"; ($v.review_default // []) | join(",")),
-          emit($l; "review_post"; $v.review_post // "none"),
-          emit($l; "ui_paths"; ($v.ui_paths // []) | join(",")),
-          emit($l; "account"; $v.account // "default"),
-          emit($l; "artifacts"; $v.artifacts // $v.account // "default"),
-          emit($l; "repoless"; if $v.repoless == true then "1" else "" end),
-          emit($l; "product_repo"; if $v.product_repo == true then "1" else "" end),
-          emit($l; "checkout"; $v.checkout // "" | exp),
-          emit($l; "checkout_var"; $v.checkout_var // ""),
-          emit($l; "base"; $v.base // ""),
-          emit($l; "base_ref_prefix"; $v.base_ref_prefix // "origin/"),
-          emit($l; "branch"; $v.branch // "task/{task}"),
-          emit($l; "worktree_root"; $v.worktree_root // "" | exp),
-          emit($l; "worktree"; $v.worktree // "" | exp),
-          emit($l; "hint_aliases"; ($v.hint_aliases // []) | join("|")),
-          emit($l; "build"; $v.build // ""),
-          emit($l; "sweep"; if $v.sweep == false then "0" else "1" end),
-          emit($l; "brain_guard"; if $v.brain_guard == false then "0" else "1" end),
-          emit($l; "agents_from"; $v.agents_from // ""),
-          emit($l; "brief_note"; $v.brief_note // ""),
-          emit($l; "qa_target"; if $v.qa_target == true then "1" else "" end),
-          emit($l; "deps_line"; $v.deps.line // ""),
-          emit($l; "deps_contention"; if $v.deps.contention == true then "1" else "" end),
-          emit($l; "db_line"; $v.db.line // ""),
-          emit($l; "db_provisioned"; if $v.db.provisioned == true then "1" else "" end),
-          emit($l; "db_no_worktree"; $v.db.no_worktree // ""),
-          emit($l; "db_no_db_inert"; if $v.db.no_db_inert == true then "1" else "" end),
-          emit($l; "devserver"; $v.devserver.start // ""),
-          emit($l; "devserver_line"; $v.devserver.line // ""),
-          emit($l; "devserver_off"; $v.devserver.off // ""),
-          emit($l; "reap_copies"; ($v.reap.copies // []) | join("\n")),
-          emit($l; "reap_copies_from"; $v.reap.copies_from // ""),
-          emit($l; "reap_max_worktrees"; $v.reap.max_worktrees // ""),
-          emit($l; "reap_max_disk_pct"; $v.reap.max_disk_pct // ""),
-          emit($l; "reap_max_build_gb"; $v.reap.max_build_gb // ""),
-          (($v.ports // {}) | to_entries[]
-            | if (.key | test("^[a-z]+$")) and (.value | type == "number") then . else error("a port of \($l) is not name: number") end
-            | emit($l; "port_\(.key)"; .value)))
-  ' "$_lc_file")" || { printf 'lane table: %s is not a valid lane table (nothing was loaded)\n' "$_lc_file" >&2; return 1; }
+  # a table that does not load: lane-env says why, and ends with the line `lane table: … (nothing was loaded)`
+  _lc_out="$(_hw_json "$_lc_root" lane-env "$_lc_root")" || { [ $? -ne 127 ] || printf 'lane table: hw-core is not built, so %s cannot be read (setup/build-core --native)\n' "$_lc_file" >&2; return 1; }
   eval "$_lc_out"
   : "${WORK:=$_LC_WORK_DEFAULT}"
   # The person this harness answers to, as the messages name them: an
@@ -822,7 +683,7 @@ claude_first_run_command() {  # $1 = account config dir, empty for the default
 claude_session_env_prep() {  # $1 = pane, $2 = optional shell text typed after the settings (hw: the explorer's function)
   local pane="${1:-}" prep
   [ -n "$pane" ] || return 0
-  if herdr agent get "$pane" 2>/dev/null | jq -e '.result.agent != null' >/dev/null 2>&1; then return 0; fi
+  if herdr agent get "$pane" 2>/dev/null | _hw_json "${BRAIN:-${HW_BRAIN_ROOT:-.}}" get .result.agent >/dev/null 2>&1; then return 0; fi
   prep="unset CLAUDE_CODE_CHILD_SESSION"  # MUTATION-ANCHOR: 810-M03
   prep="$prep; export CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1"  # MUTATION-ANCHOR: 810-M04
   prep="$prep; export CLAUDE_CODE_BASH_EDIT_DIFF=0"  # MUTATION-ANCHOR: 810-M05
@@ -864,7 +725,8 @@ claude_dialog_advice() {  # $1 = dialog, $2 = account config dir (may be empty)
 cli_version() {  # $1 = the root the command lives in
   local root="$1" v=""
   if [ -f "$root/.brain-install.json" ]; then
-    v="$(jq -r '.version // ((.commit // "") | .[0:7]) // empty' "$root/.brain-install.json" 2>/dev/null || true)"
+    v="$(_hw_json "$root" get -f "$root/.brain-install.json" .version 2>/dev/null || true)"
+    [ -n "$v" ] || { v="$(_hw_json "$root" get -f "$root/.brain-install.json" .commit 2>/dev/null || true)"; v="${v:0:7}"; }
   fi
   if [ -z "$v" ] || [ "$v" = null ]; then
     v="$(git -C "$root" describe --tags --exact-match 2>/dev/null || git -C "$root" rev-parse --short HEAD 2>/dev/null || true)"

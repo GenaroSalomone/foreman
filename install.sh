@@ -233,6 +233,21 @@ valid_operator() { [ -n "$1" ] && [ "${#1}" -le 60 ] && [[ "$1" != *[[:cntrl:]]*
 case "$MIN_MODEL" in ""|haiku|sonnet|opus|none) ;; *) die "--min-model must be haiku, sonnet, opus or none (got: $MIN_MODEL)" ;; esac
 case "$REQ_BY" in ""|required|warn|none) ;; *) die "--requested-by must be required, warn or none (got: $REQ_BY)" ;; esac
 
+# JSON questions: python3 answers them (install.sh runs before any hw-core exists, and python3 is required anyway).
+lane_checkouts() {  # <projects.json> — "<lane><TAB><checkout>" for each lane that has a checkout; nothing when unreadable
+  python3 -c 'import json,sys
+try: lanes = json.load(open(sys.argv[1])).get("lanes") or {}
+except Exception: raise SystemExit
+for k, v in lanes.items():
+    if isinstance(v, dict) and v.get("checkout"): print("%s\t%s" % (k, v["checkout"]))' "$1" 2>/dev/null
+}
+json_get() {  # <file> <key> — a top-level value as text (true/false for a boolean), "" when absent or unreadable
+  python3 -c 'import json,sys
+try: v = json.load(open(sys.argv[1])).get(sys.argv[2])
+except Exception: v = None
+print("" if v is None else str(v).lower() if isinstance(v, bool) else v)' "$1" "$2" 2>/dev/null
+}
+
 abspath() {  # absolute, symlinks resolved for the parts that exist
   local p
   p="$(python3 -c 'import os,sys; print(os.path.realpath(os.path.expanduser(sys.argv[1])))' "$1")" || return
@@ -312,15 +327,17 @@ print(m.group(1).strip())
 PY
 }
 do_upgrade() {
-  local BR rec cur tag how url tmp lines line rc=0 ver_note
+  local BR rec cur tag how url tmp lines line rc=0 ver_note cks
   BR="$(abspath "$BRAIN_DIR")"; rec="$BR/$RECORD_REL"
   if [ ! -f "$rec" ]; then
     {
       printf 'upgrade: %s has no install record (%s): it was installed before `upgrade` existed, or by hand.\n' "$BR" "$RECORD_REL"
       printf 'Install once more with the flags you used. That run writes the record, and upgrades are one command from then on:\n'
-      if [ -f "$BR/projects.json" ] && [ -n "$(jq -r '.lanes // {} | to_entries[] | select(.value.checkout) | .key' "$BR/projects.json" 2>/dev/null)" ]; then
-        jq -r --arg c "$INSTALL_CMD" --arg b "$BR" '.lanes | to_entries[] | select(.value.checkout)
-          | "  \($c) --brain \($b) --lane \(.key) --repo \(.value.checkout)"' "$BR/projects.json"
+      cks="$(lane_checkouts "$BR/projects.json")"
+      if [ -n "$cks" ]; then
+        while IFS="$(printf '\t')" read -r _l _c; do
+          printf '  %s --brain %s --lane %s --repo %s\n' "$INSTALL_CMD" "$BR" "$_l" "$_c"
+        done <<< "$cks"
         printf '(a lane that exists keeps its rules; add --with-judgment-day or --bin-dir DIR if you used them)\n'
       else
         printf '  %s --brain %s --lane <name> --repo <path>   (plus --with-judgment-day or --bin-dir DIR if you used them)\n' "$INSTALL_CMD" "$BR"
@@ -621,7 +638,7 @@ FIXES
     cmd="$INSTALL_CMD --brain $BRAIN_DIR --lane <name> --repo <path>"
     # A brain that already has a lane (`init` made `demo`) is not told to make one: measured on a
     # clean macOS VM, --check after init still proposed a lane. The way to add another is a note.
-    have_lane="$(jq -r '.lanes // {} | to_entries[] | select(.value.checkout) | .key' "${BRAIN:-$BRAIN_DIR}/projects.json" 2>/dev/null | head -1 || true)"
+    have_lane="$(lane_checkouts "${BRAIN:-$BRAIN_DIR}/projects.json" | head -1 | cut -f1 || true)"
     if [ -z "$have_lane" ]; then step "a lane for one of your repositories: $cmd" "$cmd"; fi   # MUTATION-ANCHOR: 226-M01
   fi
   # After the lane's install: the links it makes live in that directory.
@@ -690,35 +707,42 @@ need() {  # <command> <why> <how>
 }
 [ "$(uname -s)" = Linux ] && PKG="apt install" || PKG="brew install"
 need git     "worktrees and branches"                "$([ "$(uname -s)" = Linux ] && echo "apt install git" || echo "xcode-select --install")"
-need jq      "hw reads projects.json with it"        "$PKG jq"
-# jq 1.6 (Debian 12, Ubuntu 22.04) exits 0 on EMPTY input under `jq -e`; 1.7 exits 4. Several
-# checks read "jq -e succeeded" as "the reply was what I asked for", so an old jq is refused.
-if type -P jq >/dev/null 2>&1; then
-  floor jq 0 ", whose \`jq -e\` treats empty input as success"
-fi
 need python3 "the guards and the JSON merges"        "$([ "$(uname -s)" = Linux ] && echo "apt install python3" || echo "xcode-select --install")"
 need herdr   "every brainer and executor is a herdr pane" "https://herdr.dev"
 need claude  "the agent runtime"                     "https://claude.com/claude-code"
 if type -P herdr >/dev/null 2>&1; then floor herdr 0; fi
 if type -P claude >/dev/null 2>&1; then floor claude 0; fi
-# hw-core, the Go half of hw, is REQUIRED (0.6.0): it is built here, so a Go toolchain of 1.22 or newer on PATH is
-# too, and without one the run refuses below (`missing=1`), before anything is written.
-CORE_BUILD=0
+# hw-core, the Go half of hw, is REQUIRED (0.6.0). A release carries it PREBUILT in core/dist/<os>-<arch>/, with the
+# SHA256SUMS of the pair beside it (the release asset, or the Homebrew resource, unpacked there): that is installed and no Go
+# is needed. Without a matching prebuilt it is built here, so a Go toolchain of 1.22 or newer on PATH is required, and
+# without one the run refuses below (`missing=1`), before anything is written.
+CORE_BUILD=0 PREBUILT=""
+_hos="$(uname -s | tr 'A-Z' 'a-z')"; _har="$(uname -m)"   # the directory bin/hw looks in: the same os-arch spelling as its _core_find
+case "$_har" in x86_64) _har=amd64 ;; aarch64) _har=arm64 ;; esac
+_pd="$SRC/core/dist/$_hos-$_har"
+# A checkout fetched for a tag (the pipe, or an upgrade's tarball) carries none: take the tag's release asset, and keep it only
+# if both of the release's own SHA256SUMS name its two files. Any failure falls through to the Go build.
+_tag="$(install_version)"; _sha() { shasum -a 256 "$@" 2>/dev/null || sha256sum "$@"; }
+if [ ! -f "$_pd/hw-core" ] && [ -n "${FOREMAN_INSTALLED_FROM:-}" ] && [[ "$_tag" =~ ^v[0-9] ]] && [ -d "$SRC/core" ]; then
+  _rel="${FOREMAN_INSTALLED_FROM%/}/releases/download/$_tag"; _fd="$(mktemp -d "${TMPDIR:-/tmp}/hw-core-fetch.XXXXXX")"
+  if curl -fsSL --max-time 120 "$_rel/hw-core-$_hos-$_har.tar.gz" -o "$_fd/a.tgz" && curl -fsSL --max-time 30 "$_rel/SHA256SUMS" -o "$_fd/s1" \
+     && curl -fsSL --max-time 30 "$_rel/SHA256SUMS.invokers" -o "$_fd/s2" && mkdir "$_fd/x" && tar -xzf "$_fd/a.tgz" -C "$_fd/x" \
+     && [ "$(grep -F "  $_hos-$_har/hw-core" "$_fd/s1" | cut -d' ' -f1)" = "$(_sha "$_fd/x/hw-core" | cut -d' ' -f1)" ] \
+     && [ "$(grep -F "  $_hos-$_har/invokers" "$_fd/s2" | cut -d' ' -f1)" = "$(_sha "$_fd/x/invokers" | cut -d' ' -f1)" ]; then
+    mkdir -p "$_pd" && cp -p "$_fd"/x/* "$_pd/"
+  fi
+  rm -rf "$_fd"
+fi
+if [ -f "$_pd/hw-core" ] && [ -f "$_pd/invokers" ] && ( cd "$_pd" && { shasum -a 256 -c SHA256SUMS || sha256sum -c SHA256SUMS; } >/dev/null 2>&1 ); then PREBUILT="$_pd"; fi   # MUTATION-ANCHOR: 993-M09
 if [ "$NO_CORE" = 1 ]; then say "NOTE  hw-core is not built (FOREMAN_NO_CORE=1, the suite's seam): hw dies until setup/build-core --native has built it"
+elif [ -n "$PREBUILT" ]; then ok "hw-core (prebuilt, $_hos-$_har: no Go needed)"
 elif [ ! -f "$SRC/setup/build-core" ] || [ ! -d "$SRC/core" ]; then :
 elif ! type -P go >/dev/null 2>&1; then
-  printf '  MISSING go >= 1.22 — no Go toolchain on PATH, and hw-core (the Go half of hw) is required. Install: https://go.dev/dl\n'; missing=1; fix_tool "go >= 1.22: https://go.dev/dl"
+  printf '  MISSING go >= 1.22 — no Go toolchain on PATH, and no prebuilt hw-core for %s in this checkout. Install: https://go.dev/dl\n' "$_hos-$_har"; missing=1; fix_tool "go >= 1.22: https://go.dev/dl"
 else
   _gov="$(go version 2>/dev/null | sed -n 's/^go version go\([0-9][0-9]*\.[0-9][0-9]*\).*/\1/p')" || _gov=""   # MUTATION-ANCHOR: 993-M07
   if [ -n "$_gov" ] && [ "$(printf '1.22\n%s\n' "$_gov" | sort -V | head -n 1)" = 1.22 ]; then ok "go $_gov (builds hw-core)"; CORE_BUILD=1   # MUTATION-ANCHOR: 993-M02
   else printf '  MISSING go >= 1.22 — Go %s is older than 1.22, and hw-core (the Go half of hw) is required. Update: https://go.dev/dl\n' "${_gov:-of an unreadable version}"; missing=1; fix_tool "go >= 1.22: https://go.dev/dl"; fi
-fi
-# Linux needs three more that macOS setups carry already: hw and its scripts
-# call sd, fd and rg.
-if [ "$(uname -s)" = Linux ]; then
-  need sd "hw and the lane scripts edit files with it" "apt install sd"
-  need fd "hw finds files with it" "apt install fd-find, then link fdfind as fd"
-  need rg "hw and the guards search with it" "apt install ripgrep"
 fi
 { type -P python3 >/dev/null 2>&1 && python3 --version >/dev/null 2>&1; } || die "python3 is required to continue and does not run here (macOS: xcode-select --install; Linux: apt install python3)"   # MUTATION-ANCHOR: 996-M03
 [ -z "$LANE" ] || adopt_lane_row
@@ -740,8 +764,7 @@ if type -P herdr >/dev/null 2>&1; then
     missing=1; fix_integration "herdr integration install claude"
   fi
 fi
-_soft="engram fzf rg"; [ "$(uname -s)" != Linux ] || _soft="engram fzf"   # rg is required on Linux, above
-for soft in $_soft; do
+for soft in engram fzf rg; do
   if type -P "$soft" >/dev/null 2>&1; then ok "$soft"
   else
     case "$soft" in
@@ -776,7 +799,10 @@ case "$SRC/" in "$BRAIN/"*) die "--brain $BRAIN is (or contains) the checkout th
 . "$SRC/bin/project-spaces.sh"
 printf '\nfirst run of Claude Code in this account (yours to do)\n'
 FIRST_RUN="$(claude_first_run_pending "${CLAUDE_CONFIG_DIR:-}")"
-login_state="$(claude auth status --json 2>/dev/null | jq -r 'if .loggedIn == true then "yes" elif .loggedIn == false then "no" else "" end' 2>/dev/null || true)"
+login_state="$(claude auth status --json 2>/dev/null | python3 -c 'import json,sys
+try: v = json.load(sys.stdin).get("loggedIn")
+except Exception: v = None
+print("yes" if v is True else "no" if v is False else "")' 2>/dev/null || true)"
 [ "$login_state" != no ] || FIRST_RUN="login${FIRST_RUN:+
 $FIRST_RUN}"
 case "$FIRST_RUN" in *onboarding*) ;; *) ok "welcome completed" ;; esac
@@ -1007,7 +1033,7 @@ for name in lanes:
         out["refuse"].append("%s does not have the shape this installer merges into (an object with a hooks.PreToolUse list and a permissions.deny list) — fix or move it" % path)
 json.dump(out, open(plan, "w"))
 PY
-refusals="$(jq -r '.refuse[]' "$PLAN")"
+refusals="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["refuse"]))' "$PLAN")"
 [ -z "$refusals" ] || { printf '%s\n' "$refusals" | sed 's/^/  REFUSED /' >&2; die "nothing was written"; }
 d="$BIN_OUT"
 while [ ! -e "$d" ] && [ "$d" != / ]; do d="$(dirname "$d")"; done
@@ -1117,6 +1143,8 @@ sync_dir "$SRC/layouts" "$BRAIN/layouts"
 # The cockpit mod: `brain` loads it from here with --plugin-dir, so it is mirrored
 # like bin/ (the installer owns it). A tree that carries no cockpit has none.
 [ ! -d "$SRC/cockpit" ] || { mkdir -p "$BRAIN/cockpit"; sync_dir "$SRC/cockpit" "$BRAIN/cockpit"; }
+# The herdr app's Cockpit mod, mirrored the same way: the export's herdr-app/README.md has the user symlink it from here, so an upgrade updates it.
+[ ! -d "$SRC/herdr-app/mods/foreman-cockpit" ] || { mkdir -p "$BRAIN/herdr-app/mods/foreman-cockpit"; sync_dir "$SRC/herdr-app/mods/foreman-cockpit" "$BRAIN/herdr-app/mods/foreman-cockpit"; }
 # hw-core: built from this checkout's core/ with the builder that makes the release's own binaries (reproducible, so a
 # second run writes nothing), into core/dist/ — not bin/, which the mirror above owns and empties of anything else. hw
 # finds it there. The switch file is the user's: written only when absent, so a choice already made stays.
@@ -1135,12 +1163,10 @@ put_core() {  # <src> <dst> — a new file in place of the old one, never a writ
 }
 _implf="${HW_IMPL_FILE:-${XDG_CONFIG_HOME:-$HOME/.config}/hw/impl}"
 impl_file_text() { printf '# written by install.sh --no-core: every tool runs its bash implementation. Delete this file to run Go (the default)\ndefault=bash\n'; }
-if [ "$CORE_BUILD" = 1 ]; then
+if [ "$CORE_BUILD" = 1 ] || [ -n "$PREBUILT" ]; then
   _cb="$(mktemp -d "${TMPDIR:-/tmp}/hw-core-build.XXXXXX")"
-  # the directory bin/hw looks in: the same os-arch spelling as its _core_find
-  _hos="$(uname -s | tr 'A-Z' 'a-z')"; _har="$(uname -m)"
-  case "$_har" in x86_64) _har=amd64 ;; aarch64) _har=arm64 ;; esac
-  if ! "$SRC/setup/build-core" --native --out "$_cb/out" >"$_cb/log" 2>&1; then
+  [ -z "$PREBUILT" ] || { mkdir -p "$_cb/out"; cp -R "$PREBUILT" "$_cb/out/"; }   # the loop below installs it, as it does a build's
+  if [ -z "$PREBUILT" ] && ! "$SRC/setup/build-core" --native --out "$_cb/out" >"$_cb/log" 2>&1; then
     say "hw-core did not build. The builder said:"
     tail -n 12 "$_cb/log" | sed 's/^/          /'
     drop_core "its build failed"
@@ -1152,7 +1178,7 @@ if [ "$CORE_BUILD" = 1 ]; then
   else
     for _d in "$_cb"/out/*/; do
       _t="$BRAIN/core/dist/$(basename "$_d")"; mkdir -p "$_t"
-      for _f in "$_d"*; do put_core "$_f" "$_t/$(basename "$_f")"; done
+      for _f in "$_d"*; do [ "$(basename "$_f")" = SHA256SUMS ] || put_core "$_f" "$_t/$(basename "$_f")"; done
     done
     # Go is the only implementation of every tool, so no switch file is written. A file the user has stays as it is and the
     # loop below says, line by line, that nothing in it chooses anything — except the one `--no-core` wrote earlier, byte for
@@ -1183,6 +1209,12 @@ else
   # a run that builds none (the suite's seam, or a source with no core/) writes no switch file: nothing says bash
 fi
 put "$SRC/lanes/git-worktree.sh" "$BRAIN/lanes/git-worktree.sh"
+# The reviewer's brief templates: `hw review` fills them from <brain>/docs, and without them it dies on its first run.
+# A tree that carries no such template has none, like _agents/ and cockpit/ above.
+for _d in REVIEW-BRIEF.md REVIEW-DELTA-BRIEF.md; do
+  [ ! -f "$SRC/docs/$_d" ] || { mkdir -p "$BRAIN/docs"; put "$SRC/docs/$_d" "$BRAIN/docs/$_d"; }
+done
+unset _d
 for g in deny_repo_writes.py deny_repo_writes_ask.py specialist_roster.py lane_housekeeping.py; do
   put "$SRC/setup/guards/$g" "$BRAIN/setup/guards/$g"
 done
@@ -1271,7 +1303,7 @@ write_once "$BRAIN/CLAUDE.md" <<'EOF'
 - A brainer (`brain <lane>`) thinks and delegates; it does not write in a
   product repository. Its read-only guard enforces that for Bash, and its
   `.claude/settings.json` deny list for Edit/Write.
-- An executor (`hw <lane> <task> --brief <lane>/briefs/<task>.md --sdd none`)
+- An executor (`hw <lane> <task> --brief <lane>/briefs/<task>.md`)
   works in its own worktree and ends every task with `done-invoker "<summary>"`
   (or `done-invoker --blocked "<why>"`). Those are shell commands, not tools.
 - `<lane>/decisions.md` holds what was decided and what it rules out.
@@ -1335,7 +1367,7 @@ if [ -n "$LANE" ]; then
 # $LANE
 
 The brainer for \`$REPO\`. Read-only there: plan, write briefs in
-\`briefs/\`, dispatch with \`hw $LANE <task> --brief $LANE/briefs/<task>.md --sdd none\`,
+\`briefs/\`, dispatch with \`hw $LANE <task> --brief $LANE/briefs/<task>.md\`,
 and record what was decided in \`decisions.md\`.
 EOF
   write_once "$BRAIN/$LANE/decisions.md" <<EOF
@@ -1457,7 +1489,7 @@ for name in gj["lanes"]:
 PY
 
 if [ -n "$LANE" ]; then
-  for name in $(jq -r '.lanes | keys[]' "$BRAIN/guards.json"); do
+  for name in $(python3 -c 'import json,sys; print("\n".join(sorted(json.load(open(sys.argv[1]))["lanes"])))' "$BRAIN/guards.json"); do
     if [ "$name" = brain ]; then shim brain 2 | put_text "$BRAIN/.claude/hooks/deny-repo-writes.py"; chmod 755 "$BRAIN/.claude/hooks/deny-repo-writes.py"
     else shim "$name" 3 | put_text "$BRAIN/$name/.claude/hooks/deny-repo-writes.py"; chmod 755 "$BRAIN/$name/.claude/hooks/deny-repo-writes.py"; fi
   done
@@ -1472,7 +1504,7 @@ for l in "${LINKS[@]}"; do
 done
 case ":$PATH:" in *":$BIN_OUT:"*) ;; *) say "WARN  $BIN_OUT is not on your PATH — add it, then restart herdr so its panes inherit it" ;; esac
 
-if [ "$(jq -r '.stop_present' "$PLAN")" = true ] && [ "$(jq -r '.stopfail_present // false' "$PLAN")" = true ] && [ "$(jq -r '.posttool_present // false' "$PLAN")" = true ]; then
+if [ "$(json_get "$PLAN" stop_present)" = true ] && [ "$(json_get "$PLAN" stopfail_present)" = true ] && [ "$(json_get "$PLAN" posttool_present)" = true ]; then
   ok "$CLAUDE_CFG/settings.json already runs this brain's Stop, StopFailure and PostToolUse hooks"
 else
   mkdir -p "$CLAUDE_CFG"
@@ -1528,7 +1560,7 @@ if [ -n "$LANE" ]; then
 next:
   brain $LANE                                     # open the $LANE brainer
   \$EDITOR $BRAIN/$LANE/briefs/<task>.md
-  hw $LANE <task> --brief $BRAIN/$LANE/briefs/<task>.md --sdd none --dry-run
+  hw $LANE <task> --brief $BRAIN/$LANE/briefs/<task>.md --dry-run
 EOF
 else
   printf '\nnext: %s --brain %s --lane <name> --repo <path>\n' "$INSTALL_CMD" "$BRAIN"

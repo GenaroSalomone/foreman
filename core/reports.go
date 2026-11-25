@@ -134,7 +134,7 @@ func (a *app) cmdReports() int {
 		case arg == "--full":
 			full = true
 		case strings.HasPrefix(arg, "-"):
-			a.die("unknown option: " + arg + " (usage: hw reports [<project>] [<task>] [--full] [--no-repair])")
+			a.die("unknown option: " + arg + " (usage: hw reports [<lane>] [<task>] [--full] [--no-repair])")
 		case proj == "":
 			proj = a.c.t.canonProject(arg)
 		default:
@@ -147,7 +147,7 @@ func (a *app) cmdReports() int {
 	var lanes []string
 	if proj != "" {
 		if !a.c.t.known(proj) {
-			a.die("unknown project: " + proj + " (expected: " + a.laneNamesHint() + ")")
+			a.die("unknown lane: " + proj + " — try: " + a.laneNamesHint())
 		}
 		lanes = []string{proj}
 	} else {
@@ -296,7 +296,7 @@ func (a *app) cmdReports() int {
 		}
 		p := proj
 		if p == "" {
-			p = "<project>"
+			p = "<lane>"
 		}
 		a.info("one line per task. For the report text: hw reports " + p + " <task>, or --full for the whole lane")
 	}

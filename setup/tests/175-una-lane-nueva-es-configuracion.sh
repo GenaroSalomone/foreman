@@ -55,7 +55,7 @@ export TMPDIR="$TMP"          # the route forecast lands here, not in the real T
 dry() { "$B/bin/hw" "$@" 2>&1 < /dev/null | sed 's/\x1b\[[0-9;]*m//g' || true; }
 
 # ── 1. the demo lane dispatches, and every field is the table's ─────────────
-out="$(dry demo probe --dry-run --no-report --sdd none)"
+out="$(dry demo probe --dry-run=full --no-report)"
 field() { printf '%s\n' "$out" | rg -F -- "$1" >/dev/null || fail "demo's manifest has no '$1': $(printf '%s' "$out" | tail -4 | tr '\n' ' ')"; }
 field "dry run — nothing created"
 field "dispatch demo:probe"
@@ -64,7 +64,7 @@ field "base        trunk  (lane default)"
 field "engram      demo-memory"
 field "placement   own tab in space demo-space"
 field "agent       claude  (lane default for demo)"
-pass "hw demo probe --dry-run prints a full manifest: worktree, base, engram label, space and vendor all from projects.json"
+pass "hw demo probe --dry-run=full prints a full manifest: worktree, base, engram label, space and vendor all from projects.json"
 
 # The brief was found under the COPY's root, which nothing named: the root was
 # derived from where the copy's bin/hw lives.
@@ -72,15 +72,15 @@ field "brief       $B/demo/briefs/probe.md"
 pass "the brain root is the copy's own, derived from the script's location with no override"
 
 # The lane's alias is the table's too.
-case "$(dry dm probe --dry-run --no-report --sdd none)" in
+case "$(dry dm probe --dry-run=full --no-report)" in
   *"dispatch demo:probe"*) pass "hw dm resolves to demo through the table's hw_aliases" ;;
-  *) fail "the demo alias did not resolve: $(dry dm probe --dry-run --no-report --sdd none | tail -2)" ;;
+  *) fail "the demo alias did not resolve: $(dry dm probe --dry-run=full --no-report | tail -2)" ;;
 esac
 
 # A demo worktree is not built by a bin/ that has no build arm for it: the
 # launch refuses before creating anything instead of falling through.
 herdr_stub_note="the herdr stub answers every call, so only hw's own refusal can stop this"
-real="$("$B/bin/hw" demo probe --no-report --sdd none --fresh 2>&1 < /dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)"
+real="$("$B/bin/hw" demo probe --no-report --fresh 2>&1 < /dev/null | sed 's/\x1b\[[0-9;]*m//g' || true)"
 case "$real" in
   *"demo has a worktree in projects.json but no build path in bin/hw yet"*)
     [ ! -e "$HOME/demo-repo/.wt/probe" ] || fail "the refusal left a worktree behind"
@@ -90,7 +90,7 @@ esac
 
 # ── 2. brain knows the lane from the same table ─────────────────────────────
 case "$("$B/bin/brain" dm --force 2>&1 || true)" in
-  "--force means nothing without --reset") pass "brain dm is accepted as a lane (it reaches flag validation, not 'unknown brainer')" ;;
+  "--force means nothing without --reset") pass "brain dm is accepted as a lane (it reaches flag validation, not 'unknown lane')" ;;
   *) fail "brain did not accept the demo alias: $("$B/bin/brain" dm --force 2>&1 || true)" ;;
 esac
 
@@ -102,18 +102,18 @@ import shutil, sys
 shutil.copy(sys.argv[1], sys.argv[2])
 PY
 saw_mutant "M01 demo removed from the copy's projects.json" \
-  "$(dry demo probe --dry-run --no-report --sdd none)" "unknown project: demo"
+  "$(dry demo probe --dry-run=full --no-report)" "unknown lane: demo"
 
 # M02 — a table that does not parse loads nothing, and hw says so instead of
 # dispatching with no lanes.
 printf '{ "lanes": ' > "$B/projects.json"
 saw_mutant "M02 an unparseable projects.json" \
-  "$(dry setup probe --dry-run --no-report --sdd none)" "the lane table did not load"
+  "$(dry setup probe --dry-run=full --no-report)" "the lane table did not load"
 
 # M03 — a lane name that would be spliced into a variable name is refused at
 # load, not eval'd.
 printf '{"work":"~/w","lanes":{"a;b":{"space":"x"}}}' > "$B/projects.json"
 saw_mutant "M03 a lane name that is not a lowercase word" \
-  "$(dry setup probe --dry-run --no-report --sdd none)" "the lane table did not load"
+  "$(dry setup probe --dry-run=full --no-report)" "the lane table did not load"
 
 printf 'coverage - 175: 6 live claims, 3 mutants (3 must be named)\n'

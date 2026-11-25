@@ -22,10 +22,10 @@ type llnState struct {
 // laneCheckout is `lane_checkout "$1"`.
 func (l *lch) laneCheckout(proj string) string { return l.c.checkout(proj) }
 
-// laneWtDir is `_lane_wt_dir <project> <task>`.
+// laneWtDir is `_lane_wt_dir <lane> <task>`.
 func (l *lch) laneWtDir(proj, task string) string { return l.c.lanePath(proj, "worktree", task) }
 
-// laneBranch is `_lane_branch <project> <task>`.
+// laneBranch is `_lane_branch <lane> <task>`.
 func (l *lch) laneBranch(proj, task string) string {
 	if !l.c.t.known(proj) {
 		return "task/" + task
@@ -33,7 +33,7 @@ func (l *lch) laneBranch(proj, task string) string {
 	return l.c.lanePath(proj, "branch", task)
 }
 
-// laneBaseRefPrefixOf is `_lane_base_ref_prefix <project>` (for the dispatch's own project: d.laneBaseRefPrefix()).
+// laneBaseRefPrefixOf is `_lane_base_ref_prefix <lane>` (for the dispatch's own project: d.laneBaseRefPrefix()).
 func (l *lch) laneBaseRefPrefixOf(proj string) string {
 	if !l.c.t.known(proj) {
 		return "origin/"
@@ -41,10 +41,10 @@ func (l *lch) laneBaseRefPrefixOf(proj string) string {
 	return l.c.t.get(proj, "base_ref_prefix")
 }
 
-// laneBaseOf is `_lane_base <project>`.
+// laneBaseOf is `_lane_base <lane>`.
 func (l *lch) laneBaseOf(proj string) string { return l.c.t.get(proj, "base") }
 
-// laneAgentsRef is `_lane_agents_ref <project>`.
+// laneAgentsRef is `_lane_agents_ref <lane>`.
 func (l *lch) laneAgentsRef(proj string) string {
 	return l.laneBaseRefPrefixOf(proj) + l.laneBaseOf(proj)
 }

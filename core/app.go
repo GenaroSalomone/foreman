@@ -72,6 +72,9 @@ func run(args []string, stdout, stderr *os.File) (rc int) {
 	if len(args) > 0 && isWrapperTool(args[0]) { // the small runtime wrappers of bin/ (wrappers.go): raw bytes, no colour, no lane table
 		return runWrapper(args[0], args[1:], stdout, stderr, realGetenv, os.Stdin, os.Stdin)
 	}
+	if len(args) > 0 && args[0] == "json" { // the few questions the shell side asked jq (json_verb.go): raw bytes, no lane table
+		return runJSON(args[1:], stdout, stderr, realGetenv, os.Stdin)
+	}
 	if len(args) > 0 && args[0] == "hw-secret" { // the Bitwarden path (hw_secret.go): never prints a value, exec's the command
 		return hwSecretMain(args[1:], stdout, stderr)
 	}
@@ -115,7 +118,7 @@ func runWith(args []string, stdout, stderr io.Writer, color bool, getenv func(st
 	switch verb {
 	case "receipt", "log", "handle", "help", "status", "worktrees", "executor-gate", "picker", "retro-done": // picker: `hw` with no arguments on a terminal (picker.go)
 	case "review-range", "review-delta", "preflight", "outbox", "reports", "sweep", "reap", "wait", "wait-one", "wait-monitor", "status-full": // T2; status-full is all of `hw status`
-		for _, tool := range []string{"herdr", "git", "jq"} { // bin/hw's `need herdr; need git; need jq`, before any verb
+		for _, tool := range []string{"herdr", "git"} { // bin/hw's `need herdr; need git`, before any verb
 			if _, err := exec.LookPath(tool); err != nil {
 				t.die("missing required command: " + tool)
 			}
@@ -125,7 +128,7 @@ func runWith(args []string, stdout, stderr io.Writer, color bool, getenv func(st
 			break
 		}
 		if verb == "dispatch" { // train T5, the dispatch: its dry run (t5.go) and its launch (t5l*.go)
-			for _, tool := range []string{"herdr", "git", "jq"} { // bin/hw:696 `need herdr; need git; need jq`, before any verb
+			for _, tool := range []string{"herdr", "git"} { // bin/hw:696 `need herdr; need git`, before any verb
 				if _, err := exec.LookPath(tool); err != nil {
 					t.die("missing required command: " + tool)
 				}
@@ -136,7 +139,7 @@ func runWith(args []string, stdout, stderr io.Writer, color bool, getenv func(st
 			break
 		}
 		if isT6Verb(verb) { // train T6, the verbs that were bash-only (t6.go)
-			for _, tool := range []string{"herdr", "git", "jq"} { // bin/hw:696 `need herdr; need git; need jq`, before any verb
+			for _, tool := range []string{"herdr", "git"} { // bin/hw:696 `need herdr; need git`, before any verb
 				if _, err := exec.LookPath(tool); err != nil {
 					t.die("missing required command: " + tool)
 				}

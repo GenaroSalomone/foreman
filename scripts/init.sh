@@ -8,7 +8,7 @@
 #
 # Run through the front (`install.sh init`, which the Homebrew formula links as
 # `foreman-setup`), never on its own initiative. In order:
-#   1. prerequisites     git, jq 1.7+, python3, herdr, claude, rg, fd, sd (and a shell
+#   1. prerequisites     git, python3, herdr, claude (and a shell
 #                        it was measured with). A missing one is NAMED with its install
 #                        command. With Homebrew present init ASKS (--yes answers) to run
 #                        `--with-recommended` right there and checks again; without the
@@ -125,22 +125,14 @@ OS="$(uname -s)"
 if [ "$OS" = Linux ]; then
   ROWS="git|worktrees and branches|apt install git
 python3|the guards and the JSON merges|apt install python3
-jq|hw reads projects.json with it (1.7 or newer)|apt install jq, or https://jqlang.github.io/jq/download/
 herdr|every brainer and executor is a herdr pane|https://herdr.dev
-claude|the agent runtime|https://claude.com/claude-code
-rg|hw and the guards search with it|apt install ripgrep
-fd|hw finds files with it|apt install fd-find, then link fdfind as fd
-sd|hw edits files with it|apt install sd"
+claude|the agent runtime|https://claude.com/claude-code"
 else
   [ "$OS" = Darwin ] || warn "$OS is not supported — macOS and Linux only"
   ROWS="git|worktrees and branches|xcode-select --install
 python3|the guards and the JSON merges|xcode-select --install
-jq|hw reads projects.json with it (1.7 or newer)|brew install jq
 herdr|every brainer and executor is a herdr pane|brew install herdr
-claude|the agent runtime|brew install --cask claude-code@latest
-rg|hw and the guards search with it|brew install ripgrep
-fd|hw finds files with it|brew install fd
-sd|hw edits files with it|brew install sd"
+claude|the agent runtime|brew install --cask claude-code@latest"
 fi
 check_tools() {
   MISSING=0 CLT_MISSING=0   # CLT_MISSING: the missing ones Homebrew does not carry (Command Line Tools do)
@@ -149,12 +141,6 @@ check_tools() {
     if ! tool_runs "$cmd"; then
       printf '  MISSING %s — %s. Install: %s\n' "$cmd" "$why" "$how"; MISSING=$((MISSING + 1))
       case "$how" in xcode-select*) CLT_MISSING=$((CLT_MISSING + 1)) ;; esac
-      continue
-    fi
-    if [ "$cmd" = jq ]; then
-      v="$(jq --version 2>/dev/null | sed -E 's/^jq-([0-9]+)\.([0-9]+).*/\1 \2/')"
-      if [ "${v% *}" -gt 1 ] 2>/dev/null || { [ "${v% *}" -eq 1 ] 2>/dev/null && [ "${v#* }" -ge 7 ] 2>/dev/null; }; then ok "jq ${v% *}.${v#* } (>= 1.7)"
-      else printf '  MISSING jq >= 1.7 — found %s. Install: %s\n' "$(jq --version 2>/dev/null)" "$how"; MISSING=$((MISSING + 1)); fi
       continue
     fi
     ok "$cmd"
@@ -202,7 +188,10 @@ fi
 # ── 2. the Claude account ───────────────────────────────────────────────────
 stage 2/7 "the Claude account (the welcome, login and warning are yours: init names them, never answers them)"
 FIRST_RUN="$(claude_first_run_pending "${CLAUDE_CONFIG_DIR:-}")"
-login_state="$(claude auth status --json 2>/dev/null | jq -r 'if .loggedIn == true then "yes" elif .loggedIn == false then "no" else "" end' 2>/dev/null || true)"
+login_state="$(claude auth status --json 2>/dev/null | python3 -c 'import json,sys
+try: v = json.load(sys.stdin).get("loggedIn")
+except Exception: v = None
+print("yes" if v is True else "no" if v is False else "")' 2>/dev/null || true)"
 [ "$login_state" != no ] || FIRST_RUN="login${FIRST_RUN:+
 $FIRST_RUN}"
 case "$FIRST_RUN" in *onboarding*) say "PENDING the welcome (theme, then login) was never completed" ;; *) ok "welcome completed" ;; esac
@@ -250,8 +239,9 @@ print("yes" if "engram" in servers or any(k.split("@")[0] == "engram" and v is T
     say "PENDING engram is installed but Claude Code has no engram server, so reports never reach memory"
     yours "engram setup claude-code   (answer y to its allowlist question)"
   fi
-  if health="$(curl -fsS --max-time 2 "$ENGRAM_URL/health" 2>/dev/null)" && printf '%s' "$health" | jq -e '.status == "ok"' >/dev/null 2>&1; then
-    ok "engram serve answers at $ENGRAM_URL (version $(printf '%s' "$health" | jq -r '.version // "?"'))"
+  if health="$(curl -fsS --max-time 2 "$ENGRAM_URL/health" 2>/dev/null)" \
+     && ever="$(printf '%s' "$health" | python3 -c 'import json,sys; d = json.load(sys.stdin); print(d.get("version") or "?") if d.get("status") == "ok" else sys.exit(1)' 2>/dev/null)"; then
+    ok "engram serve answers at $ENGRAM_URL (version $ever)"
   else
     warn "engram serve does not answer at $ENGRAM_URL — memory is not saved until it runs (init never starts it): engram serve"
     yours "engram serve   (in its own terminal; init does not start it)"
@@ -264,7 +254,7 @@ fi
 stage 4/7 "the brain and lane $LANE"
 PJ="$BRAIN/projects.json"
 EXISTING=""
-[ ! -f "$PJ" ] || EXISTING="$(jq -r --arg l "$LANE" '.lanes[$l].checkout // empty' "$PJ" 2>/dev/null || true)"
+[ ! -f "$PJ" ] || EXISTING="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["lanes"][sys.argv[2]].get("checkout") or "")' "$PJ" "$LANE" 2>/dev/null || true)"
 TOY=0
 if [ -z "$REPO" ]; then
   if [ -n "$EXISTING" ]; then REPO="$EXISTING"
@@ -304,7 +294,7 @@ ARGS=(--brain "$BRAIN" --lane "$LANE" --repo "$REPO" --bin-dir "$BIN")
 [ "$WITH_RP" = 0 ] || ARGS+=(--with-review-plugins)  # MUTATION-ANCHOR: 979-I05
 if [ -z "$EXISTING" ]; then
   OP="the operator"
-  [ ! -f "$PJ" ] || OP="$(jq -r '.operator // "the operator"' "$PJ" 2>/dev/null || echo "the operator")"
+  [ ! -f "$PJ" ] || OP="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("operator") or "the operator")' "$PJ" 2>/dev/null || echo "the operator")"
   ARGS+=(--operator "$OP" --min-model none --requested-by none)
 fi
 # install.sh runs here without a terminal on its output, so it asks nothing: the permissions choice stays
@@ -350,9 +340,9 @@ fi
 stage 6/7 "a dry-run dispatch of the sample brief"
 HW="$BIN/hw"
 if [ "$DRY" = 1 ]; then
-  would "run: hw $LANE $SAMPLE_TASK --brief $BRIEF --sdd none --dry-run"
+  would "run: hw $LANE $SAMPLE_TASK --brief $BRIEF --dry-run"
 else
-  dispatch() { (cd "$BRAIN/$LANE" && PATH="$BIN:$PATH" "$HW" "$LANE" "$SAMPLE_TASK" --brief "$BRIEF" --sdd none --dry-run "$@" </dev/null 2>&1) | strip_ansi; }
+  dispatch() { (cd "$BRAIN/$LANE" && PATH="$BIN:$PATH" "$HW" "$LANE" "$SAMPLE_TASK" --brief "$BRIEF" --dry-run "$@" </dev/null 2>&1) | strip_ansi; }
   rc=0; out="$(dispatch)" || rc=$?
   # A dry run builds nothing, so it needs no return channel: from a plain terminal the manifest says UNRESOLVED and the plan is the same.
   if [ "$rc" = 0 ] && grep -q 'dry run — nothing created' <<<"$out"; then
@@ -386,4 +376,4 @@ elif [ "$CHANGES" = 0 ]; then
 else
   printf 'init: done — %d change(s).\n' "$CHANGES"
 fi
-printf 'Next: brain %s   # opens the brainer; there, hw %s %s --brief %s --sdd none\n' "$LANE" "$LANE" "$SAMPLE_TASK" "$BRIEF"
+printf 'Next: brain %s   # opens the brainer; there, hw %s %s --brief %s\n' "$LANE" "$LANE" "$SAMPLE_TASK" "$BRIEF"

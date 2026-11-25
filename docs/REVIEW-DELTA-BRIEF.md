@@ -5,7 +5,6 @@ review: [{{review_list}}]
 review_of: {{review_of}}
 requested_by: "{{requested_by}}"
 asked: {{asked}}
-sdd: none
 ---
 
 # Independent re-check of {{lane}}:{{task}} @ {{head}}, since {{prior_head}}
@@ -24,6 +23,9 @@ round. Judge the bytes at `{{head}}`; change nothing and post nothing to GitHub.
   `<id>: resolved — <file:line at the head, what now holds>` or `<id>: open — <why it still stands>`. A prior `blocker` that is
   open is a `blocker` row again, in the finding rows, so the verdict stays `changes-needed`. A prior `should` or `follow-up` that is
   open is only its line.
+  If the build's brief has a `## Findings` table with a `disposition` column (a fix round's: `accepted`, `declined` or `deferred`
+  per prior row), end each row's line with `[disposition: <that value>]`, and with `[disposition: none recorded]` when the brief
+  has no such table or no row for it. The disposition is data for the next retro: it never changes a verdict.
 - **You report a `blocker` this delta introduced (a fix that broke something, or a path the fix opened), or you approve.** It carries
   a failure scenario and a file:line, and it is the only new finding row: no new `should`, no new `follow-up`. A `should` or a defect
   outside the delta that you see goes in ONE line under a `## Backlog` heading in `review.md`, with no `|` in it, never a row (this narrows «What you leave» below). Read the files the delta touches, not only its hunks.

@@ -1,8 +1,6 @@
 FLAGS
     --brief <path>     the file the executor is given. Without it, it gets a tab
                        and nothing to do.
-    --sdd none         the only mode, and the default: accepted and ignored
-                       (the Spec Kit flow was removed; --sdd speckit dies).
     --agent <vendor>   claude | pi. Defaults per lane; see above.
     --model <m>        claude: an alias (opus, sonnet, haiku, fable) or claude-*.
     --model-why <s>    name the OPEN DECISION this task has to work out. The

@@ -8,7 +8,7 @@
 # Claude Code hands the status line command a JSON on stdin; its `rate_limits`
 # field (5-hour and 7-day windows: used_percentage, resets_at) is the only local
 # source of an account's usage. This writes ONLY {account, written_at,
-# rate_limits, model, cwd} (jq-extracted, nothing else of stdin) to
+# rate_limits, model, cwd} (extracted by hw-core json, nothing else of stdin) to
 # ~/.cache/hw/claude-usage/<account>.json, atomically, then execs the command
 # with the same stdin, so its output is byte-identical. A failing tee is silent.
 # The account is CLAUDE_CONFIG_DIR's name: ~/.claude-personal -> personal,
@@ -17,17 +17,25 @@ set -uo pipefail
 [ "${1:-}" = "--" ] && shift
 [ $# -gt 0 ] || { echo "usage: statusline-usage-tee -- <command...>" >&2; exit 64; }
 
+# hw-core answers the JSON questions (`hw-core json`): HW_CORE, else beside this file, else core/dist/<os>-<arch>/. No spawn to find it.
+_d="${0%/*}"; core="${HW_CORE:-$_d/hw-core}"
+if [ ! -x "$core" ]; then
+  case "$OSTYPE" in darwin*) _o=darwin ;; *) _o=linux ;; esac; case "$HOSTTYPE" in x86_64|amd64) _a=amd64 ;; *) _a=arm64 ;; esac
+  core="$_d/../core/dist/$_o-$_a/hw-core"
+fi
 in="$(cat)" || in=""
+cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; base="${cfg##*/}"; acct="${base#.claude-}"
+[ "$base" = ".claude" ] && acct="default"
+# ONE hw-core call per refresh (a jq call costs less to start than hw-core does, so two of them would be slower): line 1 is the
+# usage record (empty when the JSON carries no rate_limits), line 2 the transcript_path (empty when it has none)
+res="$(printf '%s' "$in" | "$core" json usage-tee "$acct" 2>/dev/null)"
+out="${res%%$'\n'*}"; tp=""; case "$res" in *$'\n'*) tp="${res#*$'\n'}" ;; esac
 (
   set +e
-  cfg="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"; base="${cfg##*/}"; acct="${base#.claude-}"
-  [ "$base" = ".claude" ] && acct="default"
   case "$acct" in ''|*[!A-Za-z0-9_-]*) exit 0 ;; esac
-  dir="${HW_USAGE_DIR:-$HOME/.cache/hw/claude-usage}"
-  mkdir -p "$dir" || exit 0
-  out="$(printf '%s' "$in" | jq -c --arg a "$acct" \
-    'select(.rate_limits != null) | {account:$a, written_at:(now|floor), rate_limits, model:(.model.id // .model.display_name // null), cwd:(.workspace.current_dir // .cwd // null)}' 2>/dev/null)"
   [ -n "$out" ] || exit 0
+  dir="${HW_USAGE_DIR:-$HOME/.cache/hw/claude-usage}"
+  [ -d "$dir" ] || mkdir -p "$dir" || exit 0
   printf '%s\n' "$out" > "$dir/.$acct.$$" && mv -f "$dir/.$acct.$$" "$dir/$acct.json"
 ) >/dev/null 2>&1 || true
 
@@ -39,7 +47,6 @@ in="$(cat)" || in=""
 # the recent turns anyway. 0 turns this off.
 tail_mb="${HW_STATUSLINE_TAIL_MB:-8}"
 case "$tail_mb" in ''|*[!0-9]*) tail_mb=8 ;; esac
-tp="$(printf '%s' "$in" | jq -r '.transcript_path // empty' 2>/dev/null)"
 if [ "$tail_mb" -gt 0 ] && [ -n "$tp" ] && [ -f "$tp" ]; then
   size="$(stat -f %z "$tp" 2>/dev/null || stat -c %s "$tp" 2>/dev/null || echo 0)"
   if [ "$size" -gt $((tail_mb * 1048576)) ]; then
@@ -63,12 +70,16 @@ if [ "$tail_mb" -gt 0 ] && [ -n "$tp" ] && [ -f "$tp" ]; then
       cut_ok=0
     fi
     if [ "$cut_ok" = 1 ]; then
-      in2="$(printf '%s' "$in" | jq -c --arg t "$tail_f" '.transcript_path = $t' 2>/dev/null)"
+      in2="$(printf '%s' "$in" | "$core" json set -c ".transcript_path=$tail_f" 2>/dev/null)"
       [ -n "$in2" ] && in="$in2"
     fi
     rm -f "$tmp" 2>/dev/null
     trap - EXIT INT TERM HUP
   fi
 fi
+
+# A session started outside a login shell (`brain relaunch` from a detached
+# process) may lack bun's own bin dir on PATH; the status line then runs nothing.
+command -v "$1" >/dev/null 2>&1 || PATH="$PATH:$HOME/.bun/bin"
 
 printf '%s' "$in" | exec "$@"

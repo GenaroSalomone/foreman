@@ -160,7 +160,7 @@ func (d *dsp) dispatchQA() {
 
 // The release's flags its QA carries: what a person launching that QA brief by hand with them would type. Each takes a value
 // except --fresh and --no-reuse-check. The rest are the release's own (placement, worktree, database, report, lease, reasons).
-var qaCarriedValue = map[string]string{"--account": "", "--base": "base", "--sdd": "sdd", "--model": "model", "--effort": "effort", "--agent": "agent"} // flag → the brief key that declares it
+var qaCarriedValue = map[string]string{"--account": "", "--base": "base", "--model": "model", "--effort": "effort", "--agent": "agent"} // flag → the brief key that declares it
 var qaCarriedBool = map[string]bool{"--fresh": true, "--no-reuse-check": true}
 
 // noteQACarry is called by parseFlags at every flag position: it remembers a carried flag and its value.

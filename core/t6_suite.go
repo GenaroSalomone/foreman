@@ -32,7 +32,7 @@ import (
 )
 
 func suiteUsage() string {
-	return "usage: hw suite <project> [--wait-ms N] [--dry-run|--status] -- <command...>   Serialises one command per lane against that lane's suite lock, so two executors in a shared tree cannot run the suite over each other. --dry-run answers \"would this wait, and behind whom\" and spends nothing. NEVER kill a suite by command pattern: `pkill -f setup/test-hw` matches every lane's and every agent's."
+	return "usage: hw suite <lane> [--wait-ms N] [--dry-run|--status] -- <command...>   Serialises one command per lane against that lane's suite lock, so two executors in a shared tree cannot run the suite over each other. --dry-run answers \"would this wait, and behind whom\" and spends nothing. NEVER kill a suite by command pattern: `pkill -f setup/test-hw` matches every lane's and every agent's."
 }
 
 // suiteLanePooled is _suite_lane_pooled: the lane's suite coordinates itself and takes no lock.
@@ -74,7 +74,7 @@ parse:
 		}
 	}
 	if !a.c.t.known(proj) {
-		a.die("unknown project: " + proj + " (expected: " + a.c.t.namesBar() + ")")
+		a.die("unknown lane: " + proj + " — try: " + a.c.t.namesBar())
 	}
 	t5FillLaneFields(a.c.t, a.c.home) // lane_get suite_lock: the loader does not keep it
 

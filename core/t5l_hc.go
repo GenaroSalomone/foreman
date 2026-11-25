@@ -229,15 +229,16 @@ func (l *lch) hcAgentStep() {
 	l.hcRecord(addr)
 	l.receipt("agent_ready", "unknown — hc run answered with "+addr+"; runtime readiness unestablished", "hc run --json")
 	l.dispatchPublishHC(addr)
-	if l.brief != "" && !l.hcBriefProved(addr) {
-		l.receipt("brief_admitted", "no — "+addr+" showed neither status=working nor a turn within the wait", "hc get "+addr+" --json")
-		l.ledgerDispatch(addr, 1)
-		l.receiptVerdict()
-		l.die("the brief was passed to " + addr + " as its launch task, but `hc get " + addr + "` shows neither status=working nor a turn after the wait: it may be holding a dialog. Read it with `hc read " + addr + "`. Do NOT re-send the brief.")
-	}
 	if l.brief != "" {
-		l.receipt("agent_ready", "yes", "hc get "+addr+" --json: status=working or a turn past 0 (the brief's turn)") // the terminal answered a turn: readiness is measured
-		l.receipt("brief_admitted", "yes — "+addr+" reports status=working or a turn past 0", "hc get "+addr+" --json")
+		proof := l.hcBriefProved(addr)
+		if proof == "" {
+			l.receipt("brief_admitted", "no — "+addr+" showed neither status=working nor a turn within the wait", "hc get "+addr+" --json")
+			l.ledgerDispatch(addr, 1)
+			l.receiptVerdict()
+			l.die("the brief was passed to " + addr + " as its launch task, but `hc get " + addr + "` shows neither status=working nor a turn after the wait: it may be holding a dialog. Read it with `hc read " + addr + "`. Do NOT re-send the brief.")
+		}
+		l.receipt("agent_ready", "yes", "hc get "+addr+" --json: "+proof+" (the brief's turn)") // the terminal answered a turn: readiness is measured
+		l.receipt("brief_admitted", "yes — "+addr+" showed "+proof, "hc get "+addr+" --json")
 		l.ok("brief IN THE CONVERSATION on " + addr + " (" + strconv.Itoa(len(l.briefText)) + " bytes, from " + l.brief + ") — the launch task, proved by hc get")
 	}
 	l.hcSession(addr)
@@ -260,7 +261,10 @@ func (l *lch) hcSession(addr string) {
 	if l.wt == "" || l.hwRun == "" {
 		return
 	}
-	if l.agent != "claude" { // only claude writes sessions/<pid>.json: another vendor's is not read on this route
+	// the vendor is a fact of the dispatch, not of finding the session: done-invoker picks its transcript reader by it
+	l.receipt("session_vendor", l.agent, "hc run: the vendor is "+l.agent)
+	// only claude writes sessions/<pid>.json: another vendor's is not read on this route
+	if l.agent != "claude" {
 		l.receipt("session_id", "none — "+l.agent+" publishes no session id the herdr-core route reads (only claude's sessions/<pid>.json)", "hc get "+addr+" --json")
 		l.warn("NO SESSION ID: " + l.agent + " on herdr-core publishes none this route reads, so this conversation is not addressable after the fact and `hw revive` cannot resume it.")
 		return
@@ -289,7 +293,6 @@ func (l *lch) hcSession(addr string) {
 		return
 	}
 	l.receipt("session_id", sid, src+", "+strconv.FormatInt(waited, 10)+"ms after the brief")
-	l.receipt("session_vendor", l.agent, "hc run: the vendor is "+l.agent)
 	l.receiptResume(sid, l.agent)
 }
 
@@ -301,20 +304,36 @@ func (l *lch) dispatchPublishHC(addr string) {
 	}
 }
 
-// hcBriefProved polls `hc get` until the terminal is working or its turn left 0. false is "not proved".
-func (l *lch) hcBriefProved(addr string) bool {
+// hcWorkingTitle: while claude's first turn runs, `hc get` still has status=null and turn=0 (status is set by the app's
+// hooks, turn when a turn ENDS), but claude's own terminal title already leads with its spinner ("◑ <summary>"; idle is
+// "Claude Code" or a plain summary). Measured on the dispatch that died with "neither status=working nor a turn".
+func hcWorkingTitle(title string) bool {
+	for _, r := range title {
+		return strings.ContainsRune("◐◓◑◒", r) || (r >= 0x2800 && r <= 0x28FF)
+	}
+	return false
+}
+
+// hcBriefProved polls `hc get` until the terminal is working (status, or its title's spinner) or its turn left 0, and says which
+// of them proved it ("" is "not proved").
+func (l *lch) hcBriefProved(addr string) string {
 	budget := lrcMillis(l.env("HW_HC_PROOF_MS"), 30000)
 	for waited := int64(0); ; waited += 1000 {
 		out, rc := l.sh(cmdSpec{name: "hc", args: []string{"get", addr, "--json"}, quiet: true, synth: `{"state":"live","turn":1}`})
 		v, ok := bjParse(brTrimNL(out))
-		if m, isMap := v.(jmap); rc == 0 && ok && isMap {
+		if m, isMap := v.(jmap); rc == 0 && ok && isMap && hcStr(m, "state") == "live" {
 			turn := pyStr(m["turn"])
-			if hcStr(m, "state") == "live" && (bjRaw(bjGet(m, "status", "state")) == "working" || (turn != "" && turn != "None" && turn != "0")) {
-				return true
+			switch {
+			case bjRaw(bjGet(m, "status", "state")) == "working":
+				return "status=working"
+			case hcWorkingTitle(hcStr(m, "title")):
+				return "the terminal title's working spinner, not status"
+			case turn != "" && turn != "None" && turn != "0":
+				return "turn " + turn + " (past 0)"
 			}
 		}
 		if waited >= budget {
-			return false
+			return ""
 		}
 		lSleep(time.Second)
 	}

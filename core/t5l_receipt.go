@@ -526,7 +526,7 @@ func (l *lch) ledgerDispatch(pane string, drc int) {
 		{"lane", jstr(l.proj)}, {"task", jstr(l.task)}, {"run", jstr(l.hwRun)}, {"seq", &jval{kind: vNum, s: "1"}},
 		{"brief", nz(l.brief)}, {"brief_sha", nz(sha)}, {"brief_commit", nz(l.ledgerBriefCommit)},
 		{"account", jstr(l.account)}, {"model", jstr(l.model)}, {"effort", jstr(l.effort)}, {"vendor", jstr(l.agent)},
-		{"sdd", jstr(l.sdd)}, {"base", jstr(base)}, {"subagent_model", jstr(l.lrcSubagentModelValue())},
+		{"base", jstr(base)}, {"subagent_model", jstr(l.lrcSubagentModelValue())},
 		{"pane", jstr(pane)}, {"rundir", jstr(rundir)}, {"delivered", delivered},
 	}}
 	if l.fs.appendTo(f, []byte(obj.toJSON()+"\n"), 0o666) != nil {

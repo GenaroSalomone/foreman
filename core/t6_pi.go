@@ -810,8 +810,8 @@ func (d *dsp) piSpecialistAgents(dir string) string {
 	if !isDir(dir + "/.claude/agents") {
 		return ""
 	}
-	r := extRun(extCall{Name: "fd", Args: []string{"-t", "f", "-t", "l", "-e", "md", ".", dir + "/.claude/agents"}, Env: childEnv()})
-	return piSpecialistNames(r.Out)
+	out, _ := fdFind("-t", "f", "-t", "l", "-e", "md", ".", dir + "/.claude/agents")
+	return piSpecialistNames(out)
 }
 
 // piDelegableAgents is _pi_delegable_agents: which of the specialists pi CAN delegate to — the ones this worktree also
@@ -851,8 +851,8 @@ func (d *dsp) piAgentsIn(agentDir string) string {
 	if agentDir == "" || !isDir(agentDir) {
 		return ""
 	}
-	r := extRun(extCall{Name: "fd", Args: []string{"-t", "f", "-t", "l", "-e", "md", ".", agentDir}, Env: childEnv()})
-	return piAgentNames(r.Out, true)
+	out, _ := fdFind("-t", "f", "-t", "l", "-e", "md", ".", agentDir)
+	return piAgentNames(out, true)
 }
 
 // piRegisteredByDir is what hw-executor.ts registers with pi-subagents, per directory it reads: the lane's agents (list,

@@ -43,27 +43,16 @@ deps() {
     "$([ "$OS" = Linux ] && echo "your distribution's package (apt install git)" || echo "xcode-select --install")"
   row required python3 python3 "" "the guards and the JSON merges" \
     "$([ "$OS" = Linux ] && echo "your distribution's package (apt install python3)" || echo "xcode-select --install")"
-  row required jq jq jq "hw reads projects.json with it (1.7 or newer)" ""
   row required herdr herdr herdr "every brainer and executor is a herdr pane" ""
   row required claude claude "$claude_brew" "the agent runtime" "$claude_how"
-  row required ripgrep rg ripgrep "hw and the guards search with it" ""
-  row required fd fd fd "hw finds files with it" ""
-  row required sd sd sd "hw and the lane scripts edit files with it" ""
   row recommended engram engram gentleman-programming/tap/engram "memory across sessions; without it nothing is saved between them" ""
   row recommended fzf fzf fzf "hw's interactive pickers" ""
 }
 
-# A present jq older than 1.7 counts as missing: its `jq -e` treats empty input as
-# success (install.sh refuses it for the same reason).
 present() {  # <command>
-  # type -P asks PATH for the executable: a shell function named jq, fd, git, ps
+  # type -P asks PATH for the executable: a shell function named fd, git, ps
   # or pgrep would make `command -v` report it as installed.
-  type -P "$1" >/dev/null 2>&1 || return 1
-  if [ "$1" = jq ]; then
-    local v
-    v="$(jq --version 2>/dev/null | sed -E 's/^jq-([0-9]+)\.([0-9]+).*/\1 \2/')"
-    [ "${v% *}" -gt 1 ] 2>/dev/null || { [ "${v% *}" -eq 1 ] 2>/dev/null && [ "${v#* }" -ge 7 ] 2>/dev/null; }
-  fi
+  type -P "$1" >/dev/null 2>&1
 }
 
 printf 'dependencies (%s)\n' "$([ "$PLAN" = 1 ] && echo "--check: the commands are printed, none is run" || echo "each command is printed, then run")"

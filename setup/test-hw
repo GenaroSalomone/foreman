@@ -2028,8 +2028,9 @@ _gate_runs_row() { # <the run's exit status>
 # group): it measures them under setup/heavy and commits the rows on main. The gate waits for none of it, and an executor never starts it:
 # its stale rows only fall back to the whole tree.
 _subject_deps_refresh() { # <the run's exit status>
-  local stale main base clone log
+  local stale main base clone log verified
   [ "$1" = 0 ] && _whole_batch_gate && [ -x "$HERE/measure/subject-deps-refresh" ] || return 0
+  verified="$(git -C "${TEST_HW_LIVE_ROOT:-$SOURCE_ROOT}" rev-parse HEAD 2>/dev/null)" || return 0  # the commit this gate verified: the refresh commits only if main has it
   stale="$(python3 "$HERE/verdict-cache" stale 2>/dev/null)" && [ -n "$stale" ] || return 0
   main="$(_main_checkout)" || return 0
   base="${XDG_CACHE_HOME:-$HOME/.cache}/hw"; log="$base/subject-deps-refresh.log"
@@ -2037,7 +2038,7 @@ _subject_deps_refresh() { # <the run's exit status>
   cp -cR "$SOURCE_ROOT" "$clone" 2>/dev/null || cp -R "$SOURCE_ROOT" "$clone" 2>/dev/null || { rm -rf "$(dirname "$clone")"; return 0; }
   # shellcheck disable=SC2086  # one subject name per word
   python3 -c 'import subprocess, sys; subprocess.Popen(sys.argv[2:], stdin=subprocess.DEVNULL, stdout=open(sys.argv[1], "a"), stderr=subprocess.STDOUT, start_new_session=True)' \
-    "$log" bash "$clone/setup/measure/subject-deps-refresh" "$clone" "$main" $stale || { rm -rf "$(dirname "$clone")"; return 0; }
+    "$log" env SUBJECT_DEPS_VERIFIED="$verified" bash "$clone/setup/measure/subject-deps-refresh" "$clone" "$main" $stale || { rm -rf "$(dirname "$clone")"; return 0; }
   printf 'runner: %s stale subject-deps row(s) — re-measured on their own under setup/heavy, then committed on main; log %s\n' "$(printf '%s\n' "$stale" | grep -c .)" "$log" >&2
 }
 trap '_gate_rc=$?; _gate_runs_row "$_gate_rc"; _subject_deps_refresh "$_gate_rc"; _reap_job_groups; rm -f "$TALLY" "$TALLY.subject"; [ -z "$WITNESS_PID" ] || kill "$WITNESS_PID" 2>/dev/null || true; rm -rf "$JOBDIR"; [ -z "${LABEL_BASE:-}" ] || label_base_drop; _pool_release_all; _gocache_trim_at_exit; _queue_release; _gate_release' EXIT  # MUTATION-ANCHOR: 1004-M07

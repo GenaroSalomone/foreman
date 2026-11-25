@@ -520,7 +520,7 @@ func (a *app) nextLedger(pane, rundir, seq, brief string) {
 		{"run", jstr(run)}, {"seq", &jval{kind: vNum, s: strconv.FormatInt(n, 10)}},
 		{"brief", nul(brief)}, {"brief_sha", nul(sha)}, {"brief_commit", nul(commit)},
 		{"account", jstr(a.getenv("ACCOUNT"))}, {"model", jstr(model)}, {"effort", jstr(effort)}, {"vendor", jstr(vendor)},
-		{"sdd", jstr(a.getenv("SDD"))}, {"base", jstr(base)}, {"subagent_model", jstr(nextSubagentModelReceipt(vendor, subagent))},
+		{"base", jstr(base)}, {"subagent_model", jstr(nextSubagentModelReceipt(vendor, subagent))},
 		{"pane", jstr(pane)}, {"rundir", jstr(rundir)},
 		{"delivered", &jval{kind: vBool, b: true}},
 	}}

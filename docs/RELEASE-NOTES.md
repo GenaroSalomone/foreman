@@ -1,215 +1,125 @@
-# foreman 1.2.0
+# foreman 1.3.0-rc.1
 
-foreman 1.2.0 reworks the independent review and keeps the machine clean on its own: cheaper, bounded reviews that look at the screen for UI builds, a lane ledger that outlives compaction, and leftovers that clean themselves up.
+foreman 1.3.0-rc.1 is the first-contact release: fewer things to install, one word for a lane in every help page and message, and a dry run that fits on a screen.
 
 ## In short
 
-- **Reviews cost what the change costs, and they end.** Tier S reviewers run at medium effort, a fix round is re-checked on its own delta, and a build gets at most three reviews.
-- **A UI build is reviewed by looking at it.** The review list takes `qa`: the reviewer runs the lane's `qa-tester` on a dev server at the reviewed head, at 375 and 1440 px, by default on a UI diff.
-- **A brainer's agreements survive compaction.** `bin/ledger` keeps orders, owed items and handed-over facts per lane, re-injected at start and compaction.
-- **Leftovers clean themselves up.** `hw reap --apply` removes dead-executor worktrees and old cache trees, archiving uncommitted work first and never deleting a branch, and `hw status` starts it once a day.
-- **The suite reruns only what changed.** Each bash subject is keyed to the files it read, and `hw status` reports the build → merge bottleneck daily.
+- **Three requirements.** herdr, Claude Code and git; jq, fd, rg and sd are no longer required, and a release carries `hw-core` prebuilt, so Go is only for building from source.
+- **One word for a lane.** Every help page and message says `lane`, and `hw help` no longer shows an example a fresh brain refuses.
+- **A dry run that fits on a screen.** `hw <lane> <task> --dry-run` prints about ten lines; a row with a problem still shows, and `--dry-run=full` prints everything.
+- **Spec-driven development is removed.** `--sdd` and `sdd:` are ignored with one line, and `hw` names the line of a brief body that still mentions them.
+- **Reviews work on an installed brain.** `hw review` finds its brief templates, reviews without plugins that are not installed, and the reviewer's brief names the one tests command.
+- **The Files panel reads executors' files.** A `file://` link or an absolute path opens in Files, a pipe table draws as columns, and a brief's front matter shows one key per line (herdr-app 0.1.17 or newer).
 
 ## What changed
 
-65 changes since 1.1.0 (1.2.0-rc.1 and rc.2 folded in).
+48 changes since 1.2.0.
 
 ### Added
-- `bin/ledger`: one small file per lane (`<lane>/ledger.md`: orders in force, items owed, facts handed over)
-  that a brainer writes with `ledger add|done|show`. A SessionStart hook (startup, resume, compact) puts it
-  back into the brainer's context after compaction; executors never see it.
-- `hw done` on a task whose brief says `asked: investigate` and whose run reported done adds
-  `act on <lane>:<task> — engram #<ids>` to the lane ledger's Owed section, once per run; a build or a
-  blocked report adds nothing.
-- `hw review` re-checks a build that was reviewed before on the delta only: from the last reviewed head (whatever its
-  verdict) to the new head, tiered on that delta, with the prior review.md to mark row by row as resolved or open. A
-  merge of main into the branch is not counted as the fix. It re-tasks the live reviewer when it can (`hw next`) and
-  starts a fresh one on the same delta otherwise. A brief may declare `round_of: <parent task>`; dispatch records the
-  parent's last verdict in the receipt and refuses `review: none` on a fix round.
-- `hw review <lane> <task> --model <m> --effort <e>` overrides the reviewer's model and effort; the dispatch validates them and the manifest shows them as chosen.
-- A lane can add pieces to every reviewer of its builds: `review_default` in
-  `projects.json` (`thermo`, `tests`, `ponytail`, `pstack`, `comment-sicko`),
-  joined after the build brief's own `review:` list, each piece once.
-  `judgment-day` stays a per-brief risk call and is refused there.
-- `comment-sicko`, pstack's comment review agent, is now a `review:` list item
-  for the reviewer; it is launched report-only, in the foreground or the
-  background.
-- `review_post: pr-description` (`projects.json`) has the reviewer write its
-  findings into one `## Review` section of the PR body, never a comment.
-- `hw reap --apply` removes what it used to keep, so leftover worktrees stop piling up: a worktree whose hw lock outlived its
-  dead executor (no pane in it), a detached tree under the cache (a gate, a cut, a triage base) once it is over a day old,
-  and the dirty or unmerged worktree of a task that reported over a day ago. Before a dirty or unmerged tree goes, its
-  uncommitted diff, untracked files and unrebuildable ignored files are copied and verified into
-  `<archive>/<lane>/<date>/<task>/`; its branch is never deleted. A live pane, a live lease and a lock of anyone else's
-  still keep a tree. What reap archived is pruned after 30 days.
-- `hw status` starts `hw reap <lane> --apply` in the background (`nice`, never waited for) when a lane is over its worktree
-  threshold, at most once a day per lane; the `! N worktrees … hw reap` line says that a reap was started.
-- The independent review of a UI build looks at the screen: the `review:` list takes `qa`. The reviewer runs the lane's own
-  `qa-tester` agent once, on the dev server hw starts on its worktree at the reviewed head (`--dev-server` is passed for a lane
-  whose dev server is opt-in), with the build brief's `## Do` and `## Verification` as its cases, at 375 and 1440 px. One
-  browser launch, closed with `bin/browser-close`; the captures go into the PR description's one `## Review` section through
-  `bin/gh-attach`, never a comment; a failed case is a blocker. done-invoker proves the Agent call of `qa-tester` from the
-  reviewer's transcript and refuses a `review-skip:` of it.
-- `qa` is refused at dispatch in a lane with no `qa-tester` (`<checkout>/.claude/agents/qa-tester.md`) or no dev server
-  (`devserver.start` always or opt-in), and by `hw review --here`, which starts none: every path to the reviewer names what is missing.
-- A lane's `ui_paths` (projects.json: a `dir/` prefix, a base-name glob such as `*.tsx`, or a whole-path glob) says what its diffs
-  call UI. A build whose diff touches it gets `qa` by default in a lane that has `qa-tester` and a dev server, unless its
-  `review:` is a list or `none`. The two lanes that have a `qa-tester` set it.
-- `hw status` says, once a day, whether the build → merge bottleneck is gone: one line with the last report and its date
-  (test-wait share of build wall, verdict-cache replay overall and per actor, review and fix rounds per build), and an
-  `ALERT` line naming every number over its threshold (`setup/measure/throughput-thresholds.json`: test-wait > 50%,
-  replay < 50%, review rounds > 2, fix rounds > 1). The measurement is `setup/measure/throughput.py`: read-only over
-  the last 24 h of transcripts, the one-test guard's log and the runner's `verdict cache` lines; `hw status` starts it
-  in the background (`nice`) when the last report is over a day old and never waits for it.
+- A `CODE_OF_CONDUCT.md`.
+- `setup/export/check` refuses a shipped doc that links a page or names a path the export does not carry.
+- In the herdr app, a Ctrl/Cmd-click on a `file:///abs/path` link in a terminal opens that file in the Files panel, drawn as Files
+  draws it (markdown rendered, code in the editor, an image drawn); a link to a file that does not exist shows a message. Other
+  links keep their opener. Needs herdr-app 0.1.17 or newer.
 
 ### Changed
-- `docs/BRIEF-TEMPLATE.md` is a short fill-in form (goal, context with premises, limits, done when,
-  verification fence, mechanism) with the used keys only; `hw help flags` owns what a key means.
-- The executor prompt now carries three rules the template could not deliver: a dropped item is a
-  `pass` row with `dropped: <proof>`, the smallest change that meets Done when, and (setup builds)
-  the manifest row and test-budget row a new file needs.
-- `hw help flags` now documents every brief key the template's comment block used to (release and its
-  env-from/env-diff/screens/qa, rehearsal-of, authorizes, secrets, kind, requires, placement, worktree,
-  database, invoker, ...), and says the template only lists the ones in use.
-- The isolated-herdr QA recipe and the leak-detector text moved from the template to `hw help advanced`.
-- The template's live frontmatter keys are bare (a hint is a comment line of its own): hw reads a value
-  to the end of the line, so a brief filled in from the old template was refused at dispatch.
-- The checks a setup build runs that no tool prints (budget gate, timing claims, mutants, a pi leg, PR
-  checkouts, after-merge installs) live in `setup/runbooks/setup-build-checks.md`, named by the setup
-  executor prompt; the smallest-change rule reaches every build, not only one that owes the review.
-- `setup/commit-tree` refuses a red touched subject only when it is green on the base too: a red subject is
-  re-run once on the parent through `setup/test-hw --base`, and red there as well prints
-  `RED ON BASE TOO <subject> (not this commit's; allowed)` and the commit goes through. A base that cannot be
-  measured (timeout, no verdict, over the 180 s allowance) still refuses, saying so.
-- The lane ledger is written by the tools, not by a rule: `hw <lane> <task>` leaves `<task> running in <pane> (auto since <date>)`
-  in the lane's Owed (one line per task, a re-dispatch replaces it; a dry run, a brief that did not land and a review run leave none), and the
-  admitted report (`done-invoker` delivered, or `hw done`) marks it ` — done <date>` or ` — blocked`, and `hw done` of a run that
-  never reported marks it ` — closed <date>`. The ledger cap still holds: a write that would pass 4096 bytes first drops auto
-  entries (done, closed, blocked, then running; oldest first), never an order, a fact or an item a person added. Only the
-  `(auto since <date>)` mark makes an entry auto, so a hand-written `x running in y` item is never reclaimed.
-- `bin/ledger hook` ends with a footer naming the write commands (`ledger add order|owed|fact`, `ledger done <n>`), also for an
-  empty ledger; the sentence in the brainer rules that said the same is gone.
-- An executor's pre-commit no longer queues the Go partitions whose estimate is over
-  `touched_budget_seconds`: it names them in the last lines for the brainer's batch gate
-  and still runs its bash subjects (one `bin/` file paid ~12 minutes of Go before). A
-  person's commit, and the batch gate, run them as before.
-- The pre-commit no longer says "the whole fast gate's verdict is still owed" after a
-  selected gate.
-- `hw done` carries an approval at an ancestor of the head when the commits since have no code, and refuses
-  `--accept-review` when they have: it prints the `hw review` command for the delta instead.
-- `hw next` records `review_of_t<n>` for a re-tasked reviewer, so its verdict is held to the head its worktree is at.
-- `hw review --lift-cap` takes a reason that starts with a dash, and a failed dispatch's retry carries the flag.
-- `hw review` dispatches a reviewer for a prose-only fix after changes-needed (it said "no code changed" while `hw done`
-  denied, so `--accept-review` was the only exit); after an approve it still dispatches nobody and `hw done` carries it.
-- The review round cap counts the reviews of every task in a `round_of` chain (the builder and each fix task), so a 4th
-  review of the chain needs `--lift-cap` instead of starting again at 1 on each fix task.
-- `hw review` runs the reviewer at `--effort medium` on tier S (1-400 code lines; a delta re-check is tiered by its own delta); tier L, and S or L with `judgment-day`, keep `high`. A re-tasked reviewer keeps the effort it was launched with, and the plan says so. The model stays `opus`.
-- `done-invoker` proves a review agent launched in the background (Claude) from
-  its `<task-notification>` reporting it completed, the way a background judge
-  is read: the launch alone proves the start, so a background
-  `pstack:comment-sicko` that never completes (or fails) is refused like a
-  missing one. The reviewer cannot force a foreground run, and its brief no
-  longer asks for one.
-- `hw review` dispatches at most 3 reviews per build. The 4th is refused, naming both exits:
-  `--lift-cap "<why>"` (the reason lands in the build's receipt as `review_cap_lifted`), or close the
-  build with its open review rows moved to KNOWN-LIMITATIONS.
-- A reported task's artifacts are removed after 14 days instead of 30 (`retention.artifact_retention_days`; backups keep 60).
-- The release's full-suite verdict is the one cold run. `setup/verify-for-push` records `cold=1` in the full verdict it
-  caches when `HW_TEST_NO_CACHE` was in force for the whole run and `cold=0` otherwise, and `setup/release/cut`'s `test-hw`
-  gate refuses a `cold=0` verdict, or an incremental one whose base is `cold=0`, naming the command that records the cold
-  one: `HW_TEST_NO_CACHE=1 bash setup/verify-for-push --full`. The push gate and the batch gates keep replaying.
-- A build whose diff touches the lane's `ui_paths` gets `qa` added to an explicit `review:` list too (a lane with `qa-tester` and
-  a dev server); only `review: none` turns it off. The dispatch manifest says `qa` was added by the UI default and names the
-  first UI file. Before, an explicit list such as `review: [tests]` kept the reviewer off the screen.
-- `setup/suite-data/subject-deps.txt` is now measured (`setup/measure/subject-deps.py`, access-time method, every
-  `setup/tests` subject): `setup/verdict-cache` keys a bash subject to the files it read instead of the whole tree,
-  so a subject reruns only when something it read changed. Until now the file was header-only and the cache replayed
-  0–1% of a gate. Subjects red in the measuring clone stay unmeasured (keyed to the whole tree).
-- A green whole fast gate run outside an executor re-measures its stale rows on its own: `setup/test-hw` starts
-  `setup/measure/subject-deps-refresh` detached, which measures them under `setup/heavy` and commits only
-  `subject-deps.txt` on main (`setup/commit-tree --onto main`; a refused commit retries once). The gate does not wait,
-  and an executor never re-measures: it only falls back to the whole-tree key.
+- `hw` (dispatch, `--dry-run` and `hw next --brief`) warns when a brief body names the removed `--sdd` / `sdd:` outside a fenced block, with the line number and "delete it from the brief". One table, `retiredBodyTokens`, holds the retired body tokens; the next removal adds a row.
+- `statusline-look apply` now keeps any other key under `statusLine` (it replaced the whole object before).
+- One word, `lane`, in every help page and message: `hw help` and every usage line say `<lane>`, and an unknown lane is named
+  as that. `hw` used to say `unknown project` (or a missing-brief error when no brief was given), and `brain` said
+  `unknown brainer`. Now, for a lane that does not exist (here a brain with only the `demo` lane):
+      $ hw nolane some-task
+        ✗ unknown lane: nolane — try: demo                     (exit 1)
+      $ brain nolane
+      unknown lane: nolane — try: demo                         (exit 64)
+  With several lanes, `hw` separates them with ` | ` and `brain` with `, `. Exit codes are unchanged.
+- The first page of `hw help` lists what the README's everyday table lists (`reap`, `train`, `review` included) and no longer
+  lists `hw retro-done`.
+- `ask-invoker` and `done-invoker` with no argument print their own usage (still exit 64), and an unknown flag is one line
+  naming what they take, with no exit-code paragraph after it.
+- `SECURITY.md` supports the latest stable release and `main`; the README requirements say macOS, with Linux checked by the
+  test suite only; the Homebrew caveats give `foreman-setup init`, the README's first command.
+- The export's `herdr-app/README.md` is now a short user page for the one mod it ships, Cockpit: what it shows, how to install
+  it (a symlink and a layout block), how to update and remove it. The 1.0 promise and `REFERENCE.md` name that mod instead of
+  "mods and layouts", and `REFERENCE.md` no longer shows a screenshot of a look the export does not carry.
+- In the herdr app, a Ctrl/Cmd-click on a plain printed absolute path (`/opt/tools/bin/hw`) opens that file in the Files panel too, when the app verified it exists on this machine; a relative path or one it could not verify keeps the app's own opener.
+- The ledger a brainer gets back at start and compaction now says what the session summary is for: evidence nothing else owns, never the next steps, owed items or orders the ledger already holds.
+- A release installs without Go: it carries `hw-core` and the invokers prebuilt for macOS and Linux, arm64 and amd64
+  (`hw-core-<os>-<arch>.tar.gz`, with `SHA256SUMS`). The Homebrew formula drops `depends_on "go"` for one resource per
+  target, `curl | bash` and `upgrade` fetch the asset for their tag and check it against the release's `SHA256SUMS`, and
+  `install.sh` installs a prebuilt that matches its sums. Go 1.22+ is required only for a source checkout without one.
+- The README's requirements name three tools: herdr, Claude Code and git (its Command Line Tools bring `python3` on macOS; Linux needs python3 3.9 or newer). Go is only for building from source.
+- The reviewer's brief now names the one tests command (`setup/go-test-core.sh --affected "$HW_ARTIFACTS/changed" --run`, in the
+  background), the tools the reviewer really has (`rg`/`fd`, `sed -n`; `Glob`/`Grep` may be absent) and the read-only rule for
+  a skill's references, so a reviewer stops running a foreground `go test` that `deny-executor-sleep-poll` refuses.
+- A review of a diff that changes a file under `setup/guards/` carries a checklist of the guard bypass classes this system has
+  already shipped (`setup/guards/REVIEW.md`, sourced from `setup/decisions.md`); any other diff gets none.
+- `hw review` writes `callers.txt` beside `functions.txt` in the reviewer's artifacts: where each changed function is used (5 hits
+  per function at most, the definition left out, no search for a name under 4 characters), and the brief points at it.
+- A review that ran Judgment Day must leave a `jd: confirmed=<n> suspects=<n> exclusive=<n>` line in `review.md`:
+  `done-invoker` refuses it without the line (the receipt carries `review_jd_t<n>`); a review that did not run Judgment Day, and
+  an older `review.md`, owe nothing.
+- A fix round's brief (`docs/BRIEF-TEMPLATE.md`) has a `## Findings` table with a `disposition` column (accepted, declined or
+  deferred); the re-check brief copies it beside each prior row, so the next retro can count what builders dismiss.
+- A reviewer runs each skill piece itself with the Skill tool; to parallelise one it
+  uses a sonnet subagent that invokes the skill, never an unasked `general-purpose` one.
+- One lane's subagents that name no model now run sonnet (`subagent_model`); an explicit
+  `model: opus` and an agent pinned to opus keep opus.
+- `hw <lane> <task> --dry-run` prints the short form of the dispatch by default: the lane and task, then agent, model, effort, account, worktree, base and what runs at close, about ten lines. A row that carries a problem (an unresolved invoker, a refused account, a missing guard, a pi or plugins row that is NOT APPLIED or NOT LAUNCHABLE, a verification that will time out, a reused worktree) is printed whole, and warnings and refusals print as before. `--dry-run=full` prints the whole manifest, as `--dry-run` used to. A launch still prints it whole and writes it to the run directory.
+- `setup/heavy` runs three slots by default (`HW_HEAVY_SLOTS=1` or `=2` keep their meaning). A waiter takes slot 3
+  only while at least 30% of memory is free (`HW_HEAVY_MIN_FREE_3`, next to slot 2's `HW_HEAVY_MIN_FREE` of 20%);
+  under that it is skipped exactly as slot 2 is under pressure. `--status` lists slot 3 with its threshold.
+  Waiters already running read the script they started with, so slot 3 is taken by waiters started after the update.
 
 ### Removed
-- The template's Committing, QA, Reviewing PRs, Access, When you finish, After merge, If you get
-  blocked, Notes and In/Out of scope sections, and its 9 KB key-comment block.
-- The independent reviewer no longer writes `checks.md` requirement rows (one `pass` per piece: 1096 `pass` and 0 `fail` in the
-  review-system eval) nor the `nit` severity (427 rows nobody read). `review.md` keeps `blocker`, `should` and `follow-up`; `checks.md`
-  holds only the function table. `hw review` stops writing `checks_required` for a reviewer, and `done-invoker` no longer asks a
-  reviewer for a row per piece: each piece is still proved from its transcript.
-- The delta re-check no longer asks for new `should` and `follow-up` rows: it reports a `blocker` its delta caused, or approves; a `should`
-  it sees is one line under `## Backlog`.
+- jq is no longer a requirement. `hw` reads the lane table and the status-line JSON itself (`hw-core json`), and the
+  installer reads its own JSON with python3. `install.sh --check` stops asking for it, the Homebrew formula no longer
+  depends on it, and `hw`, `hw revive` and `hw preview` stop refusing a machine without it. The zsh completion
+  (`shell/_hw`) still uses jq when it is there and offers the fixed words when it is not.
+- `fd`, `rg` and `sd` are no longer requirements: hw lists directories itself, so `install.sh --check`, `init`, the
+  Homebrew formula and the README stop asking for them. `rg` stays a soft WARN; `engram` is optional in `lib/hw/deps.conf`.
+- Spec-driven development is gone for good: `hw <lane> <task> --sdd <value>`, `hw next --sdd <value>` and a brief's `sdd:` key are no longer read. Each prints ONE line saying spec-driven development was removed and the flag or key is ignored, never a refusal, so older briefs that still carry `sdd:` dispatch as before. The `--sdd` help rows, the zsh completion entries, the `sdd` field of the run receipt, and the `--sdd` sections of INSTALL and REFERENCE are removed.
 
 ### Fixed
-- `channel-send claude <target> --reply-hold <file>` now works when the target is an
-  hc terminal: the target is turned into an hc target before the hold is checked, so
-  every flag the hc route takes works through `claude` too.
-- `channel-send claude <target>` now reaches a claude session that lives in an hc
-  terminal (a brainer): it names the terminal by address, name or session id and
-  delivers through the hc route, with the same proof and exit codes. It used to
-  refuse with "use the herdr route", a route those terminals do not have. A
-  target held by no herdr pane and no hc terminal is still refused, now naming
-  `channel-send hc <terminal-name>` and `hc ls`.
-- A product executor can now run `gh-attach` (`gh-attach --check`, `gh-attach <owner/repo> <n> <image>… [--comment …]`)
-  as `docs/gh-attach.md` tells a brief to hand it over. The brain guard refused it, so every UI brief that followed
-  the documented pattern blocked. Only `gh-attach` was added; writes into brain are still refused.
-- The ledger hook now prints for every lane's brainer (it no longer requires the engram label `brain`, which a lane's
-  brainer does not carry), and also on `/clear`.
-- `bin/ledger` keeps a line a person hand-edited into `ledger.md` instead of dropping it, takes a lock around
-  `add`/`done`, and does not add an Owed item that is already there.
-- `hw done` names engram ids only as `engram #N` or `#NNNN`+, not any `#N`. Limit: in a chained session only the last
-  report's Owed line is written.
-- A line above the first heading of `ledger.md` stays there; it was re-filed into Handed over on the next write.
-- `ledger show` and `ledger done <n>` number from one place, and an expired order is dropped together with its indented
-  continuation line only: an unindented line a person typed after it stays.
-- The brainer handback guard (Stop hook) holds every lane's brainer, not only the one labelled `brain`: it asks the same question
-  as the ledger hook (neither `HW_TASK` nor `HW_RUN` set).
-- `hw next` no longer refuses a re-task brief whose `model:` or `effort:` equals what the pane runs when the
-  dispatch line carries a suggestion after its `(chosen)` mark: the value is read up to the first mark, wherever
-  it sits. `hw review`'s re-task of a kept reviewer stops falling back to a fresh dispatch for the same reason.
-- `HW_TEST_CHANGED` set to a path that is not a readable file exits 2 naming it, instead
-  of widening to the whole fast gate.
-- The executor sleep-poll guard's refusal of a backgrounding `&` quotes the `&` with 20
-  characters of context on each side instead of the first 120 characters of the command.
-- Two dispatches of the same task no longer race: the second says `being dispatched by pid N`, waits (at most
-  15 minutes) and then reuses what the first built, instead of failing half-way (seen as a duplicate
-  `CREATE DATABASE` when a brainer ran `hw review` while done-invoker was already dispatching it). The lock
-  leaves no file behind.
-- A build's done report ends with `review: done-invoker dispatches it right after this report (reviewer <task>)`
-  when the review is owed, so the brainer does not dispatch it a second time.
-- `done-invoker` read `run_in_background` as a bool, but Claude Code records the
-  string `"true"`: the whole assistant line was dropped, taking background
-  judges and a Skill call of the same message with it. Both shapes are read.
-- A review agent counts as background by what its `tool_result` says
-  ("Async agent launched"), not by the input flag alone (most async launches
-  carry no flag): such a call proves only once its notification says it
-  completed, a foreground one proves as before, and judges are untouched.
-- The `review_post: pr-description` block stops before any edit when
-  `gh pr view` fails, instead of replacing the whole PR description with the
-  Review section.
-- The same block replaces the `## Review` section of a CRLF body instead of
-  adding a second one.
-- A fix branch that merged main is measured at its own lines: `hw review` starts the diff at the merge-tree of its base and the lane's
-  newer commits (ledger-writers-fix2 counted 162 files, tier L, for a 30-line fix), and the plan's base line says how.
-- `bin/statusline-usage-tee` no longer fills `~/.cache/hw/statusline-tail`: a copy cut off by the status line's next refresh
-  left a `.<key>.<pid>` file for good (404 files, 1.9 GB measured); a trap removes it, and a refresh no longer rewrites the
-  tail of a transcript that did not move (or grew under 256 KB).
-- `setup/test-hw` removes the detached merge-base worktree of its label pass when the runner is interrupted or killed inside
-  the pass; it used to stay registered in the repository.
-- The daily auto-reap no longer removes a detached tree under the cache (`~/.cache/hw`, `hw-run-tmp`) that a live process
-  works in: `hw reap` keeps it at any age, and its plan line says why (or that `lsof` could not say). Two `hw status` at
-  once now start exactly one background reap: the daily stamp is claimed atomically (`flock`), not checked and then written.
-- `review: []` in a build brief is the same as `review: none` for the UI default: a UI diff no longer gets `qa` added to a
-  reviewer the brief turned off.
-- The review round cap counts each round once and knows a fix brief's parent. A build brief with `base: task/<parent>` and no
-  `round_of:` is a round of `<parent>` (a trailing `-rN`/`-fixN` is stripped when that family's brief exists); an explicit
-  `round_of:` still wins. A second `hw review` of the same build at the same head, while the first is dispatching or recorded,
-  dispatches and records nothing and names the reviewer that owns the round. When `hw next` to the kept reviewer's pane fails,
-  `hw review` reports it once and dispatches no second reviewer for that round.
-- A measured row of `setup/suite-data/subject-deps.txt` that went stale no longer replays a green. Each row carries the
-  stamp it was measured at (the subject plus every library it visibly sources: `setup/verdict-cache stamp`); when the
-  stamp moves, `setup/verdict-cache` keys that subject to the whole tree instead of its old read set, so an edit that
-  makes a subject or its `_common.sh` read a new file reruns it when that file changes. `verdict-cache stale` lists them.
+- An executor that reported `--blocked`, was resumed by `hw ruling`, and had reported `--blocked` a second time while the ruling was being sent (the stop hook nudges it, because the resume sets its `done` aside before the send) can now close with `done-invoker`: the ruling consumes that report's `done` and `blocked-waiting` as well, instead of leaving the executor refused with "no ruling has resumed this task" until the brainer sent an empty second ruling. A task nobody has answered is still refused.
+- `brain relaunch`, `brain <lane> --resume ID` and `brain restore` resume a conversation under the account
+  that holds its transcript, whatever the lane declares, so a lane declared `default` whose session lives in
+  the personal account no longer comes back "No conversation found". A plain-shell `brain relaunch --all`
+  finds those sessions, `brain restore` picks the newest transcript of the lane in any account, and stderr
+  names whether the account came from the transcript or from the lane's default.
+- `brain relaunch` refuses (FAILED, non-zero exit, the brainer left running) a brainer whose session has no
+  transcript, instead of starting a new conversation in its place.
+- `docs/REFERENCE.md` no longer describes `lib/hw/*.sh` modules and a `docs/layout.md` that do not exist, `docs/INSTALL.md`
+  no longer names plugin scripts the export does not ship, and the link to `CHANGELOG.md` in `docs/RELEASE-NOTES.md` points
+  at the file.
+- `hw review` works on an installed brain. The installer now puts the reviewer's brief templates (`docs/REVIEW-BRIEF.md`,
+  `docs/REVIEW-DELTA-BRIEF.md`) in the brain; before, the first `hw review` died on `open <brain>/docs/REVIEW-BRIEF.md`.
+- A review tier whose plugins (`thermo`, `tests`, `ponytail`, `pstack`, optional installs) are not installed reviews without
+  them instead of briefing a reviewer for skills it cannot call, and the dry run says which ones are missing in one line.
+  A plugin the build's `review:` or the lane's `review_default` names is still required.
+- `hw` on herdr-core no longer dies with "shows neither status=working nor a turn" when the executor is already on a first
+  turn longer than 30 s: claude's spinner in the terminal title now proves the brief landed.
+- In the herdr app, a markdown file that opens with YAML front matter (a brief's `kind:`, `requested_by:` …) shows it as a yaml block, one key per line, in Files, Issues and the viewer; it was joined into one paragraph.
+- `hw reap` no longer panics when a task's `.hw` directory vanishes while it checks whether the task reported long enough ago.
+  An expired cache tree whose occupants `lsof` cannot list is now judged by the same helper in both reap paths, and the
+  unreadable case is tested.
+- `hw review <lane> <task> --lift-cap --dry-run` no longer dispatches for real: a flag given as the `--lift-cap` reason is refused ("--lift-cap needs the reason").
+- The plugin-review closing no longer tells an executor to launch the review agent in the foreground only; a background launch proves once it completes (as done-invoker already proves it).
+- A green executor pre-commit prints the `DEFERRED` lines (the Go partitions left to the brainer's batch).
+- A refused `hw next` re-task of a kept reviewer says how to leave the rerun loop (`hw done <pane>`).
+- foreman-files link handler: a `file://localhost/` test case; the README no longer claims a remote file keeps the app's opener.
+- The first page of `hw help` no longer shows an example that a fresh `foreman-setup init` brain refuses. `hw train add demo hello`
+  failed there (`hw train: demo's checkout is not brain …, so it has no train`), because `init` makes `demo` on a toy repository and
+  `hw train` is for a lane whose repo is the brain itself. The row now says so and carries no example.
+- `hw status <lane>` and the `hw` picker say `lane`, not `project`: ``scoped to demo — `hw status` with no lane adds the cross-lane checks``,
+  the picker's `lane >` prompt, and the `DRIFT` and `no agent detected` lines that said "the project's space".
+- The Files panel and the issue and viewer panes draw a markdown pipe table (an executor's `checks.md`) as aligned columns
+  instead of one run-on paragraph.
+- The status line draws again in a session started outside a login shell (a `brain relaunch` from a detached process): `statusline-usage-tee` adds `~/.bun/bin` to `PATH` when the status line command is not found.
+- `setup/go-test-core.sh --bless` no longer exits 75 inside an executor when run the documented way, under `setup/heavy` in the background: the 90 s executor budget caps only a foreground narrowed run.
+- The release cut's notes cover accepts `setup/releases/highlights/VERSION.md`, the file `setup/release/notes` requires, in the notes commit.
+- Two test subjects that run under `env -i` (828, 1381) pass `HW_HOUSEKEEPING=0`, so they no longer start a background reap.
+- The batch gate's subject-deps re-measure commits rows on main only when the commit it verified is main or an ancestor of it; an unmerged batch branch no longer leaves a fresh row that replays a false green.
 
 ## Known limits
 
@@ -219,10 +129,10 @@ foreman 1.2.0 reworks the independent review and keeps the machine clean on its 
   goes back. Every limit a user can hit is in
   [`KNOWN-LIMITATIONS.md`](KNOWN-LIMITATIONS.md).
 
-## Upgrading from 1.2.0-rc.2
+## Upgrading from 1.2.0
 
 Run `foreman-setup upgrade --brain DIR`. A brain installed before `upgrade`
 existed has no record of its flags yet: run your install command once more,
 and `upgrade` works from then on.
 
-Every release's changes are in [`CHANGELOG.md`](CHANGELOG.md).
+Every release's changes are in [`CHANGELOG.md`](../CHANGELOG.md).

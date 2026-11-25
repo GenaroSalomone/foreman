@@ -138,11 +138,11 @@ func (t *t3) outboxFlush() int {
 			}
 			to, args = args[1], args[2:]
 		case strings.HasPrefix(a, "-"):
-			t.die("unknown option: " + a + " (usage: hw outbox [list|flush] [<project>] [--to <brainer-pane>])")
+			t.die("unknown option: " + a + " (usage: hw outbox [list|flush] [<lane>] [--to <brainer-pane>])")
 		default:
 			proj = t.c.t.canonProject(a)
 			if !t.c.t.known(proj) {
-				t.die("unknown project: " + a + " (expected: " + t.laneNamesHint() + ")")
+				t.die("unknown lane: " + a + " — try: " + t.laneNamesHint())
 			}
 			args = args[1:]
 		}

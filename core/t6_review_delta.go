@@ -234,7 +234,7 @@ func (a *app) reviewRetask(p *reviewPlan, brief string, dry bool) bool {
 	a.step("re-task  hw " + strings.Join(args, " "))
 	if err := a.reviewRunHW(args); err != nil {
 		// hw next may have half-delivered: a fresh reviewer beside it is two reviewers for one round, so nothing more is dispatched
-		a.die("hw next did not take the delta (" + err.Error() + "): the re-task of pane " + p.retask + " failed, so NO other reviewer was dispatched for this round and nothing was recorded. Look at pane " + p.retask + ", then run `hw review " + p.lane + " " + p.task + "` again.")
+		a.die("hw next did not take the delta (" + err.Error() + "): the re-task of pane " + p.retask + " failed, so NO other reviewer was dispatched for this round and nothing was recorded. Look at pane " + p.retask + " (it may have taken the brief), then run `hw review " + p.lane + " " + p.task + "` again. If hw next refuses again, the rerun picks this same pane: `hw done " + p.lane + " " + p.rwtTask + "` (it takes <lane> <task>, not a pane), and the rerun dispatches a fresh reviewer.")
 	}
 	return true
 }

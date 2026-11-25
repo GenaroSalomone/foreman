@@ -397,7 +397,7 @@ func (l *lch) layoutFailedAdvice() string {
 func (l *lch) projectWorkspaceFor(proj string) bool {
 	l.projectWorkspace, l.projectWorkspaceCreateReply = "", ""
 	if !l.c.t.known(proj) {
-		l.warn("no workspace label for project '" + proj + "'")
+		l.warn("no workspace label for lane '" + proj + "'")
 		return false
 	}
 	label := l.c.t.get(proj, "space")

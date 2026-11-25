@@ -33,6 +33,10 @@ history, prior attempts, the engram #ids to read first.>
 <One line per premise: <claim> — <file:line | command | engram #id>, or ASSUMED.>
 <A file the executor must open: `briefs/assets/<file>` (hw copies it to $HW_ARTIFACTS/brief-assets/).>
 
+## Findings
+<A fix round only (`round_of:`): one row per prior review row, `id | disposition | what was done, or why not`. `disposition` is
+exactly accepted, declined or deferred; the re-check reviewer reads it from this brief.>
+
 ## Limits
 - <What THIS task must not touch or do, and why: who owns it, what breaks.>
 
